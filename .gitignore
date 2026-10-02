@@ -2,34 +2,45 @@
 # GITIGNORE: Telegram Restricted Content Bot
 # ==========================================
 
-# 1. Environment & Secret Credentials (CRITICAL - DO NOT REMOVE)
+# 1. Environment & Secret Credentials (CRITICAL)
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+!.env.template
 
-# 2. Telegram Sessions & Auth Keys (CRITICAL - DO NOT REMOVE)
+# 2. Telegram Sessions & Auth Keys (CRITICAL - DO NOT COMMIT SESSIONS)
 *.session
 *.session-journal
-sessions/
-*.auth
-*.session-shm
 *.session-wal
+*.session-shm
+*.auth
+sessions/*
+!sessions/.gitkeep
 
-# 3. Databases (Holds user tokens, payment history, active logins)
+# 3. Databases (User accounts, logs, payment records)
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
 *.sqlite
 *.sqlite3
+*.dump
+*.sql
 bot_database.db
 restricted_v2.db
-backups/
+backups/*
+!backups/.gitkeep
 *.tar.gz
+*.zip
 
-# 4. Downloaded & Temporary Media (Prevents repository bloat)
-downloads/
-scratch/
+# 4. Downloaded Media & Temporary Working Buffers
+downloads/*
+!downloads/.gitkeep
+scratch/*
+!scratch/.gitkeep
+*.temp
+*.tmp
+*.part
 *.mp4
 *.mkv
 *.mov
@@ -37,31 +48,42 @@ scratch/
 *.avi
 *.ts
 *.mp3
-*.part
-*.temp
+*.m4a
+*.aac
+*.ogg
+*.wav
+*.flac
+*.opus
 *_branded.mp4
 *_wm.mp4
 *_owner_wm.mp4
 *_stage1.mp4
 
-# 5. Sensitive User Branding, Cookies & Logs
+# 5. Sensitive User Branding, Custom Thumbnails, Cookies & Logs
 data/branding/*
 !data/branding/.gitkeep
+data/thumbnails/*
+!data/thumbnails/.gitkeep
+thumbnails/*
+!thumbnails/.gitkeep
 cookies/*.txt
 !cookies/.gitkeep
 *.log
-logs/
+logs/*
+!logs/.gitkeep
 
 # 6. Python Artifacts & Virtual Environments
+**/__pycache__/
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.pyd
+*.pyo
 .Python
 build/
 develop-eggs/
 dist/
-downloads/
 eggs/
 .eggs/
 lib/
@@ -77,13 +99,19 @@ venv/
 env/
 ENV/
 .venv/
+.pytest_cache/
+.mypy_cache/
 
-# 7. IDE & OS Junk Files
+# 7. IDE, Editor & OS Junk Files
 .idea/
 .vscode/
+*.sublime-project
+*.sublime-workspace
 *.swp
 *.swo
 *~
 .DS_Store
 Thumbs.db
 Desktop.ini
+*.pid
+*.lock

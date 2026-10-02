@@ -388,9 +388,9 @@ async def download_restricted_media(
                     except Exception:
                         pass
 
-                # High-speed Turbo Parallel MTProto Downloader (8 concurrent workers)
+                # High-speed Turbo Parallel MTProto Downloader (6 concurrent MTProto workers, 1MB pipelining)
                 is_parallel_candidate = bool(
-                    source_msg.video or source_msg.document or source_msg.audio or source_msg.voice or source_msg.video_note
+                    source_msg.video or source_msg.document or source_msg.audio or source_msg.voice or source_msg.video_note or source_msg.photo
                 )
                 if is_parallel_candidate:
                     try:
@@ -402,11 +402,11 @@ async def download_restricted_media(
                             progress_callback=pyrogram_progress,
                             job_id=job_id,
                             active_jobs=active_jobs,
-                            num_workers=8,
-                            chunk_size=512 * 1024,
+                            num_workers=6,
+                            chunk_size=1024 * 1024,
                         )
                     except Exception as turbo_err:
-                        logger.warning("[TurboDownloader] Parallel stream failed, falling back to standard: %s", turbo_err)
+                        logger.warning("[TurboDownloader] Parallel stream failed (%s), falling back to standard download_media", turbo_err)
                         downloaded_file = await current_client.download_media(
                             message=source_msg,
                             file_name=target_file_path,

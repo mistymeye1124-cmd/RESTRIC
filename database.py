@@ -1311,12 +1311,14 @@ class Database:
 
     async def reset_user_quota(self, user_id: int):
         """Resets used download count for a user (useful for admin testing free limits)."""
+        _cache_bust(user_id)  # flush before write so stale quota is never read
         async with aiosqlite.connect(self.db_file) as db:
             await db.execute(
                 "UPDATE users SET daily_downloads_used = 0 WHERE user_id = ?",
                 (user_id,)
             )
             await db.commit()
+        _cache_bust(user_id)  # flush after commit to guarantee fresh read
 
     # --- System Controls & User Moderation ---
 
@@ -1325,20 +1327,24 @@ class Database:
         return bool(user.get("is_banned", 0)) if user else False
 
     async def ban_user(self, user_id: int):
+        _cache_bust(user_id)  # flush immediately so is_user_banned reflects ban at once
         async with aiosqlite.connect(self.db_file) as db:
             await db.execute(
                 "UPDATE users SET is_banned = 1 WHERE user_id = ?",
                 (user_id,)
             )
             await db.commit()
+        _cache_bust(user_id)  # second bust after commit for safety
 
     async def unban_user(self, user_id: int):
+        _cache_bust(user_id)  # flush immediately so is_user_banned reflects unban at once
         async with aiosqlite.connect(self.db_file) as db:
             await db.execute(
                 "UPDATE users SET is_banned = 0 WHERE user_id = ?",
                 (user_id,)
             )
             await db.commit()
+        _cache_bust(user_id)  # second bust after commit for safety
 
     async def get_maintenance_mode(self) -> bool:
         val = await self.get_global_setting("maintenance_mode", "0")
@@ -1444,6 +1450,9 @@ class Database:
         async with aiosqlite.connect(self.db_file) as db:
             cur = await db.execute("SELECT 1 FROM dynamic_admins WHERE admin_id = ?", (user_id,))
             return bool(await cur.fetchone())
+
+    is_admin = is_admin_id
+
 
     # =========================================================================
     # CLOUD DATABASE SNAPSHOT & BACKUP GENERATOR

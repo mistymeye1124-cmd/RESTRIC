@@ -281,12 +281,13 @@ async def admin_reject_callback(client: Client, callback_query: CallbackQuery):
 
     # Notify User
     try:
+        supp = await db.get_support_contact()
         await client.send_message(
             chat_id=target_user_id,
             text=(
                 "❌ **Payment Rejected**\n\n"
                 f"Your payment with TrxID `{trx_id}` could not be verified.\n"
-                "Please verify your payment details or contact support: @ProOffers21"
+                f"Please verify your payment details or contact support: {supp}"
             )
         )
     except Exception:
@@ -366,12 +367,13 @@ async def manual_reject_trx_command(client: Client, message: Message):
         return
     target_user_id = trx["user_id"]
     try:
+        supp = await db.get_support_contact()
         await client.send_message(
             chat_id=target_user_id,
             text=(
                 "❌ **Payment Rejected**\n\n"
                 f"Your payment with TrxID `{trx_id}` could not be verified.\n"
-                "Please check your transaction details or contact support: @ProOffers21"
+                f"Please check your transaction details or contact support: {supp}"
             )
         )
     except Exception:

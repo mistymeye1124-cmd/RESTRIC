@@ -242,13 +242,12 @@ async def main():
             err_msg = str(e).lower()
             if "database is locked" in err_msg:
                 print(f"[!] Session database is locked (attempt {attempt}/10). Cleaning lock & retrying in 2s...")
-                for j_name in (f"{session_name}.session-journal", "restricted_saver_bot.session-journal"):
-                    journal = os.path.join("sessions", j_name)
-                    if os.path.exists(journal):
-                        try:
-                            os.remove(journal)
-                        except Exception:
-                            pass
+                import glob
+                for j_file in glob.glob(os.path.join("sessions", "*.session-journal")):
+                    try:
+                        os.remove(j_file)
+                    except Exception:
+                        pass
                 await asyncio.sleep(2)
             elif any(k in err_msg for k in ("network", "timeout", "connection", "connect", "flood")):
                 print(f"[!] Network issue during Telegram start (attempt {attempt}/10): {e}. Retrying in 4s...")

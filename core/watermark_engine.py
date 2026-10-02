@@ -262,151 +262,167 @@ async def apply_video_watermark(
         text_coord, logo_coord = pos_coords.get(position, ("x=w-tw-25:y=h-th-25", "overlay=W-w-25:H-h-25"))
 
         filter_chains = []
-
-        # 1. Text Watermark Badge
-        if watermark_text:
-            escaped_wm = watermark_text.replace(":", "\\:").replace("'", "\\'")
-
-            raw_bg = str(watermark_config.get("bg_color") or "black").strip().lower()
-            bg_op = float(watermark_config.get("bg_opacity", 0.75))
-            bg_op = max(0.0, min(1.0, bg_op))
-            raw_tc = str(watermark_config.get("text_color") or "white").strip().lower()
-
-            color_map = {
-                "white": "white",
-                "yellow": "0xFFD700",
-                "gold": "0xFFD700",
-                "golden": "0xFFD700",
-                "cyan": "0x00FFFF",
-                "neon": "0x00FFFF",
-                "green": "0x00FF7F",
-                "red": "0xFF4444",
-                "crimson": "0xDC143C",
-                "pink": "0xFF69B4",
-                "purple": "0xBF55EC",
-                "orange": "0xFFA500",
-                "black": "black",
-            }
-            f_color = color_map.get(raw_tc, raw_tc)
-
-            bg_map = {
-                "black": "black",
-                "dark": "0x111111",
-                "navy": "0x0A192F",
-                "blue": "0x002244",
-                "red": "0x3A0007",
-                "crimson": "0x4A0000",
-                "purple": "0x1F0A2A",
-                "green": "0x0B2916",
-                "emerald": "0x002B14",
-                "gold": "0x2A2000",
-                "amber": "0x332200",
-                "gray": "0x333333",
-                "white": "white",
-                "none": "none",
-                "transparent": "none",
-            }
-            mapped_bg = bg_map.get(raw_bg, raw_bg)
-            effective_bg_op = min(1.0, opacity * bg_op)
-
-            dur_limit = float(watermark_config.get("duration_limit") or 0)
-            enable_param = f":enable='between(t,0,{dur_limit:.2f})'" if dur_limit > 0 else ""
-
-            if mapped_bg == "none" or bg_op == 0 or style == "minimal":
-                wm_filter = (
-                    f"drawtext={font_clause}text='{escaped_wm}':{text_coord}:fontsize={font_size}:"
-                    f"fontcolor={f_color}@{opacity:.2f}:borderw=2:bordercolor=black@{opacity:.2f}:"
-                    f"shadowx=2:shadowy=2:shadowcolor=black@{opacity:.2f}:box=0{enable_param}"
-                )
-            elif style == "neon" and raw_tc == "white" and raw_bg == "black":
-                wm_filter = (
-                    f"drawtext={font_clause}text='{escaped_wm}':{text_coord}:fontsize={font_size}:"
-                    f"fontcolor=0x00FFFF@{opacity:.2f}:borderw=2:bordercolor=black@{opacity:.2f}:"
-                    f"box=1:boxcolor=0x001122@{min(1.0, opacity*0.8):.2f}:boxborderw=8{enable_param}"
-                )
-            elif style == "golden" and raw_tc == "white" and raw_bg == "black":
-                wm_filter = (
-                    f"drawtext={font_clause}text='{escaped_wm}':{text_coord}:fontsize={font_size}:"
-                    f"fontcolor=0xFFD700@{opacity:.2f}:borderw=2:bordercolor=black@{opacity:.2f}:"
-                    f"box=1:boxcolor=0x1a1500@{min(1.0, opacity*0.8):.2f}:boxborderw=8{enable_param}"
-                )
-            else:  # pill / custom background box
-                # Prevent white-on-white or black-on-black invisibility
-                if mapped_bg == "white" and f_color in ("white", "0xFFFFFF"):
-                    f_color = "black"
-                elif mapped_bg in ("black", "0x111111") and f_color in ("black", "0x000000"):
-                    f_color = "white"
-
-                box_color_str = f"{mapped_bg}@{effective_bg_op:.2f}"
-                border_color = "white" if mapped_bg in ("black", "0x111111", "0x0A192F") and f_color == "black" else "black"
-                wm_filter = (
-                    f"drawtext={font_clause}text='{escaped_wm}':{text_coord}:fontsize={font_size}:"
-                    f"fontcolor={f_color}@{opacity:.2f}:borderw=2:bordercolor={border_color}@{min(1.0, opacity*0.9):.2f}:"
-                    f"box=1:boxcolor={box_color_str}:boxborderw=8{enable_param}"
-                )
-            filter_chains.append(wm_filter)
-
-        # 2. Top Lecture Headline Banner
-        if headline_text:
-            dur_limit = float(watermark_config.get("duration_limit") or 0)
-            enable_param = f":enable='between(t,0,{dur_limit:.2f})'" if dur_limit > 0 else ""
-            escaped_hl = headline_text.replace(":", "\\:").replace("'", "\\'")
-            hl_filter = (
-                f"drawtext={font_clause}text='{escaped_hl}':x=(w-tw)/2:y=25:fontsize={font_size + 4}:"
-                f"fontcolor=yellow@{opacity:.2f}:borderw=2:bordercolor=black@{opacity:.2f}:"
-                f"box=1:boxcolor=black@{min(1.0, opacity*0.85):.2f}:boxborderw=10{enable_param}"
-            )
-            filter_chains.append(hl_filter)
-
-        vf_str = ",".join(filter_chains)
-
-        cmd = [
-            ffmpeg_bin,
-            "-y",
-            "-i", input_path,
-        ]
-
-        # 3. Logo Overlay (If configured)
-        if valid_logo:
-            cmd.extend(["-i", logo_path])
-            dur_limit = float(watermark_config.get("duration_limit") or 0)
-            logo_overlay_clause = f"{logo_coord}:enable='between(t,0,{dur_limit:.2f})'" if dur_limit > 0 else logo_coord
-            # Auto-scale logo up to max 18% width and apply alpha
-            logo_filter = f"[1:v]scale='min(iw,0.18*main_w)':-1,format=rgba,colorchannelmixer=aa={opacity:.2f}[logo]"
-            if vf_str:
-                complex_filter = f"[0:v]{vf_str}[v1];{logo_filter};[v1][logo]{logo_overlay_clause}[outv]"
-            else:
-                complex_filter = f"{logo_filter};[0:v][logo]{logo_overlay_clause}[outv]"
-            cmd.extend(["-filter_complex", complex_filter, "-map", "[outv]", "-map", "0:a?"])
-        else:
-            cmd.extend(["-vf", vf_str, "-map", "0:v:0", "-map", "0:a?"])
-
-        cmd.extend([
-            "-threads", "0",
-            "-tune", "fastdecode",
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-crf", "22",
-            "-c:a", "copy",
-            "-sn",
-            "-movflags", "+faststart",
-            intermediate_output,
-        ])
+        wm_txt_file = None
+        hl_txt_file = None
 
         try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await process.communicate()
-            if process.returncode != 0 or not os.path.exists(intermediate_output):
-                err_msg = stderr.decode('utf-8', errors='ignore')[-300:]
-                print(f"[!] Watermark burn error: {err_msg}")
+            # 1. Text Watermark Badge
+            if watermark_text:
+                wm_txt_file = os.path.abspath(f"{intermediate_output}_wm_text.txt")
+                with open(wm_txt_file, "w", encoding="utf-8") as f:
+                    f.write(watermark_text)
+                esc_wm_txt = wm_txt_file.replace("\\", "/").replace(":", r"\:")
+
+                raw_bg = str(watermark_config.get("bg_color") or "black").strip().lower()
+                bg_op = float(watermark_config.get("bg_opacity", 0.75))
+                bg_op = max(0.0, min(1.0, bg_op))
+                raw_tc = str(watermark_config.get("text_color") or "white").strip().lower()
+
+                color_map = {
+                    "white": "white",
+                    "yellow": "0xFFD700",
+                    "gold": "0xFFD700",
+                    "golden": "0xFFD700",
+                    "cyan": "0x00FFFF",
+                    "neon": "0x00FFFF",
+                    "green": "0x00FF7F",
+                    "red": "0xFF4444",
+                    "crimson": "0xDC143C",
+                    "pink": "0xFF69B4",
+                    "purple": "0xBF55EC",
+                    "orange": "0xFFA500",
+                    "black": "black",
+                }
+                f_color = color_map.get(raw_tc, raw_tc)
+
+                bg_map = {
+                    "black": "black",
+                    "dark": "0x111111",
+                    "navy": "0x0A192F",
+                    "blue": "0x002244",
+                    "red": "0x3A0007",
+                    "crimson": "0x4A0000",
+                    "purple": "0x1F0A2A",
+                    "green": "0x0B2916",
+                    "emerald": "0x002B14",
+                    "gold": "0x2A2000",
+                    "amber": "0x332200",
+                    "gray": "0x333333",
+                    "white": "white",
+                    "none": "none",
+                    "transparent": "none",
+                }
+                mapped_bg = bg_map.get(raw_bg, raw_bg)
+                effective_bg_op = min(1.0, opacity * bg_op)
+
+                dur_limit = float(watermark_config.get("duration_limit") or 0)
+                enable_param = f":enable='between(t,0,{dur_limit:.2f})'" if dur_limit > 0 else ""
+
+                if mapped_bg == "none" or bg_op == 0 or style == "minimal":
+                    wm_filter = (
+                        f"drawtext={font_clause}textfile='{esc_wm_txt}':{text_coord}:fontsize={font_size}:"
+                        f"fontcolor={f_color}@{opacity:.2f}:borderw=2:bordercolor=black@{opacity:.2f}:"
+                        f"shadowx=2:shadowy=2:shadowcolor=black@{opacity:.2f}:box=0{enable_param}"
+                    )
+                elif style == "neon" and raw_tc == "white" and raw_bg == "black":
+                    wm_filter = (
+                        f"drawtext={font_clause}textfile='{esc_wm_txt}':{text_coord}:fontsize={font_size}:"
+                        f"fontcolor=0x00FFFF@{opacity:.2f}:borderw=2:bordercolor=black@{opacity:.2f}:"
+                        f"box=1:boxcolor=0x001122@{min(1.0, opacity*0.8):.2f}:boxborderw=8{enable_param}"
+                    )
+                elif style == "golden" and raw_tc == "white" and raw_bg == "black":
+                    wm_filter = (
+                        f"drawtext={font_clause}textfile='{esc_wm_txt}':{text_coord}:fontsize={font_size}:"
+                        f"fontcolor=0xFFD700@{opacity:.2f}:borderw=2:bordercolor=black@{opacity:.2f}:"
+                        f"box=1:boxcolor=0x1a1500@{min(1.0, opacity*0.8):.2f}:boxborderw=8{enable_param}"
+                    )
+                else:  # pill / custom background box
+                    if mapped_bg == "white" and f_color in ("white", "0xFFFFFF"):
+                        f_color = "black"
+                    elif mapped_bg in ("black", "0x111111") and f_color in ("black", "0x000000"):
+                        f_color = "white"
+
+                    box_color_str = f"{mapped_bg}@{effective_bg_op:.2f}"
+                    border_color = "white" if mapped_bg in ("black", "0x111111", "0x0A192F") and f_color == "black" else "black"
+                    wm_filter = (
+                        f"drawtext={font_clause}textfile='{esc_wm_txt}':{text_coord}:fontsize={font_size}:"
+                        f"fontcolor={f_color}@{opacity:.2f}:borderw=2:bordercolor={border_color}@{min(1.0, opacity*0.9):.2f}:"
+                        f"box=1:boxcolor={box_color_str}:boxborderw=8{enable_param}"
+                    )
+                filter_chains.append(wm_filter)
+
+            # 2. Top Lecture Headline Banner
+            if headline_text:
+                hl_txt_file = os.path.abspath(f"{intermediate_output}_hl_text.txt")
+                with open(hl_txt_file, "w", encoding="utf-8") as f:
+                    f.write(headline_text)
+                esc_hl_txt = hl_txt_file.replace("\\", "/").replace(":", r"\:")
+
+                dur_limit = float(watermark_config.get("duration_limit") or 0)
+                enable_param = f":enable='between(t,0,{dur_limit:.2f})'" if dur_limit > 0 else ""
+                hl_filter = (
+                    f"drawtext={font_clause}textfile='{esc_hl_txt}':x=(w-tw)/2:y=25:fontsize={font_size + 4}:"
+                    f"fontcolor=yellow@{opacity:.2f}:borderw=2:bordercolor=black@{opacity:.2f}:"
+                    f"box=1:boxcolor=black@{min(1.0, opacity*0.85):.2f}:boxborderw=10{enable_param}"
+                )
+                filter_chains.append(hl_filter)
+
+            vf_str = ",".join(filter_chains)
+
+            cmd = [
+                ffmpeg_bin,
+                "-y",
+                "-i", input_path,
+            ]
+
+            # 3. Logo Overlay (If configured)
+            if valid_logo:
+                cmd.extend(["-i", logo_path])
+                dur_limit = float(watermark_config.get("duration_limit") or 0)
+                logo_overlay_clause = f"{logo_coord}:enable='between(t,0,{dur_limit:.2f})'" if dur_limit > 0 else logo_coord
+                # Auto-scale logo up to max 18% width and apply alpha
+                logo_filter = f"[1:v]scale='min(iw,0.18*main_w)':-1,format=rgba,colorchannelmixer=aa={opacity:.2f}[logo]"
+                if vf_str:
+                    complex_filter = f"[0:v]{vf_str}[v1];{logo_filter};[v1][logo]{logo_overlay_clause}[outv]"
+                else:
+                    complex_filter = f"{logo_filter};[0:v][logo]{logo_overlay_clause}[outv]"
+                cmd.extend(["-filter_complex", complex_filter, "-map", "[outv]", "-map", "0:a?"])
+            else:
+                cmd.extend(["-vf", vf_str, "-map", "0:v:0", "-map", "0:a?"])
+
+            cmd.extend([
+                "-threads", "0",
+                "-tune", "fastdecode",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-crf", "22",
+                "-c:a", "copy",
+                "-sn",
+                "-movflags", "+faststart",
+                intermediate_output,
+            ])
+
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await process.communicate()
+                if process.returncode != 0 or not os.path.exists(intermediate_output):
+                    err_msg = stderr.decode('utf-8', errors='ignore')[-300:]
+                    print(f"[!] Watermark burn error: {err_msg}")
+                    intermediate_output = input_path
+            except Exception as e:
+                print(f"[!] Watermark exception: {e}")
                 intermediate_output = input_path
-        except Exception as e:
-            print(f"[!] Watermark exception: {e}")
-            intermediate_output = input_path
+        finally:
+            for tf in (wm_txt_file, hl_txt_file):
+                if tf and os.path.exists(tf):
+                    try:
+                        os.remove(tf)
+                    except Exception:
+                        pass
     else:
         intermediate_output = input_path
 

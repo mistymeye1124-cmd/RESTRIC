@@ -25,8 +25,8 @@ if %errorlevel% neq 0 (
 powershell -Command "Get-CimInstance Win32_Process -Filter \"CommandLine LIKE '%%main.py%%'\" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 
 :: Remove stale lock files if any
-if exist "sessions\restricted_saver_bot.session-journal" (
-    del /f /q "sessions\restricted_saver_bot.session-journal" >nul 2>&1
+if exist "sessions\*.session-journal" (
+    del /f /q "sessions\*.session-journal" >nul 2>&1
 )
 
 echo [*] Starting 24/7 Bot Supervisor Engine...
@@ -42,8 +42,8 @@ echo.
 echo ======================================================================
 echo [!] Bot process stopped (Exit Code: %EXITCODE%).
 echo [*] Cleaning stale locks for clean recovery...
-if exist "sessions\restricted_saver_bot.session-journal" (
-    del /f /q "sessions\restricted_saver_bot.session-journal" >nul 2>&1
+if exist "sessions\*.session-journal" (
+    del /f /q "sessions\*.session-journal" >nul 2>&1
 )
 echo [*] Auto-Restarting Bot in 3 seconds... (Press Ctrl+C to abort)
 echo ======================================================================

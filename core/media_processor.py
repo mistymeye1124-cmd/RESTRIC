@@ -320,7 +320,7 @@ async def split_video_if_needed(video_path: str, max_part_size_bytes: int = MAX_
 
         # Find all generated parts
         parts = []
-        dir_name = os.path.dirname(video_path)
+        dir_name = os.path.dirname(video_path) or "."
         base_name = os.path.basename(base)
         for f in sorted(os.listdir(dir_name)):
             if f.startswith(f"{base_name}_part") and f.endswith(ext):

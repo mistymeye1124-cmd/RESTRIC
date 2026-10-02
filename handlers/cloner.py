@@ -160,16 +160,14 @@ async def _run_channel_clone_worker(
     end_id: int,
 ):
     """Background sequential worker that executes the entire clone job safely."""
-    client_res = await get_user_client(user_id)
-    if not client_res.get("client"):
+    worker_client = await get_user_client(user_id)
+    if not worker_client:
         try:
             await status_msg.edit_text("❌ No active Telegram session found. Please login via `/login` first.")
         except Exception:
             pass
         active_clones.pop(clone_id, None)
         return
-
-    worker_client: Client = client_res["client"]
     total = end_id - start_id + 1
     delivered = 0
     skipped = 0

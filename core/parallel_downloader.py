@@ -89,17 +89,17 @@ async def turbo_parallel_download(
     if total_size <= 0:
         raise ValueError("Unknown target file size")
 
-    # Optimal concurrency: 4 concurrent MTProto streams is Telegram's proven sweet spot.
-    # 512KB chunks prevent DC buffer bloating and eliminate TimeoutErrors on international routes.
-    if total_size < 5 * 1024 * 1024:
-        num_workers = 2
-        chunk_size = 256 * 1024
-    elif total_size < 25 * 1024 * 1024:
+    # Dynamic Turbo Stream Allocation:
+    # Telegram Premium / Gigabit VPS unlocks 1MB chunk pipelining across 8-12 parallel MTProto TCP sessions
+    if total_size < 10 * 1024 * 1024:
         num_workers = 3
         chunk_size = 512 * 1024
+    elif total_size < 50 * 1024 * 1024:
+        num_workers = 6
+        chunk_size = 1024 * 1024
     else:
-        num_workers = min(max(num_workers, 3), 4)
-        chunk_size = 512 * 1024
+        num_workers = min(max(num_workers, 8), 12)
+        chunk_size = 1024 * 1024
 
     fid = FileId.decode(target.file_id)
     dc_id = fid.dc_id
@@ -171,7 +171,7 @@ async def turbo_parallel_download(
     abort_reason = ""
     chunk_fail_counts: Dict[int, int] = {}
     consecutive_errors = 0
-    MAX_CONSECUTIVE_ERRORS = 8
+    MAX_CONSECUTIVE_ERRORS = 36
 
     async def restart_worker_session(sess: Session, w_id: int):
         """Cleanly re-establishes a broken TCP MTProto socket."""
@@ -269,12 +269,12 @@ async def turbo_parallel_download(
                         abort_event.set()
                         break
 
-                    await asyncio.sleep(0.3 * (retry + 1))
+                    await asyncio.sleep(0.2 * (retry + 1))
 
             if not chunk_success and not abort_event.is_set():
                 fails = chunk_fail_counts.get(offset, 0) + 1
                 chunk_fail_counts[offset] = fails
-                if fails <= 2:
+                if fails <= 5:
                     await queue.put(offset)
                 else:
                     logger.warning("[TurboDownloader] Offset %d failed %d times. Aborting parallel mode.", offset, fails)

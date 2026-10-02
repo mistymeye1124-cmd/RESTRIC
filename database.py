@@ -2407,6 +2407,10 @@ class Database:
         """Retrieves custom announcement banner displayed in /start."""
         return await self.get_global_setting("custom_start_banner", "")
 
+    async def set_custom_start_banner(self, banner: str):
+        """Sets custom announcement banner displayed in /start."""
+        await self.set_global_setting("custom_start_banner", banner.strip())
+
     # --- Protected VIP Channels (Anti-Leech / VIP Channel Lock) ---
 
     async def lock_channel(self, identifier: str, title: str = "", locked_by: int = 0) -> Tuple[bool, str]:

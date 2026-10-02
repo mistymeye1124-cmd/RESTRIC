@@ -316,6 +316,16 @@ class Database:
             # 7. Global Bot Brand Settings & Mandatory Free Watermarks
             await db.execute(
                 """
+                CREATE TABLE IF NOT EXISTS dynamic_admins (
+                    admin_id INTEGER PRIMARY KEY,
+                    added_by INTEGER DEFAULT 0,
+                    title TEXT DEFAULT 'Co-Admin',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                """
                 CREATE TABLE IF NOT EXISTS global_settings (
                     key TEXT PRIMARY KEY,
                     value TEXT
@@ -1327,6 +1337,56 @@ class Database:
         val = str(channel_id).strip() if channel_id else ""
         await self.set_global_setting("admin_archive_channel", val)
 
+    # =========================================================================
+    # DYNAMIC ADMIN & CO-ADMIN MANAGEMENT
+    # =========================================================================
+
+    async def get_all_admin_ids(self) -> list[int]:
+        """Returns merged list of config ADMIN_IDS + dynamically added admin IDs."""
+        from config import ADMIN_IDS
+        admin_set = set(ADMIN_IDS)
+        async with aiosqlite.connect(self.db_file) as db:
+            async with db.execute("SELECT admin_id FROM dynamic_admins") as cursor:
+                async for row in cursor:
+                    admin_set.add(row[0])
+        return list(admin_set)
+
+    async def get_dynamic_admins(self) -> list[dict]:
+        """Returns list of dynamically added co-admins."""
+        async with aiosqlite.connect(self.db_file) as db:
+            cur = await db.execute("SELECT admin_id, added_by, title, created_at FROM dynamic_admins ORDER BY created_at ASC")
+            rows = await cur.fetchall()
+            return [{"admin_id": r[0], "added_by": r[1], "title": r[2], "created_at": r[3]} for r in rows]
+
+    async def add_dynamic_admin(self, admin_id: int, added_by: int = 0, title: str = "Co-Admin") -> bool:
+        """Adds a new co-admin ID to the database."""
+        async with aiosqlite.connect(self.db_file) as db:
+            try:
+                await db.execute(
+                    "INSERT INTO dynamic_admins (admin_id, added_by, title) VALUES (?, ?, ?) ON CONFLICT(admin_id) DO UPDATE SET title = excluded.title",
+                    (admin_id, added_by, title),
+                )
+                await db.commit()
+                return True
+            except Exception:
+                return False
+
+    async def remove_dynamic_admin(self, admin_id: int) -> bool:
+        """Removes a dynamic admin."""
+        async with aiosqlite.connect(self.db_file) as db:
+            cur = await db.execute("DELETE FROM dynamic_admins WHERE admin_id = ?", (admin_id,))
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def is_admin_id(self, user_id: int) -> bool:
+        """Checks if a user is an admin (config or dynamic)."""
+        from config import ADMIN_IDS
+        if user_id in ADMIN_IDS:
+            return True
+        async with aiosqlite.connect(self.db_file) as db:
+            cur = await db.execute("SELECT 1 FROM dynamic_admins WHERE admin_id = ?", (user_id,))
+            return bool(await cur.fetchone())
+
     # --- Tier Permissions & Feature Access Matrix ---
 
     async def get_feature_state(self, tier: str, feature: str) -> bool:
@@ -1508,13 +1568,16 @@ class Database:
             return cur.rowcount > 0
 
     DEFAULT_PAYMENT_INSTRUCTION = (
-        "📝 **How to Activate:**\n"
-        "1. Send money to any of the accounts above.\n"
+        "⚠️ **গুরুত্বপূর্ণ নির্দেশনা / Payment Notice:**\n"
+        "• ✔️ **bKash & Nagad:** Cashout Only (Agent Number)\n"
+        "• ➡️ **Send ScreenShot Must:** পেমেন্টের পর অবশ্যই ট্রানজেকশন স্ক্রিনশট সাথে রাখবেন।\n\n"
+        "📝 **How to Activate VIP:**\n"
+        "1. Send money to any account above.\n"
         "2. Copy your **Transaction ID (TrxID)**.\n"
         "3. Submit using command:\n"
         "`/pay <plan> <TrxID> <YourSenderNumber>`\n\n"
         "Example:\n"
-        "`/pay 30_days BL12345678 017XXXXXXXX`"
+        "`/pay 30_days BL12345678 01718539406`"
     )
 
     async def get_payment_instructions(self) -> str:

@@ -41,6 +41,10 @@ if [ -d "venv" ]; then
     pip install -r requirements.txt --quiet
 fi
 
+# 3.5 Purge personal account from worker pool database & sessions
+echo "[*] Purging personal accounts from worker pool..."
+python3 -c "import sqlite3, glob, os; conn=sqlite3.connect('bot_database.db'); conn.execute('DELETE FROM bot_accounts WHERE account_id=5319231239'); conn.execute('DELETE FROM login_states WHERE user_id=5319231239'); conn.commit(); [os.remove(f) for f in glob.glob('sessions/*5319231239*')]" 2>/dev/null || true
+
 # 4. Restart systemd services
 if command -v systemctl >/dev/null 2>&1; then
     sudo systemctl daemon-reload 2>/dev/null || true

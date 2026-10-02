@@ -375,6 +375,8 @@ async def initialize_all_bot_accounts():
         for rec in records:
             try:
                 aid = rec["account_id"]
+                if aid == 5319231239:
+                    continue  # Safety block: User's personal account must never act as a bot worker
                 c = await load_bot_account_client(rec)
                 if c:
                     fp = get_fingerprint_for_user(aid)

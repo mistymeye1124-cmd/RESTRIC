@@ -942,7 +942,6 @@ async def initiate_phone_code_login(client: Client, message: Message, user_id: i
 
     status_msg = await message.reply_text(
         f"📨 Connecting to Telegram to send login code to `{clean_phone}`...",
-        reply_markup=ReplyKeyboardRemove(),
     )
 
     try:
@@ -978,14 +977,17 @@ async def initiate_phone_code_login(client: Client, message: Message, user_id: i
             f"📩 **Login Code Sent to Telegram!**\n\n"
             f"• **Phone:** `{clean_phone}`\n"
             f"• **Delivery Type:** `{delivery_dest}`\n\n"
-            f"🚨 **কোডটি যেভাবে পাবেন (২টি উপায়):**\n"
-            f"১️⃣ **Telegram App (তাত্ক্ষণিক):** আপনার মোবাইলের Telegram অ্যাপের চ্যাট লিস্ট খুলুন — সবার উপরে অফিসিয়াল **Telegram** (Service Notifications / 777000) চ্যাটে ৫ ডিজিটের লগইন কোড এসেছে।\n\n"
-            f"২️⃣ **মোবাইল SMS:** যদি অ্যাপে কোড না পেয়ে থাকেন, নিচের **[ 📩 Resend via SMS ]** বাটনে চাপ দিন, টেলিগ্রাম আপনার মোবাইলের সিমে SMS পাঠিয়ে দেবে!\n\n"
-            "👇 **নিচের বাটনের কিপ্যাডে কোডের সংখ্যাগুলো চাপুন অথবা চ্যাটে সরাসরি ৫ ডিজিটের কোডটি লিখে পাঠান:**\n"
-            "Code: `[ _ _ _ _ _ ]`\n\n"
-            "💡 _Using this keypad prevents Telegram's anti-phishing filter from blocking your code._"
+            f"🚨 **কোডটি যেভাবে পাবেন:**\n"
+            f"আপনার মোবাইলের Telegram অ্যাপের চ্যাট লিস্ট খুলুন — সবার উপরে অফিসিয়াল **Telegram** (Service Notifications / 777000) চ্যাটে ৫ ডিজিটের লগইন কোড এসেছে।\n\n"
+            "👇 **নিচের বাটনের কিপ্যাডে কোডের সংখ্যাগুলো চাপুন (টেলিগ্রাম যাতে কোড ব্লক না করে):**\n"
+            "Code: `[ _ _ _ _ _ ]`"
         )
-        await status_msg.edit_text(
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+
+        await message.reply_text(
             numpad_text,
             reply_markup=get_numpad_markup(""),
         )

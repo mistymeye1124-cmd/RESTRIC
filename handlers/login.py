@@ -175,18 +175,23 @@ async def render_accounts_cockpit(user_id: int):
             else:
                 st_badge = "🟢 Healthy & Ready"
 
+            can_sh = acc.get("can_share", 1)
+            mode_badge = "⚡ Worker Pool" if can_sh else "🛡️ Personal Only"
+            toggle_mode_text = "🛡️ Personal" if can_sh else "⚡ Worker"
+
             text_lines.append(
                 f"{idx}. **{uname}** (`{aid}`)\n"
                 f"   📱 **Hardware:** `{device}`\n"
                 f"   📊 **Telemetry:** `{dl_today}` today | `{dl_total}` total downloads\n"
-                f"   ⚡ **Status:** {st_badge}\n"
+                f"   ⚡ **Status:** {st_badge} | **Mode:** `{mode_badge}`\n"
             )
 
             is_act = bool(acc.get("is_active"))
             toggle_text = "⏸️ Pause" if is_act else "▶️ Resume"
             buttons.append([
-                InlineKeyboardButton(f"{toggle_text} {uname[:12]}", callback_data=f"acc_toggle:{aid}"),
-                InlineKeyboardButton(f"🗑️ Remove", callback_data=f"acc_del_confirm:{aid}"),
+                InlineKeyboardButton(f"{toggle_text}", callback_data=f"acc_toggle:{aid}"),
+                InlineKeyboardButton(f"{toggle_mode_text}", callback_data=f"acc_toggle_share:{aid}"),
+                InlineKeyboardButton("🗑️ Remove", callback_data=f"acc_del_confirm:{aid}"),
             ])
 
     buttons.append([
@@ -320,6 +325,30 @@ async def acc_toggle_callback(client: Client, callback_query: CallbackQuery):
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
         pass
+
+
+@Client.on_callback_query(filters.regex(r"^acc_toggle_share:(\d+)$"))
+async def acc_toggle_share_callback(client: Client, callback_query: CallbackQuery):
+    target_aid = int(callback_query.matches[0].group(1))
+    user_id = callback_query.from_user.id
+    owner_filter = None if user_id in ADMIN_IDS else user_id
+
+    ok, new_val = await db.toggle_bot_account_sharing(target_aid, owner_filter)
+    if not ok:
+        await callback_query.answer("⚠️ Could not toggle account mode (permission denied or not found).", show_alert=True)
+        return
+
+    if target_aid in account_metadata:
+        account_metadata[target_aid]["can_share"] = new_val
+
+    mode_label = "⚡ Shared Worker Pool" if new_val == 1 else "🛡️ Personal Only"
+    await callback_query.answer(f"Account mode set to: {mode_label}", show_alert=True)
+    text, markup = await render_accounts_cockpit(user_id)
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        pass
+
 
 
 @Client.on_callback_query(filters.regex(r"^acc_del_confirm:(\d+)$"))

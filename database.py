@@ -507,6 +507,7 @@ class Database:
                     flood_wait_until REAL DEFAULT 0,
                     total_downloads INTEGER DEFAULT 0,
                     daily_downloads INTEGER DEFAULT 0,
+                    can_share INTEGER DEFAULT 1,
                     last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -514,22 +515,22 @@ class Database:
             )
             await db.execute("CREATE INDEX IF NOT EXISTS idx_bot_accounts_active ON bot_accounts(is_active, status);")
 
+            # Column migration if bot_accounts already existed without can_share
+            try:
+                await db.execute("ALTER TABLE bot_accounts ADD COLUMN can_share INTEGER DEFAULT 1;")
+            except Exception:
+                pass
+
             # Auto-migrate any existing single-user sessions into bot_accounts pool
             try:
                 await db.execute(
                     """
-                    INSERT OR IGNORE INTO bot_accounts (owner_user_id, account_id, phone, first_name, username, string_session, is_active)
-                    SELECT user_id, user_id, phone, first_name, username, string_session, 1
+                    INSERT OR IGNORE INTO bot_accounts (owner_user_id, account_id, phone, first_name, username, string_session, is_active, can_share)
+                    SELECT user_id, user_id, phone, first_name, username, string_session, 1, 1
                     FROM users
-                    WHERE is_active = 1 AND string_session IS NOT NULL AND string_session != '' AND user_id != 5319231239
+                    WHERE is_active = 1 AND string_session IS NOT NULL AND string_session != ''
                     """
                 )
-            except Exception:
-                pass
-
-            # Ensure any leftover personal account is purged from bot_accounts
-            try:
-                await db.execute("DELETE FROM bot_accounts WHERE account_id = 5319231239;")
             except Exception:
                 pass
 
@@ -782,7 +783,15 @@ class Database:
                 (user_id,),
             )
             row = await cursor.fetchone()
-            return row[0] if row and row[0] else None
+            if row and row[0]:
+                return row[0]
+            # Fallback: check bot_accounts table
+            cursor2 = await db.execute(
+                "SELECT string_session FROM bot_accounts WHERE (owner_user_id = ? OR account_id = ?) AND is_active = 1",
+                (user_id, user_id),
+            )
+            row2 = await cursor2.fetchone()
+            return row2[0] if row2 and row2[0] else None
 
     async def remove_session(self, user_id: int):
         async with aiosqlite.connect(self.db_file) as db:
@@ -790,15 +799,30 @@ class Database:
                 "UPDATE users SET is_active = 0, string_session = NULL WHERE user_id = ?",
                 (user_id,),
             )
+            await db.execute(
+                "UPDATE bot_accounts SET is_active = 0 WHERE owner_user_id = ? OR account_id = ?",
+                (user_id, user_id),
+            )
             await db.commit()
 
     async def get_all_active_sessions(self) -> list:
         async with aiosqlite.connect(self.db_file) as db:
             cursor = await db.execute(
-                "SELECT user_id, string_session FROM users WHERE is_active = 1 AND string_session IS NOT NULL"
+                "SELECT user_id, string_session FROM users WHERE is_active = 1 AND string_session IS NOT NULL AND string_session != ''"
             )
             rows = await cursor.fetchall()
-            return [(r[0], r[1]) for r in rows if r and r[0] and r[1]]
+            cursor2 = await db.execute(
+                "SELECT account_id, string_session FROM bot_accounts WHERE is_active = 1 AND string_session IS NOT NULL AND string_session != ''"
+            )
+            rows2 = await cursor2.fetchall()
+            combined = {}
+            for r in rows:
+                if r and r[0] and r[1]:
+                    combined[r[0]] = r[1]
+            for r in rows2:
+                if r and r[0] and r[1] and r[0] not in combined:
+                    combined[r[0]] = r[1]
+            return list(combined.items())
 
     # --- Login State Tracking ---
 
@@ -2464,21 +2488,20 @@ class Database:
         first_name: str = "",
         username: str = "",
         string_session: str = "",
+        can_share: int = 1,
     ) -> Tuple[bool, str]:
         """Adds or updates a Telegram userbot account in the worker pool."""
         if not string_session or not account_id:
             return False, "Invalid account ID or session string."
-        if account_id == 5319231239:
-            return False, "Personal user account is protected and cannot be added to shared worker pool."
 
         async with aiosqlite.connect(self.db_file) as db:
             try:
                 await db.execute(
                     """
                     INSERT INTO bot_accounts (
-                        owner_user_id, account_id, phone, first_name, username, string_session, is_active, status
+                        owner_user_id, account_id, phone, first_name, username, string_session, is_active, status, can_share
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, 1, 'healthy')
+                    VALUES (?, ?, ?, ?, ?, ?, 1, 'healthy', ?)
                     ON CONFLICT(account_id) DO UPDATE SET
                         owner_user_id = excluded.owner_user_id,
                         phone = excluded.phone,
@@ -2488,10 +2511,10 @@ class Database:
                         is_active = 1,
                         status = 'healthy'
                     """,
-                    (owner_user_id, account_id, phone, first_name, username, string_session),
+                    (owner_user_id, account_id, phone, first_name, username, string_session, can_share),
                 )
                 await db.commit()
-                return True, f"Account {account_id} added successfully to worker pool."
+                return True, f"Account {account_id} added successfully to pool."
             except Exception as e:
                 return False, f"Database error adding account: {e}"
 
@@ -2499,7 +2522,7 @@ class Database:
         self, owner_user_id: Optional[int] = None, active_only: bool = False
     ) -> List[Dict[str, Any]]:
         """Retrieves bot accounts, optionally filtered by owner or active status."""
-        query = "SELECT id, owner_user_id, account_id, phone, first_name, username, string_session, is_active, status, flood_wait_until, total_downloads, daily_downloads, last_used_at, created_at FROM bot_accounts"
+        query = "SELECT id, owner_user_id, account_id, phone, first_name, username, string_session, is_active, status, flood_wait_until, total_downloads, daily_downloads, last_used_at, created_at, COALESCE(can_share, 1) FROM bot_accounts"
         params = []
         conditions = []
 
@@ -2534,6 +2557,7 @@ class Database:
                     "daily_downloads": r[11] or 0,
                     "last_used_at": r[12],
                     "created_at": r[13],
+                    "can_share": r[14] if len(r) > 14 else 1,
                 }
                 for r in rows
             ]
@@ -2543,7 +2567,7 @@ class Database:
         async with aiosqlite.connect(self.db_file) as db:
             cursor = await db.execute(
                 """
-                SELECT id, owner_user_id, account_id, phone, first_name, username, string_session, is_active, status, flood_wait_until, total_downloads, daily_downloads, last_used_at, created_at
+                SELECT id, owner_user_id, account_id, phone, first_name, username, string_session, is_active, status, flood_wait_until, total_downloads, daily_downloads, last_used_at, created_at, COALESCE(can_share, 1)
                 FROM bot_accounts WHERE account_id = ?
                 """,
                 (account_id,),
@@ -2566,7 +2590,33 @@ class Database:
                 "daily_downloads": r[11] or 0,
                 "last_used_at": r[12],
                 "created_at": r[13],
+                "can_share": r[14] if len(r) > 14 else 1,
             }
+
+    async def toggle_bot_account_sharing(self, account_id: int, owner_user_id: Optional[int] = None) -> Tuple[bool, int]:
+        """Toggles can_share (1 = shared worker in pool, 0 = personal only)."""
+        async with aiosqlite.connect(self.db_file) as db:
+            query = "SELECT COALESCE(can_share, 1) FROM bot_accounts WHERE account_id = ?"
+            params = [account_id]
+            if owner_user_id is not None:
+                query += " AND owner_user_id = ?"
+                params.append(owner_user_id)
+
+            cursor = await db.execute(query, tuple(params))
+            row = await cursor.fetchone()
+            if not row:
+                return False, -1
+
+            new_val = 0 if row[0] == 1 else 1
+            up_query = "UPDATE bot_accounts SET can_share = ? WHERE account_id = ?"
+            up_params = [new_val, account_id]
+            if owner_user_id is not None:
+                up_query += " AND owner_user_id = ?"
+                up_params.append(owner_user_id)
+
+            await db.execute(up_query, tuple(up_params))
+            await db.commit()
+            return True, new_val
 
     async def update_bot_account_status(self, account_id: int, status: str, flood_wait_until: float = 0):
         """Updates health status ('healthy', 'cooldown', 'dead') and flood cooldown timer."""

@@ -174,6 +174,7 @@ async def load_bot_account_client(account_record: Dict[str, Any]) -> Optional[Cl
             "phone": account_record.get("phone", ""),
             "username": account_record.get("username", ""),
             "first_name": account_record.get("first_name", ""),
+            "can_share": account_record.get("can_share", 1),
             "device_model": fingerprint.get("device_model", "Official Telegram"),
         }
         # Initialize isolated rate limiter for this account
@@ -183,7 +184,18 @@ async def load_bot_account_client(account_record: Dict[str, Any]) -> Optional[Cl
         return client
     except Exception as e:
         logger.warning("Could not start account %s: %s", account_id, e)
-        await handle_dead_account(account_id, reason=str(e))
+        err_str = str(e).upper()
+        fatal_errors = (
+            "AUTH_KEY_UNREGISTERED",
+            "AUTH_KEY_INVALID",
+            "USER_DEACTIVATED",
+            "SESSION_REVOKED",
+            "SESSION_EXPIRED",
+        )
+        if any(f in err_str for f in fatal_errors):
+            await handle_dead_account(account_id, reason=str(e))
+        else:
+            logger.info("Account %s temporary network error: %s. Session preserved.", account_id, e)
         return None
 
 
@@ -194,11 +206,22 @@ async def register_and_start_account(
     phone: str = "",
     first_name: str = "",
     username: str = "",
+    can_share: int = 1,
 ) -> Tuple[bool, str, Optional[Client]]:
     """
     Dynamically registers a newly authenticated Telegram account into DB and active pool.
     Hot-adds the account with 0 seconds downtime and 0 bot restart!
     """
+    if not string_session or not account_id:
+        return False, "Invalid account ID or session string.", None
+
+    # 1. ALWAYS persist user session in users table first (guaranteed persistence across updates)
+    try:
+        await db.save_session(owner_user_id, phone=phone, string_session=string_session)
+    except Exception as e:
+        logger.error("Error saving user session for %s: %s", owner_user_id, e)
+
+    # 2. Add or update in bot_accounts pool
     ok, msg = await db.add_or_update_bot_account(
         owner_user_id=owner_user_id,
         account_id=account_id,
@@ -206,14 +229,10 @@ async def register_and_start_account(
         first_name=first_name,
         username=username,
         string_session=string_session,
+        can_share=can_share,
     )
-    if not ok:
-        return False, msg, None
 
-    # Also keep users table synced for backward compatibility
-    await db.save_session(owner_user_id, phone=phone, string_session=string_session)
-
-    # If already running, stop old instance first
+    # 3. If already running, stop old instance first
     if account_id in account_pool:
         old_c = account_pool.pop(account_id, None)
         try:
@@ -229,11 +248,12 @@ async def register_and_start_account(
         "first_name": first_name,
         "username": username,
         "string_session": string_session,
+        "can_share": can_share,
     }
     client = await load_bot_account_client(record)
     if client:
-        return True, "Account successfully activated in worker pool!", client
-    return False, "Failed to start Pyrogram client with provided session.", None
+        return True, "Account successfully activated!", client
+    return True, "Account session saved safely in database.", None
 
 
 async def unregister_account(account_id: int, owner_user_id: Optional[int] = None) -> bool:
@@ -316,9 +336,12 @@ async def get_user_client(user_id: int) -> Optional[Client]:
     all_healthy_pool: List[Client] = []
     for aid, client in account_pool.items():
         if client.is_connected:
-            limiter = rate_registry.get_sync(f"account_{aid}")
-            if not limiter.is_quarantined:
-                all_healthy_pool.append(client)
+            meta = account_metadata.get(aid, {})
+            # Only use accounts designated for shared worker pooling
+            if meta.get("can_share", 1):
+                limiter = rate_registry.get_sync(f"account_{aid}")
+                if not limiter.is_quarantined:
+                    all_healthy_pool.append(client)
 
     if all_healthy_pool:
         client = all_healthy_pool[pool_index % len(all_healthy_pool)]
@@ -375,8 +398,6 @@ async def initialize_all_bot_accounts():
         for rec in records:
             try:
                 aid = rec["account_id"]
-                if aid == 5319231239:
-                    continue  # Safety block: User's personal account must never act as a bot worker
                 c = await load_bot_account_client(rec)
                 if c:
                     fp = get_fingerprint_for_user(aid)
@@ -433,6 +454,7 @@ async def initialize_admin_pool(sessions: List[str]):
                 first_name=me.first_name or "",
                 username=me.username or "",
                 string_session=sess_clean,
+                can_share=1,
             )
             account_pool[me.id] = client
             account_metadata[me.id] = {
@@ -440,6 +462,7 @@ async def initialize_admin_pool(sessions: List[str]):
                 "phone": me.phone_number or "",
                 "username": me.username or "",
                 "first_name": me.first_name or "",
+                "can_share": 1,
                 "device_model": fingerprint.get("device_model", "Official Telegram"),
             }
         except Exception as e:
@@ -447,8 +470,25 @@ async def initialize_admin_pool(sessions: List[str]):
 
 
 async def warmup_all_active_sessions():
-    """Warms up all registered bot accounts on startup."""
+    """Warms up all registered bot accounts and active user personal sessions on startup."""
     await initialize_all_bot_accounts()
+
+    # Pre-warm any personal user sessions from users table not yet loaded into account_pool
+    try:
+        active_sessions = await db.get_all_active_sessions()
+        for uid, s_str in active_sessions:
+            if uid not in account_pool and s_str:
+                rec = {
+                    "account_id": uid,
+                    "owner_user_id": uid,
+                    "string_session": s_str,
+                    "can_share": 1,
+                }
+                c = await load_bot_account_client(rec)
+                if c:
+                    logger.info("Warmed up personal user session %s", uid)
+    except Exception as e:
+        logger.warning("Error warming up active user personal sessions: %s", e)
 
 
 async def stop_all_user_clients():

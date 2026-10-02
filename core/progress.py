@@ -88,22 +88,38 @@ class ProgressTracker:
         self.total_bytes = total if total > 0 else 1
         self.percentage = min(100.0, (self.current_bytes / self.total_bytes) * 100.0)
 
-        # Calculate speed with smoothed delta
+        # Calculate speed with Exponential Moving Average (EMA) to prevent wild fluctuations
         calc_delta = now - self.last_calc_time
         if calc_delta >= 0.8:
             bytes_delta = current - self.last_bytes
-            self.current_speed = bytes_delta / calc_delta if calc_delta > 0 else 0
+            if bytes_delta > 0 and calc_delta > 0:
+                instant_speed = bytes_delta / calc_delta
+                if self.current_speed <= 0:
+                    self.current_speed = instant_speed
+                else:
+                    # 70% historical smoothed speed + 30% instant delta = rock-stable live telemetry
+                    self.current_speed = (0.70 * self.current_speed) + (0.30 * instant_speed)
+            elif self.current_speed > 0:
+                # Gradual decay while waiting for next 1MB chunk to arrive
+                overall_avg = current / max(now - self.start_time, 0.1)
+                self.current_speed = max(self.current_speed * 0.92, overall_avg)
             self.last_bytes = current
             self.last_calc_time = now
+
+        # Fallback to total elapsed average if current_speed is 0
+        effective_speed = self.current_speed
+        if effective_speed <= 0 and current > 0:
+            total_elapsed = max(now - self.start_time, 0.1)
+            effective_speed = current / total_elapsed
 
         # Render high-aesthetic card
         bar = generate_blocks(self.percentage, total_blocks=10, filled_char="▰", empty_char="▱")
         readable_cur = human_readable_size(self.current_bytes)
         readable_tot = human_readable_size(self.total_bytes)
-        speed_str = f"{human_readable_size(self.current_speed)}/s"
+        speed_str = f"{human_readable_size(effective_speed)}/s"
 
         rem_bytes = max(0, self.total_bytes - self.current_bytes)
-        eta_seconds = (rem_bytes / self.current_speed) if self.current_speed > 0 else 0
+        eta_seconds = (rem_bytes / effective_speed) if effective_speed > 0 else 0
         eta_str = f"{format_duration(eta_seconds)} remaining"
 
         is_dl = "Download" in self.action_name

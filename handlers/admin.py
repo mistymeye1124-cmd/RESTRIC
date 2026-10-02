@@ -105,7 +105,7 @@ async def build_admin_panel_data():
                 InlineKeyboardButton("🔒 VIP Channel Lock", callback_data="adm_view_viplock"),
             ],
             [
-                InlineKeyboardButton(f"👥 Worker Pool ({len(pool_accs)})", callback_data="view_my_accounts"),
+                InlineKeyboardButton(f"🚀 Worker Fleet & Bandwidth ({len(pool_accs)})", callback_data="view_my_accounts"),
                 InlineKeyboardButton("🛡️ Anti-Ban Health", callback_data="adm_view_antiban"),
             ],
             [

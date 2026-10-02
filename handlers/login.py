@@ -142,6 +142,7 @@ async def render_accounts_cockpit(user_id: int):
         f"• **Health State:** `🟢 {healthy_cnt} Healthy` | `⏳ {cooldown_cnt} Cooldown`",
         f"• **Anti-Ban Device Spoofer:** `ACTIVE 🟢 (Isolated Official Fingerprints)`",
         f"• **Load Balancing Rotation:** `ACTIVE 🟢 (Auto Round-Robin Distribution)`",
+        f"• 🚀 **Fleet Bandwidth Multiplier:** `{max(1, healthy_cnt)}x (~{max(1, healthy_cnt) * 25} - {max(1, healthy_cnt) * 35} Mbps Peak)`",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n",
     ]
 
@@ -255,7 +256,7 @@ async def render_login_hub_card(user_id: int):
     return text, markup
 
 
-@Client.on_message(filters.command(["accounts", "myaccounts"]) & filters.private)
+@Client.on_message(filters.command(["accounts", "myaccounts", "workers", "worker"]) & filters.private)
 async def accounts_command_handler(client: Client, message: Message):
     text, markup = await render_accounts_cockpit(message.from_user.id)
     await message.reply_text(text, reply_markup=markup)

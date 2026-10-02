@@ -97,7 +97,7 @@ async def turbo_parallel_download(
         num_workers = 4
         chunk_size = 512 * 1024
     else:
-        num_workers = min(num_workers, 8)
+        num_workers = min(max(num_workers, 8), 10)
         chunk_size = 1024 * 1024
 
     fid = FileId.decode(target.file_id)
@@ -123,14 +123,16 @@ async def turbo_parallel_download(
             raw.functions.auth.ExportAuthorization(dc_id=dc_id)
         )
 
-    # 2. Spin up and authenticate parallel MTProto sessions
-    sessions: List[Session] = []
-    for _ in range(num_workers):
-        s = Session(client, dc_id, auth_key, is_test, is_media=True)
-        await s.start()
-        if exported_auth:
+    # 2. Spin up and authenticate parallel MTProto sessions concurrently
+    sessions: List[Session] = [
+        Session(client, dc_id, auth_key, is_test, is_media=True)
+        for _ in range(num_workers)
+    ]
+    await asyncio.gather(*[s.start() for s in sessions])
+    if exported_auth:
+        async def _import_auth(sess: Session):
             try:
-                await s.invoke(
+                await sess.invoke(
                     raw.functions.auth.ImportAuthorization(
                         id=exported_auth.id,
                         bytes=exported_auth.bytes
@@ -138,7 +140,8 @@ async def turbo_parallel_download(
                 )
             except Exception as imp_err:
                 logger.debug("ImportAuthorization result on session: %s", imp_err)
-        sessions.append(s)
+
+        await asyncio.gather(*[_import_auth(s) for s in sessions])
 
     # 3. Build chunk queue
     offsets = list(range(0, total_size, chunk_size))
@@ -201,7 +204,7 @@ async def turbo_parallel_download(
                         chunk_success = True
 
                         now = time.time()
-                        if progress_callback and (now - last_cb_time >= 1.2 or downloaded_bytes >= total_size):
+                        if progress_callback and (now - last_cb_time >= 0.8 or downloaded_bytes >= total_size):
                             last_cb_time = now
                             asyncio.create_task(progress_callback(downloaded_bytes, total_size))
                         break

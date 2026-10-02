@@ -778,6 +778,7 @@ class Database:
 
     async def get_session(self, user_id: int) -> Optional[str]:
         async with aiosqlite.connect(self.db_file) as db:
+            # 1. Primary check: users table where is_active = 1
             cursor = await db.execute(
                 "SELECT string_session FROM users WHERE user_id = ? AND is_active = 1",
                 (user_id,),
@@ -785,13 +786,39 @@ class Database:
             row = await cursor.fetchone()
             if row and row[0]:
                 return row[0]
-            # Fallback: check bot_accounts table
+
+            # 2. Check bot_accounts table where is_active = 1
             cursor2 = await db.execute(
                 "SELECT string_session FROM bot_accounts WHERE (owner_user_id = ? OR account_id = ?) AND is_active = 1",
                 (user_id, user_id),
             )
             row2 = await cursor2.fetchone()
-            return row2[0] if row2 and row2[0] else None
+            if row2 and row2[0]:
+                return row2[0]
+
+            # 3. Auto-Heal Fallback: check ANY non-null session in users table
+            cursor3 = await db.execute(
+                "SELECT string_session FROM users WHERE user_id = ? AND string_session IS NOT NULL AND string_session != ''",
+                (user_id,),
+            )
+            row3 = await cursor3.fetchone()
+            if row3 and row3[0]:
+                await db.execute("UPDATE users SET is_active = 1 WHERE user_id = ?", (user_id,))
+                await db.commit()
+                return row3[0]
+
+            # 4. Auto-Heal Fallback: check bot_accounts table
+            cursor4 = await db.execute(
+                "SELECT string_session FROM bot_accounts WHERE (owner_user_id = ? OR account_id = ?) AND status != 'dead' AND string_session IS NOT NULL AND string_session != ''",
+                (user_id, user_id),
+            )
+            row4 = await cursor4.fetchone()
+            if row4 and row4[0]:
+                await db.execute("UPDATE bot_accounts SET is_active = 1, status = 'healthy' WHERE (owner_user_id = ? OR account_id = ?)", (user_id, user_id))
+                await db.commit()
+                return row4[0]
+
+            return None
 
     async def remove_session(self, user_id: int):
         async with aiosqlite.connect(self.db_file) as db:
@@ -808,11 +835,11 @@ class Database:
     async def get_all_active_sessions(self) -> list:
         async with aiosqlite.connect(self.db_file) as db:
             cursor = await db.execute(
-                "SELECT user_id, string_session FROM users WHERE is_active = 1 AND string_session IS NOT NULL AND string_session != ''"
+                "SELECT user_id, string_session FROM users WHERE string_session IS NOT NULL AND string_session != ''"
             )
             rows = await cursor.fetchall()
             cursor2 = await db.execute(
-                "SELECT account_id, string_session FROM bot_accounts WHERE is_active = 1 AND string_session IS NOT NULL AND string_session != ''"
+                "SELECT account_id, string_session FROM bot_accounts WHERE status != 'dead' AND string_session IS NOT NULL AND string_session != ''"
             )
             rows2 = await cursor2.fetchall()
             combined = {}

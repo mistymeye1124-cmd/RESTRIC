@@ -113,7 +113,7 @@ async def _safe_get_messages(
                     pass
             return None
 
-        except (AuthKeyUnregistered, AuthKeyDuplicated, SessionExpired, SessionRevoked) as e:
+        except (AuthKeyUnregistered, SessionExpired, SessionRevoked) as e:
             logger.error("[Download] Session invalid/revoked: %s", session_key)
             if session_key.startswith("user_"):
                 try:
@@ -121,6 +121,11 @@ async def _safe_get_messages(
                     asyncio.create_task(handle_dead_session(uid, reason=str(e)))
                 except Exception:
                     pass
+            return None
+
+        except AuthKeyDuplicated as e:
+            logger.warning("[Download] Temporary AuthKeyDuplicated on %s: %s (session preserved)", session_key, e)
+            await asyncio.sleep(1.5)
             return None
 
         except (ChannelInvalid, PeerIdInvalid, KeyError) as e:
@@ -475,7 +480,7 @@ async def download_restricted_media(
                 active_jobs.pop(job_id, None)
                 return None
 
-            except (UserDeactivated, UserDeactivatedBan, AuthKeyUnregistered, AuthKeyDuplicated, SessionExpired, SessionRevoked) as e:
+            except (UserDeactivated, UserDeactivatedBan, AuthKeyUnregistered, SessionExpired, SessionRevoked) as e:
                 logger.critical("[Download] Session revoked during media transfer: %s (%s)", session_key, e)
                 if session_key.startswith("user_"):
                     try:
@@ -490,6 +495,11 @@ async def download_restricted_media(
                 )
                 active_jobs.pop(job_id, None)
                 return None
+
+            except AuthKeyDuplicated as e:
+                logger.warning("[Download] AuthKeyDuplicated during transfer: %s (session preserved)", e)
+                await asyncio.sleep(2)
+                continue
 
             except Exception as e:
                 if active_jobs.get(job_id, {}).get("cancelled"):

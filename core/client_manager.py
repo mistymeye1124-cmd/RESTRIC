@@ -30,6 +30,14 @@ active_userbots: Dict[int, Client] = {}
 admin_pool_clients: List[Client] = []
 pool_index: int = 0
 _pool_lock = asyncio.Lock()
+_client_load_locks: Dict[int, asyncio.Lock] = {}
+
+
+def _get_load_lock(user_id: int) -> asyncio.Lock:
+    if user_id not in _client_load_locks:
+        _client_load_locks[user_id] = asyncio.Lock()
+    return _client_load_locks[user_id]
+
 
 
 async def _warmup_dialogs(client: Client):
@@ -157,6 +165,7 @@ async def load_bot_account_client(account_record: Dict[str, Any]) -> Optional[Cl
         "max_concurrent_transmissions": 4,
         "workers": 16,
         "ipv6": False,
+        "no_updates": True,
         "sleep_threshold": 60,
         **fingerprint,
     }
@@ -307,9 +316,14 @@ async def get_user_client(user_id: int) -> Optional[Client]:
 
     # 1. Check personal accounts owned by this user
     personal_healthy: List[Client] = []
-    for aid, client in account_pool.items():
+    for aid, client in list(account_pool.items()):
         meta = account_metadata.get(aid, {})
         if meta.get("owner_user_id") == user_id or aid == user_id:
+            if not client.is_connected:
+                try:
+                    await client.connect()
+                except Exception:
+                    pass
             if client.is_connected:
                 limiter = rate_registry.get_sync(f"account_{aid}")
                 if not limiter.is_quarantined:
@@ -320,17 +334,32 @@ async def get_user_client(user_id: int) -> Optional[Client]:
         pool_index += 1
         return client
 
-    # 2. Check if user has session in DB not yet loaded into account_pool
-    session_string = await db.get_session(user_id)
-    if session_string and user_id not in account_pool:
-        rec = {
-            "account_id": user_id,
-            "owner_user_id": user_id,
-            "string_session": session_string,
-        }
-        client = await load_bot_account_client(rec)
-        if client and client.is_connected:
-            return client
+    # 2. Check if user has session in DB not yet loaded or if account in pool needs re-initialization
+    async with _get_load_lock(user_id):
+        # Re-check personal after acquiring lock
+        for aid, client in list(account_pool.items()):
+            meta = account_metadata.get(aid, {})
+            if (meta.get("owner_user_id") == user_id or aid == user_id) and client.is_connected:
+                return client
+
+        session_string = await db.get_session(user_id)
+        if session_string:
+            if user_id in account_pool:
+                old_c = account_pool.pop(user_id, None)
+                try:
+                    if old_c and old_c.is_connected:
+                        await old_c.stop()
+                except Exception:
+                    pass
+            rec = {
+                "account_id": user_id,
+                "owner_user_id": user_id,
+                "string_session": session_string,
+                "can_share": 1,
+            }
+            client = await load_bot_account_client(rec)
+            if client and client.is_connected:
+                return client
 
     # 3. Round-robin through all healthy accounts in the general multi-account worker pool
     all_healthy_pool: List[Client] = []
@@ -432,6 +461,7 @@ async def initialize_admin_pool(sessions: List[str]):
                 "max_concurrent_transmissions": 4,
                 "workers": 16,
                 "ipv6": False,
+                "no_updates": True,
                 "sleep_threshold": 60,
                 **fingerprint,
             }

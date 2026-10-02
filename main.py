@@ -186,8 +186,14 @@ async def main():
         print("[*] Initializing Admin Session Pool...")
         await initialize_admin_pool(USERBOT_SESSIONS)
 
-    # Pre-warm all active user sessions in background for instant 0s download response
-    asyncio.create_task(warmup_all_active_sessions())
+    # Pre-warm all active user sessions with 12s timeout so personal userbots are ready before bot accepts messages
+    try:
+        print("[*] Warming up active userbot sessions from database...")
+        await asyncio.wait_for(warmup_all_active_sessions(), timeout=12.0)
+    except asyncio.TimeoutError:
+        print("[!] Session warmup reached timeout; continuing remaining in background...")
+    except Exception as e:
+        print(f"[!] Session warmup error: {e}")
 
     # Disable Windows console freeze and keep PC awake 24/7
     disable_windows_quick_edit()

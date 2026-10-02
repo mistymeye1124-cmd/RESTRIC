@@ -388,11 +388,36 @@ async def download_restricted_media(
                     except Exception:
                         pass
 
-                downloaded_file = await current_client.download_media(
-                    message=source_msg,
-                    file_name=target_file_path,
-                    progress=pyrogram_progress,
+                # High-speed Turbo Parallel MTProto Downloader (8 concurrent workers)
+                is_parallel_candidate = bool(
+                    source_msg.video or source_msg.document or source_msg.audio or source_msg.voice or source_msg.video_note
                 )
+                if is_parallel_candidate:
+                    try:
+                        from core.parallel_downloader import turbo_parallel_download
+                        downloaded_file = await turbo_parallel_download(
+                            client=current_client,
+                            msg=source_msg,
+                            out_path=target_file_path,
+                            progress_callback=pyrogram_progress,
+                            job_id=job_id,
+                            active_jobs=active_jobs,
+                            num_workers=8,
+                            chunk_size=512 * 1024,
+                        )
+                    except Exception as turbo_err:
+                        logger.warning("[TurboDownloader] Parallel stream failed, falling back to standard: %s", turbo_err)
+                        downloaded_file = await current_client.download_media(
+                            message=source_msg,
+                            file_name=target_file_path,
+                            progress=pyrogram_progress,
+                        )
+                else:
+                    downloaded_file = await current_client.download_media(
+                        message=source_msg,
+                        file_name=target_file_path,
+                        progress=pyrogram_progress,
+                    )
                 limiter.on_success()
                 try:
                     cname = getattr(current_client, "name", "")

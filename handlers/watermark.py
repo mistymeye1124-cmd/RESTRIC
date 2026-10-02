@@ -836,7 +836,7 @@ async def wm_set_tc_callback(client: Client, callback_query: CallbackQuery):
 # DIRECT COMMAND HANDLERS (/setwm, /setwmbg, /setwmcolor, /clearwm, /wm)
 # =========================================================================
 
-@Client.on_message(filters.command(["wm", "branding"]) & filters.private)
+@Client.on_message(filters.command(["setup", "wm", "watermark", "branding"]) & filters.private)
 async def wm_command_alias_handler(client: Client, message: Message):
     user_id = message.from_user.id
     text, markup = await render_watermark_dashboard(user_id)

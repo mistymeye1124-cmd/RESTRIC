@@ -26,45 +26,26 @@ _OFFICIAL_PROFILES = [
         "app_version": "5.8.3 x64",
         "lang_code": "en",
     },
+    {
+        "device_model": "Desktop",
+        "system_version": "Windows 11 Home",
+        "app_version": "5.9.0 x64",
+        "lang_code": "en",
+    },
     # --- Telegram Desktop (macOS Sonoma / Sequoia) ---
     {
-        "device_model": "MacBook Pro M3 Max",
+        "device_model": "MacBook Pro",
         "system_version": "macOS 14.6.1",
         "app_version": "10.15.2",
         "lang_code": "en",
     },
-    # --- Telegram Android (Official Samsung Flagship) ---
+    # --- Telegram Desktop (Linux 64bit) ---
     {
-        "device_model": "Samsung SM-S928B (Galaxy S24 Ultra)",
-        "system_version": "SDK 34 (Android 14)",
-        "app_version": "11.1.3 (5182)",
+        "device_model": "PC 64bit",
+        "system_version": "Ubuntu 22.04 LTS",
+        "app_version": "5.9.0 x64",
         "lang_code": "en",
     },
-    {
-        "device_model": "Google Pixel 9 Pro XL",
-        "system_version": "SDK 35 (Android 15)",
-        "app_version": "11.2.0 (5200)",
-        "lang_code": "en",
-    },
-    {
-        "device_model": "Xiaomi 14 Ultra (24030PN60G)",
-        "system_version": "SDK 34 (HyperOS 1.0)",
-        "app_version": "11.1.0 (5170)",
-        "lang_code": "en",
-    },
-    # --- Telegram iOS (Apple Flagship Official) ---
-    {
-        "device_model": "iPhone 16 Pro Max",
-        "system_version": "iOS 18.0.1",
-        "app_version": "11.2.0",
-        "lang_code": "en",
-    },
-    {
-        "device_model": "iPhone 15 Pro",
-        "system_version": "iOS 17.6.1",
-        "app_version": "11.1.2",
-        "lang_code": "en",
-    }
 ]
 
 

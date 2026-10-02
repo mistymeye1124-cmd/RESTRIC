@@ -13,37 +13,87 @@ import random
 from typing import Dict
 
 _OFFICIAL_PROFILES = [
-    # --- Telegram Desktop (Windows 11 / 10 64bit) ---
+    # --- Windows 11 Official Desktop PC ---
     {
-        "device_model": "PC 64bit",
+        "device_model": "Dell XPS 15 9530",
         "system_version": "Windows 11 Pro 23H2",
         "app_version": "5.9.0 x64",
         "lang_code": "en",
     },
     {
-        "device_model": "Desktop",
-        "system_version": "Windows 10 Enterprise",
-        "app_version": "5.8.3 x64",
-        "lang_code": "en",
-    },
-    {
-        "device_model": "Desktop",
+        "device_model": "ASUS ROG Zephyrus G14",
         "system_version": "Windows 11 Home",
         "app_version": "5.9.0 x64",
         "lang_code": "en",
     },
-    # --- Telegram Desktop (macOS Sonoma / Sequoia) ---
     {
-        "device_model": "MacBook Pro",
+        "device_model": "Lenovo ThinkPad X1 Carbon Gen 11",
+        "system_version": "Windows 11 Pro",
+        "app_version": "5.8.3 x64",
+        "lang_code": "en",
+    },
+    {
+        "device_model": "HP Spectre x360 14",
+        "system_version": "Windows 11 Home",
+        "app_version": "5.9.0 x64",
+        "lang_code": "en",
+    },
+    # --- Windows 10 Official Desktop ---
+    {
+        "device_model": "Custom Desktop PC",
+        "system_version": "Windows 10 Enterprise 22H2",
+        "app_version": "5.8.3 x64",
+        "lang_code": "en",
+    },
+    # --- Apple macOS (Desktop App) ---
+    {
+        "device_model": "MacBook Pro 16-inch M3 Max",
         "system_version": "macOS 14.6.1",
         "app_version": "10.15.2",
         "lang_code": "en",
     },
-    # --- Telegram Desktop (Linux 64bit) ---
     {
-        "device_model": "PC 64bit",
-        "system_version": "Ubuntu 22.04 LTS",
-        "app_version": "5.9.0 x64",
+        "device_model": "MacBook Air 15-inch M2",
+        "system_version": "macOS 14.5",
+        "app_version": "10.14.0",
+        "lang_code": "en",
+    },
+    # --- Official Telegram Android ---
+    {
+        "device_model": "Samsung Galaxy S24 Ultra (SM-S928B)",
+        "system_version": "SDK 34 (Android 14, OneUI 6.1)",
+        "app_version": "10.14.5 (4982)",
+        "lang_code": "en",
+    },
+    {
+        "device_model": "Google Pixel 8 Pro (husky)",
+        "system_version": "SDK 34 (Android 14)",
+        "app_version": "10.14.5 (4982)",
+        "lang_code": "en",
+    },
+    {
+        "device_model": "Xiaomi 14 Ultra (aurora)",
+        "system_version": "SDK 34 (HyperOS 1.0)",
+        "app_version": "10.13.1 (4890)",
+        "lang_code": "en",
+    },
+    {
+        "device_model": "OnePlus 12 (CPH2573)",
+        "system_version": "SDK 34 (OxygenOS 14)",
+        "app_version": "10.14.0 (4932)",
+        "lang_code": "en",
+    },
+    # --- Official Telegram iOS ---
+    {
+        "device_model": "iPhone 15 Pro Max (A3106)",
+        "system_version": "iOS 17.6.1",
+        "app_version": "10.14.1",
+        "lang_code": "en",
+    },
+    {
+        "device_model": "iPhone 14 Pro (A2890)",
+        "system_version": "iOS 17.5.1",
+        "app_version": "10.13.0",
         "lang_code": "en",
     },
 ]

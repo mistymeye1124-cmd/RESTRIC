@@ -48,6 +48,7 @@ from core.client_manager import (
     toggle_account_active,
     account_pool,
     account_metadata,
+    get_configured_proxy,
 )
 from core.device_spoofer import get_fingerprint_for_user
 
@@ -479,13 +480,17 @@ async def start_qr_login_callback(client: Client, callback_query: CallbackQuery)
     status_msg = await callback_query.message.reply_text("🔄 Connecting to Telegram servers to generate your QR Code...")
 
     fingerprint = get_fingerprint_for_user(user_id)
-    temp_client = Client(
-        name=f"temp_qr_{user_id}",
-        api_id=API_ID,
-        api_hash=API_HASH,
-        workdir=str(SESSIONS_DIR),
+    proxy = get_configured_proxy()
+    client_kwargs = {
+        "name": f"temp_qr_{user_id}",
+        "api_id": API_ID,
+        "api_hash": API_HASH,
+        "workdir": str(SESSIONS_DIR),
         **fingerprint,
-    )
+    }
+    if proxy:
+        client_kwargs["proxy"] = proxy
+    temp_client = Client(**client_kwargs)
 
     try:
         await temp_client.connect()
@@ -946,13 +951,17 @@ async def initiate_phone_code_login(client: Client, message: Message, user_id: i
 
     try:
         fingerprint = get_fingerprint_for_user(user_id)
-        temp_client = Client(
-            name=f"temp_login_{user_id}",
-            api_id=API_ID,
-            api_hash=API_HASH,
-            in_memory=True,
+        proxy = get_configured_proxy()
+        client_kwargs = {
+            "name": f"temp_login_{user_id}",
+            "api_id": API_ID,
+            "api_hash": API_HASH,
+            "in_memory": True,
             **fingerprint,
-        )
+        }
+        if proxy:
+            client_kwargs["proxy"] = proxy
+        temp_client = Client(**client_kwargs)
         await temp_client.connect()
         code_info = await temp_client.send_code(clean_phone)
         login_clients[user_id] = temp_client
@@ -1100,14 +1109,18 @@ async def auth_flow_listener(client: Client, message: Message):
     if is_session_string:
         status_msg = await message.reply_text("🔄 Verifying Pyrogram StringSession...")
         fingerprint = get_fingerprint_for_user(user_id)
-        temp_client = Client(
-            name=f"verify_str_{user_id}",
-            api_id=API_ID,
-            api_hash=API_HASH,
-            session_string=text,
-            in_memory=True,
+        proxy = get_configured_proxy()
+        client_kwargs = {
+            "name": f"verify_str_{user_id}",
+            "api_id": API_ID,
+            "api_hash": API_HASH,
+            "session_string": text,
+            "in_memory": True,
             **fingerprint,
-        )
+        }
+        if proxy:
+            client_kwargs["proxy"] = proxy
+        temp_client = Client(**client_kwargs)
         try:
             await temp_client.start()
             me = await temp_client.get_me()

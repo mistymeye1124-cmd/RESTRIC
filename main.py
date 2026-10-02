@@ -8,6 +8,13 @@ import os
 import sys
 import asyncio
 
+# Ensure an asyncio event loop exists before Pyrogram imports for Python 3.12+ / 3.14
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
 # Critical: Telegram 64-bit Channel ID support for Pyrogram
 import pyrogram.utils
 pyrogram.utils.MIN_CHANNEL_ID = -1009999999999

@@ -1,0 +1,158 @@
+# language: Python, file: core/progress.py, target: Python 3.10+
+"""
+Real-time progress tracker and high-aesthetic telemetry card generator
+for Telegram download & upload operations.
+Engineered for ultra-smooth UI feedback, low flood-wait footprint, and world-class aesthetics.
+"""
+
+import time
+import math
+from typing import Tuple, Optional
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from config import PROGRESS_UPDATE_INTERVAL as _PROG_INTERVAL
+
+
+def human_readable_size(size_bytes: float) -> str:
+    """Formats bytes to B, KB, MB, GB."""
+    if size_bytes <= 0:
+        return "0.0 B"
+    units = ["B", "KB", "MB", "GB", "TB"]
+    i = int(math.floor(math.log(size_bytes, 1024)))
+    p = math.pow(1024, i)
+    s = round(size_bytes / p, 2 if i >= 2 else 1)
+    return f"{s} {units[i]}"
+
+
+def format_duration(seconds: float) -> str:
+    """Formats seconds to M:SS or H:MM:SS."""
+    if seconds <= 0 or math.isinf(seconds) or math.isnan(seconds):
+        return "00:00"
+    seconds = int(seconds)
+    minutes, sec = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{sec:02d}"
+    return f"{minutes:02d}:{sec:02d}"
+
+
+def generate_blocks(percentage: float, total_blocks: int = 10, filled_char: str = "▰", empty_char: str = "▱") -> str:
+    """Generates sleek visual progress bar: e.g. ▰▰▰▰▰▰▱▱▱▱"""
+    filled = int(round((percentage / 100.0) * total_blocks))
+    filled = max(0, min(total_blocks, filled))
+    empty = total_blocks - filled
+    return (filled_char * filled) + (empty_char * empty)
+
+
+def get_progress_markup(job_id: str, res_pref: str = "original") -> InlineKeyboardMarkup:
+    """Inline keyboard with '📊 Live Stats', '⚙️ Quality', and '🛑 Cancel Task'."""
+    res_label = "⚡ Original" if res_pref == "original" else f"📺 {res_pref}p"
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("📊 Live Telemetry", callback_data=f"prog:{job_id}"),
+                InlineKeyboardButton(f"⚙️ {res_label}", callback_data=f"quick_res:{job_id}"),
+            ],
+            [
+                InlineKeyboardButton("🛑 Cancel Operation", callback_data=f"cancel:{job_id}"),
+            ]
+        ]
+    )
+
+
+class ProgressTracker:
+    def __init__(self, action_name: str = "Downloading Media", block_char: str = "▰"):
+        self.action_name = action_name
+        self.block_char = block_char
+        self.start_time = time.time()
+        self.last_update_time = 0.0  # 0.0 forces immediate update on first chunk!
+        self.last_calc_time = time.time()
+        self.last_bytes = 0
+        self.current_speed = 0.0
+        self.total_bytes = 0
+        self.current_bytes = 0
+        self.percentage = 0.0
+        self.is_cancelled = False
+        self.finished = False
+
+    def mark_finished(self):
+        self.finished = True
+
+    def update(self, current: int, total: int) -> Tuple[bool, str]:
+        """
+        Updates progress calculations. Returns (should_edit_message, text).
+        Throttles edits to avoid Telegram FLOOD_WAIT (every 1.8s).
+        Guarantees immediate update on first chunk (0.0 init).
+        """
+        now = time.time()
+        self.current_bytes = current
+        self.total_bytes = total if total > 0 else 1
+        self.percentage = min(100.0, (self.current_bytes / self.total_bytes) * 100.0)
+
+        # Calculate speed with smoothed delta
+        calc_delta = now - self.last_calc_time
+        if calc_delta >= 0.8:
+            bytes_delta = current - self.last_bytes
+            self.current_speed = bytes_delta / calc_delta if calc_delta > 0 else 0
+            self.last_bytes = current
+            self.last_calc_time = now
+
+        # Render high-aesthetic card
+        bar = generate_blocks(self.percentage, total_blocks=10, filled_char="▰", empty_char="▱")
+        readable_cur = human_readable_size(self.current_bytes)
+        readable_tot = human_readable_size(self.total_bytes)
+        speed_str = f"{human_readable_size(self.current_speed)}/s"
+
+        rem_bytes = max(0, self.total_bytes - self.current_bytes)
+        eta_seconds = (rem_bytes / self.current_speed) if self.current_speed > 0 else 0
+        eta_str = f"{format_duration(eta_seconds)} remaining"
+
+        is_dl = "Download" in self.action_name
+        action_title = "[ARM SQUAD] MEDIA EXTRACTOR" if is_dl else "[ARM SQUAD] MEDIA DISPATCHER"
+
+        text = (
+            f"⚡ **{action_title}** ⚡\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 **Operation:** `{self.action_name}`\n"
+            f"📊 **Progress:** `[{bar}] {self.percentage:.1f}%`\n\n"
+            f"╭── 📡 **TACTICAL TELEMETRY** ───────────\n"
+            f"│ 📦 **Transferred:** `{readable_cur}` / `{readable_tot}`\n"
+            f"│ 🚀 **Throughput:** `{speed_str}` (Live)\n"
+            f"│ ⏱️ **Estimated:** `{eta_str}`\n"
+            f"│ 🛡️ **Shield:** `Active Stealth Protection`\n"
+            f"╰────────────────────────────────────────╯\n"
+            f"⚡ _Engine: TITAN v7.0 Multi-Stream Core_"
+        )
+
+        elapsed_since_edit = now - self.last_update_time
+        is_first_chunk = (self.last_update_time == 0.0)
+        is_done = (self.current_bytes >= self.total_bytes)
+
+        # Anti-Flood Protection: Enforce strict 2.0s floor between edits
+        # Prevents Telegram Bot API 429 FLOOD_WAIT and transmission stalling
+        should_update = (
+            is_first_chunk
+            or is_done
+            or (elapsed_since_edit >= max(_PROG_INTERVAL, 2.0))
+        )
+        if should_update:
+            self.last_update_time = now
+            self._last_edit_pct = self.percentage
+            if self.current_bytes >= self.total_bytes:
+                self.finished = True
+            return True, text
+
+        return False, text
+
+    def get_alert_summary(self) -> str:
+        """Text displayed when user presses '📊 Live Telemetry' popup alert (Max 180 chars for Telegram API)."""
+        running_sec = time.time() - self.start_time
+        running_str = format_duration(running_sec)
+        readable_cur = human_readable_size(self.current_bytes)
+        readable_tot = human_readable_size(self.total_bytes) if self.total_bytes > 1 else "..."
+        speed_str = f"{human_readable_size(self.current_speed)}/s"
+
+        return (
+            f"⚡ {self.action_name}: {self.percentage:.1f}%\n"
+            f"⏱️ Time: {running_str} | 🚀 {speed_str}\n"
+            f"📦 Transferred: {readable_cur} / {readable_tot}"
+        )

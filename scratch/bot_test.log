@@ -1,0 +1,12 @@
+[*] Initializing Business Database...
+[+] Database initialized with monetization schema.
+[+] Multi-Worker Priority Queue started with 24 parallel workers.
+[*] Starting Telegram Bot Client...
+=================================================================
+🚀 Telegram Bot IS ONLINE: @TgPremiumDownlaoder_bot (MY Downloader)
+👑 Admin IDs configured: [-1002677227173, 8965121030]
+⚡ Priority Multi-Worker Queue: ACTIVE
+🛡️ Anti-Ban Engine & Device Fingerprinting: ACTIVE
+=================================================================
+[+] Telegram Bot menu commands registered.
+[*] Listening for restricted links, web videos, user sessions, and payments...

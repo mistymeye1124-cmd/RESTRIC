@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>⚡ Restricted Forward Bot Studio — Enterprise Web Cockpit</title>
+  <meta name="description" content="Commercial enterprise web management cockpit and interactive studio for Telegram Restricted Forward Bot.">
+  <!-- Telegram WebApp SDK for Mini App integration -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body>
+
+  <!-- Top Header Navigation -->
+  <header class="app-header">
+    <div class="brand-wrapper">
+      <div class="brand-icon">⚡</div>
+      <div class="brand-info">
+        <h1>RESTRICTED FORWARD BOT PRO</h1>
+        <div class="sub-tag">Commercial MTProto Turbo Socket v7.0</div>
+      </div>
+    </div>
+
+    <div class="header-status-group">
+      <div class="status-badge" id="botStatusBadge">
+        <span class="pulse-dot"></span>
+        <span id="botStatusText">MTProto Engine Active</span>
+      </div>
+      <div class="status-badge" style="background: rgba(0,240,255,0.08); border-color: rgba(0,240,255,0.3); color: var(--accent-cyan);" id="appModeBadge">
+        <i class="fa-solid fa-desktop"></i> <span id="appModeText">Web Studio Cockpit</span>
+      </div>
+      <button class="btn-cyber-secondary" id="refreshStatsBtn" title="Refresh Live Telemetry">
+        <i class="fa-solid fa-arrows-rotate"></i> Refresh
+      </button>
+      <a href="https://t.me/" target="_blank" id="openTelegramBtn" class="btn-cyber-primary" style="padding: 10px 18px; font-size: 0.85rem;">
+        <i class="fa-brands fa-telegram"></i> Open Bot
+      </a>
+    </div>
+  </header>
+
+  <!-- Navigation Tabs -->
+  <nav class="nav-tabs-container">
+    <button class="tab-btn active" data-tab="tab-forward">
+      <i class="fa-solid fa-share-from-square"></i> Forward & Saver Station
+    </button>
+    <button class="tab-btn" data-tab="tab-cloner">
+      <i class="fa-solid fa-clone"></i> Channel Cloner & Matrix
+    </button>
+    <button class="tab-btn" data-tab="tab-watermark">
+      <i class="fa-solid fa-wand-magic-sparkles"></i> Watermark Studio
+    </button>
+    <button class="tab-btn" data-tab="tab-media">
+      <i class="fa-solid fa-image"></i> Thumbnails & Captions
+    </button>
+    <button class="tab-btn" data-tab="tab-cockpit">
+      <i class="fa-solid fa-users-gear"></i> Users & Monetization
+    </button>
+    <button class="tab-btn" data-tab="tab-telemetry">
+      <i class="fa-solid fa-chart-line"></i> Live Telemetry & Logs
+    </button>
+  </nav>
+
+  <!-- Main Body Content -->
+  <main class="app-main">
+
+    <!-- Top High-Level Metrics -->
+    <section class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-icon cyan"><i class="fa-solid fa-bolt"></i></div>
+        <div class="stat-info">
+          <span class="stat-label">Forward Engine</span>
+          <span class="stat-value" id="statEngineSpeed">Turbo C/Rust</span>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon purple"><i class="fa-solid fa-users"></i></div>
+        <div class="stat-info">
+          <span class="stat-label">Total Harvesters</span>
+          <span class="stat-value" id="statTotalUsers">--</span>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon green"><i class="fa-solid fa-circle-check"></i></div>
+        <div class="stat-info">
+          <span class="stat-label">Forwarded Files</span>
+          <span class="stat-value" id="statTotalDownloads">--</span>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon gold"><i class="fa-solid fa-crown"></i></div>
+        <div class="stat-info">
+          <span class="stat-label">VIP Subscribers</span>
+          <span class="stat-value" id="statVipUsers">--</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ====================================================================
+         TAB 1: FORWARD & SAVER STATION
+         ==================================================================== -->
+    <div class="tab-content active" id="tab-forward">
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 28px;">
+        
+        <!-- Left: Dispatch Controls -->
+        <div class="glass-panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <i class="fa-solid fa-share-from-square"></i> Dispatch Restricted Forward Task
+            </div>
+            <span class="status-badge" style="background: rgba(0,240,255,0.08); border-color: rgba(0,240,255,0.3); color: var(--accent-cyan);">
+              <i class="fa-solid fa-shield-halved"></i> noforwards Bypass Active
+            </span>
+          </div>
+
+          <form id="forwardDispatchForm" onsubmit="event.preventDefault(); triggerForward();">
+            <div class="form-group">
+              <label class="form-label" for="targetLink">Target Restricted Link or Post URL</label>
+              <input type="text" id="targetLink" class="input-cyber" placeholder="e.g. https://t.me/c/2459862936/1019 or topic link..." required>
+              <div style="font-size: 0.78rem; color: var(--text-dim); margin-top: 6px;">
+                💡 Supports Private channels (<code>/c/...</code>), Topics (<code>/c/.../2/1019</code>), Ranges (<code>1019-1050</code>), and Web videos.
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;">
+              <div class="form-group" style="margin-bottom: 0;">
+                <label class="form-label" for="targetDestination">Destination Routing</label>
+                <select id="targetDestination" class="input-cyber">
+                  <option value="direct">📱 Direct to Chat (My Telegram)</option>
+                  <option value="backup">📢 Custom Backup Channel (Auto-Forward)</option>
+                  <option value="vault">🛡️ Silent Shadow Vault (Admin Archive)</option>
+                </select>
+              </div>
+
+              <div class="form-group" style="margin-bottom: 0;">
+                <label class="form-label" for="targetFormat">Stream Quality</label>
+                <select id="targetFormat" class="input-cyber">
+                  <option value="original">⚡ Stream-Copy (Instant 0 Loss)</option>
+                  <option value="1080">📺 1080p Full HD</option>
+                  <option value="720">📺 720p HD</option>
+                  <option value="480">📺 480p Compact</option>
+                  <option value="audio">🎵 320kbps MP3 Audio</option>
+                </select>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 18px; margin-bottom: 24px; flex-wrap: wrap;">
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: var(--text-muted); cursor: pointer;">
+                <input type="checkbox" id="chkStripHeader" checked style="accent-color: var(--accent-cyan);">
+                <span>Strip Forward Header (Anonymous)</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: var(--text-muted); cursor: pointer;">
+                <input type="checkbox" id="chkForensicScrub" checked style="accent-color: var(--accent-cyan);">
+                <span>Forensic Scrub (Zero EXIF/GPS)</span>
+              </label>
+            </div>
+
+            <div style="display: flex; gap: 14px; align-items: center;">
+              <button type="submit" class="btn-cyber-primary" id="btnDispatch">
+                <i class="fa-solid fa-bolt"></i> Launch Forward Pipeline
+              </button>
+              <button type="button" class="btn-cyber-secondary" onclick="document.getElementById('targetLink').value=''">
+                <i class="fa-solid fa-trash-can"></i> Clear
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Right: Interactive Telegram Card Simulator -->
+        <div class="glass-panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <i class="fa-brands fa-telegram"></i> Telegram Live Card & Modal Simulator
+            </div>
+            <span style="font-size: 0.8rem; color: var(--accent-cyan); font-family: var(--font-mono);">
+              <i class="fa-solid fa-mobile-screen"></i> Client View
+            </span>
+          </div>
+
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 16px;">
+            This interactive simulator reflects the exact UI cards and interactive popup alert modals rendered in Telegram:
+          </p>
+
+          <div class="tg-card-wrapper">
+            <div class="tg-bubble">
+              <div class="tg-header" id="tgSimHeader">
+                <i class="fa-solid fa-circle-down"></i> <span>Downloading from Telegram</span>
+              </div>
+              <div class="tg-sub" id="tgSimFileName">
+                Lecture_04_Rotational_Dynamics_1080p.mp4
+              </div>
+
+              <!-- Animated Progress Bar -->
+              <div class="tg-progress-bar">
+                <span class="tg-blocks" id="tgSimBlocks">▰▰▰▰▰▱▱▱</span>
+                <span class="tg-pct" id="tgSimPct">62.5%</span>
+              </div>
+
+              <!-- Live Telemetry Grid -->
+              <div class="tg-meta-grid">
+                <div>Speed: <span id="tgSimSpeed" style="color: var(--accent-cyan);">38.4 MB/s</span></div>
+                <div>ETA: <span id="tgSimEta" style="color: var(--accent-gold);">4s</span></div>
+                <div>Downloaded: <span id="tgSimDone">148.2 MB</span></div>
+                <div>Total: <span id="tgSimTotal">237.1 MB</span></div>
+              </div>
+
+              <!-- Interactive Telegram Inline Buttons -->
+              <div class="tg-buttons-grid">
+                <button type="button" class="tg-btn-inline" id="btnTgProgressSim" onclick="openTgModalAlert();">
+                  Progress ⚡
+                </button>
+                <button type="button" class="tg-btn-inline danger" id="btnTgCancelSim" onclick="simCancelTask();">
+                  Cancel ❌
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top: 18px; padding: 12px; background: rgba(0,240,255,0.04); border: 1px solid rgba(0,240,255,0.15); border-radius: var(--radius-sm); font-size: 0.82rem; color: var(--text-muted); text-align: center;">
+            💡 <b>Try clicking:</b> Tap <code>[ Progress ⚡ ]</code> above to experience the native Telegram pop-up alert modal!
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ====================================================================
+         TAB 2: CHANNEL CLONER & AUTO-FORWARD MATRIX
+         ==================================================================== -->
+    <div class="tab-content" id="tab-cloner">
+      <div class="glass-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <i class="fa-solid fa-clone"></i> 1-Click Channel Cloner & Auto-Forward Mirror Matrix
+          </div>
+          <span class="status-badge" style="background: rgba(0,255,163,0.08); border-color: rgba(0,255,163,0.3); color: var(--accent-green);">
+            <i class="fa-solid fa-robot"></i> Anti-Ban Rate Pacer: ACTIVE
+          </span>
+        </div>
+
+        <!-- Routing Visual Flow -->
+        <div class="routing-diagram">
+          <div class="route-node">
+            <i class="fa-solid fa-lock"></i>
+            <div>
+              <div style="font-weight: 700; font-size: 0.9rem;">Restricted Source</div>
+              <div style="font-size: 0.78rem; color: var(--text-muted);" id="dispSource">@source_channel</div>
+            </div>
+          </div>
+          <div class="route-arrow">
+            <span>MTProto Turbo</span>
+            <i class="fa-solid fa-arrow-right-long"></i>
+          </div>
+          <div class="route-node">
+            <i class="fa-solid fa-filter"></i>
+            <div>
+              <div style="font-weight: 700; font-size: 0.9rem;">Scrub & Watermark</div>
+              <div style="font-size: 0.78rem; color: var(--text-muted);">Zero Trace Exif Wiper</div>
+            </div>
+          </div>
+          <div class="route-arrow">
+            <span>Priority Stream</span>
+            <i class="fa-solid fa-arrow-right-long"></i>
+          </div>
+          <div class="route-node">
+            <i class="fa-solid fa-cloud-arrow-up"></i>
+            <div>
+              <div style="font-weight: 700; font-size: 0.9rem;">Target Destination</div>
+              <div style="font-size: 0.78rem; color: var(--text-muted);" id="dispTarget">@backup_channel</div>
+            </div>
+          </div>
+        </div>
+
+        <form id="clonerForm" onsubmit="event.preventDefault(); launchClonerTask();">
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; margin-bottom: 20px;">
+            <div class="form-group" style="margin-bottom: 0;">
+              <label class="form-label" for="clonerSource">Source Channel / Forum</label>
+              <input type="text" id="clonerSource" class="input-cyber" placeholder="e.g. @private_lectures or https://t.me/c/2459862936" required oninput="document.getElementById('dispSource').textContent = this.value || '@source_channel';">
+            </div>
+
+            <div class="form-group" style="margin-bottom: 0;">
+              <label class="form-label" for="clonerDestination">Destination Channel (Target)</label>
+              <input type="text" id="clonerDestination" class="input-cyber" placeholder="e.g. @my_private_backup or -1002459862936" required oninput="document.getElementById('dispTarget').textContent = this.value || '@backup_channel';">
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 24px;">
+            <div class="form-group" style="margin-bottom: 0;">
+              <label class="form-label" for="clonerStartId">Start Message ID</label>
+              <input type="number" id="clonerStartId" class="input-cyber" value="1" min="1" required>
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label class="form-label" for="clonerEndId">End Message ID</label>
+              <input type="number" id="clonerEndId" class="input-cyber" value="50" min="1" required>
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label class="form-label">Batch Size</label>
+              <div style="padding: 14px 18px; background: rgba(0,240,255,0.06); border: 1px solid rgba(0,240,255,0.2); border-radius: var(--radius-md); font-family: var(--font-mono); font-weight: 700; color: var(--accent-cyan); text-align: center;" id="clonerTotalBatch">
+                50 Posts in Range
+              </div>
+            </div>
+          </div>
+
+          <!-- Media Type Filter Checks -->
+          <div style="margin-bottom: 24px;">
+            <label class="form-label">Clone Filter Filters</label>
+            <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 0.88rem; cursor: pointer;">
+                <input type="checkbox" id="chkFilterVideos" checked style="accent-color: var(--accent-cyan);">
+                <span>📹 Videos & Lecture Series</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 0.88rem; cursor: pointer;">
+                <input type="checkbox" id="chkFilterDocs" checked style="accent-color: var(--accent-cyan);">
+                <span>📄 Documents & PDFs</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 0.88rem; cursor: pointer;">
+                <input type="checkbox" id="chkFilterPhotos" checked style="accent-color: var(--accent-cyan);">
+                <span>🖼️ High-Res Photos</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 0.88rem; cursor: pointer;">
+                <input type="checkbox" id="chkFilterAudio" checked style="accent-color: var(--accent-cyan);">
+                <span>🎙️ Voice Notes & Audio</span>
+              </label>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 14px;">
+            <button type="submit" class="btn-cyber-primary" id="btnLaunchCloner">
+              <i class="fa-solid fa-play"></i> Launch Channel Mirror Task
+            </button>
+            <button type="button" class="btn-cyber-secondary" onclick="alert('Cloner configuration reset.');">
+              <i class="fa-solid fa-rotate-left"></i> Reset Wizard
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ====================================================================
+         TAB 3: WATERMARK & BRANDING STUDIO
+         ==================================================================== -->
+    <div class="tab-content" id="tab-watermark">
+      <div class="studio-grid">
+        <!-- Left: Controls -->
+        <div class="glass-panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <i class="fa-solid fa-sliders"></i> Branding Controls
+            </div>
+            <button class="btn-cyber-secondary" id="btnToggleFreeWm" style="padding: 6px 14px; font-size: 0.78rem;">
+              <i class="fa-solid fa-power-off"></i> <span id="freeWmStateLabel">Free Watermark: OFF</span>
+            </button>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="wmTextInput">Watermark Badge Text</label>
+            <input type="text" id="wmTextInput" class="input-cyber" value="@TgPremiumDownloader_bot" placeholder="e.g. @YourChannelName">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="wmHeadlineInput">Top Headline Banner (Optional)</label>
+            <input type="text" id="wmHeadlineInput" class="input-cyber" placeholder="e.g. Physics Chapter 04 Class Lecture">
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+            <div class="form-group">
+              <label class="form-label" for="wmStyleSelect">Badge Visual Style</label>
+              <select id="wmStyleSelect" class="input-cyber">
+                <option value="pill">Modern Pill (Dark Glass)</option>
+                <option value="neon">Neon Cyan Glow</option>
+                <option value="golden">Golden VIP Luxury</option>
+                <option value="minimal">Minimal White Shadow</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="wmPositionSelect">Position Anchor</label>
+              <select id="wmPositionSelect" class="input-cyber">
+                <option value="bottom_right">Bottom Right</option>
+                <option value="bottom_left">Bottom Left</option>
+                <option value="top_right">Top Right</option>
+                <option value="top_left">Top Left</option>
+                <option value="center">Center Stamp</option>
+                <option value="moving">⚡ Dynamic Floating / Bounce</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">
+              <span>Opacity: </span><span id="wmOpacityVal" style="color: var(--accent-cyan); font-family: var(--font-mono);">85%</span>
+            </label>
+            <input type="range" id="wmOpacityRange" min="20" max="100" value="85" style="width: 100%; accent-color: var(--accent-cyan);">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">
+              <span>Font Size: </span><span id="wmFontSizeVal" style="color: var(--accent-cyan); font-family: var(--font-mono);">24px</span>
+            </label>
+            <input type="range" id="wmFontSizeRange" min="14" max="42" value="24" style="width: 100%; accent-color: var(--accent-cyan);">
+          </div>
+
+          <div class="form-group" id="bounceSpeedGroup" style="display: none;">
+            <label class="form-label">
+              <span>Bounce Animation Speed: </span><span id="wmBounceVal" style="color: var(--accent-cyan); font-family: var(--font-mono);">3x Normal</span>
+            </label>
+            <input type="range" id="wmBounceRange" min="1" max="5" value="3" style="width: 100%; accent-color: var(--accent-cyan);">
+          </div>
+
+          <div style="display: flex; gap: 12px; margin-top: 24px;">
+            <button class="btn-cyber-primary" id="btnSaveWmConfig">
+              <i class="fa-solid fa-floppy-disk"></i> Save Studio Preset
+            </button>
+            <button class="btn-cyber-secondary" id="btnResetWm">
+              <i class="fa-solid fa-rotate-left"></i> Reset
+            </button>
+          </div>
+        </div>
+
+        <!-- Right: Live Interactive Video Simulation Canvas -->
+        <div class="glass-panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <i class="fa-solid fa-tv"></i> Real-Time Canvas Simulator
+            </div>
+            <span style="font-size: 0.8rem; color: var(--accent-cyan); font-family: var(--font-mono);">
+              <i class="fa-solid fa-circle-play"></i> Live 60 FPS Engine
+            </span>
+          </div>
+
+          <div class="preview-container" id="videoPreviewBox">
+            <div style="position: absolute; inset: 0; background: linear-gradient(135deg, #111726, #060912); display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-dim);">
+              <i class="fa-solid fa-film" style="font-size: 54px; margin-bottom: 12px; opacity: 0.3;"></i>
+              <span style="font-family: var(--font-display); font-size: 0.95rem; opacity: 0.6;">Simulated 1080p Video Bitstream</span>
+            </div>
+
+            <!-- Top Headline Banner -->
+            <div id="simHeadlineBanner" style="position: absolute; top: 0; left: 0; right: 0; background: rgba(0,0,0,0.85); color: #fff; padding: 10px; font-family: var(--font-display); font-size: 14px; font-weight: 700; text-align: center; display: none; z-index: 9;">
+              Physics Chapter 04 Class Lecture
+            </div>
+
+            <!-- Watermark Badge Element -->
+            <div class="live-watermark-overlay pill" id="simWatermarkBadge">
+              @TgPremiumDownloader_bot
+            </div>
+          </div>
+
+          <div style="margin-top: 20px; padding: 14px; background: rgba(255,255,255,0.02); border-radius: var(--radius-sm); border: 1px solid var(--card-border); font-size: 0.85rem; color: var(--text-muted); line-height: 1.5;">
+            💡 <b>Live Visual Feedback:</b> Any text, color, position, or speed you tweak on the left is simulated immediately on this canvas. When saved, the bot burns this exact profile into your forwarded videos.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====================================================================
+         TAB 4: THUMBNAILS & CAPTIONS LAB
+         ==================================================================== -->
+    <div class="tab-content" id="tab-media">
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 28px;">
+        <!-- Left: Custom Thumbnail Studio -->
+        <div class="glass-panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <i class="fa-solid fa-image"></i> Custom Thumbnail Cover
+            </div>
+          </div>
+
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 18px;">
+            Videos delivered by the bot will automatically carry your custom branded high-resolution thumbnail cover.
+          </p>
+
+          <div class="form-group">
+            <label class="form-label">Upload Video Poster (16:9 JPEG / PNG)</label>
+            <input type="file" id="thumbFileInput" class="input-cyber" accept="image/*" onchange="previewThumbnailFile(this);">
+          </div>
+
+          <div style="width: 100%; aspect-ratio: 16/9; background: #060912; border-radius: var(--radius-sm); border: 1px dashed var(--card-border); display: flex; align-items: center; justify-content: center; overflow: hidden; margin-bottom: 20px;" id="thumbPreviewBox">
+            <span style="color: var(--text-dim); font-size: 0.85rem;"><i class="fa-solid fa-arrow-up-from-bracket"></i> Select image to preview</span>
+          </div>
+
+          <button class="btn-cyber-primary" onclick="showToast('Thumbnail preset saved to database!', 'success');">
+            <i class="fa-solid fa-cloud-arrow-up"></i> Apply Thumbnail Cover
+          </button>
+        </div>
+
+        <!-- Right: Smart Caption Designer -->
+        <div class="glass-panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <i class="fa-solid fa-file-lines"></i> Dynamic Caption Template
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="captionTemplate">Caption Template Editor</label>
+            <textarea id="captionTemplate" class="input-cyber" rows="6" style="resize: vertical;">⚡ {file_name}
+━━━━━━━━━━━━━━━━━━━━
+📦 Size: {file_size} | ⏱️ Duration: {duration}
+🎬 Extracted via Restricted Forward Bot Turbo
+👑 Channel: {channel}</textarea>
+          </div>
+
+          <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px;">
+            <span class="badge-free" style="cursor: pointer;" onclick="insertTag('{file_name}')">{file_name}</span>
+            <span class="badge-free" style="cursor: pointer;" onclick="insertTag('{file_size}')">{file_size}</span>
+            <span class="badge-free" style="cursor: pointer;" onclick="insertTag('{duration}')">{duration}</span>
+            <span class="badge-free" style="cursor: pointer;" onclick="insertTag('{channel}')">{channel}</span>
+            <span class="badge-free" style="cursor: pointer;" onclick="insertTag('{watermark}')">{watermark}</span>
+          </div>
+
+          <button class="btn-cyber-primary" onclick="showToast('Caption template saved successfully!', 'success');">
+            <i class="fa-solid fa-floppy-disk"></i> Save Caption Template
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====================================================================
+         TAB 5: USERS & MONETIZATION COCKPIT
+         ==================================================================== -->
+    <div class="tab-content" id="tab-cockpit">
+      
+      <!-- Payments Approval Panel -->
+      <div class="glass-panel" style="margin-bottom: 28px;">
+        <div class="panel-header">
+          <div class="panel-title">
+            <i class="fa-solid fa-credit-card"></i> bKash / Nagad / Binance Payment Approvals
+          </div>
+          <span class="status-badge" style="background: rgba(255,183,3,0.08); border-color: rgba(255,183,3,0.3); color: var(--accent-gold);" id="pendingTrxBadge">
+            0 Pending Transactions
+          </span>
+        </div>
+
+        <div class="table-wrapper">
+          <table class="cyber-table" id="transactionsTable">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>User ID</th>
+                <th>Plan</th>
+                <th>Amount (BDT)</th>
+                <th>Method</th>
+                <th>Trx ID</th>
+                <th>Sender</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="transactionsTableBody">
+              <tr>
+                <td colspan="9" style="text-align: center; color: var(--text-dim); padding: 30px;">
+                  No pending transactions found.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Users Table -->
+      <div class="glass-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <i class="fa-solid fa-users"></i> Registered Harvester Database
+          </div>
+          <input type="text" id="userSearchInput" class="input-cyber" style="width: 260px; padding: 8px 14px; font-size: 0.85rem;" placeholder="Search by User ID or Name..." oninput="filterUsersTable();">
+        </div>
+
+        <div class="table-wrapper">
+          <table class="cyber-table" id="usersTable">
+            <thead>
+              <tr>
+                <th>User ID</th>
+                <th>User Details</th>
+                <th>Status Tier</th>
+                <th>Downloads Today</th>
+                <th>Lifetime Total</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="usersTableBody">
+              <tr>
+                <td colspan="6" style="text-align: center; color: var(--text-dim); padding: 30px;">
+                  Loading users database...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ====================================================================
+         TAB 6: LIVE TELEMETRY & LOGS
+         ==================================================================== -->
+    <div class="tab-content" id="tab-telemetry">
+      <div class="glass-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <i class="fa-solid fa-terminal"></i> MTProto Turbo Socket & Worker Telemetry
+          </div>
+          <div style="display: flex; gap: 10px;">
+            <button class="btn-cyber-secondary" style="padding: 6px 14px; font-size: 0.8rem;" onclick="fetchSystemLogs();">
+              <i class="fa-solid fa-rotate"></i> Poll Now
+            </button>
+            <button class="btn-cyber-secondary" style="padding: 6px 14px; font-size: 0.8rem;" onclick="document.getElementById('terminalBox').innerHTML='';">
+              <i class="fa-solid fa-trash-can"></i> Clear Console
+            </button>
+          </div>
+        </div>
+
+        <div class="terminal-window" id="terminalBox">
+          <div class="terminal-line info"><span class="time">[00:00:00]</span><span class="text">[System] Restricted Forward Bot Pro Studio Cockpit Initialized.</span></div>
+          <div class="terminal-line success"><span class="time">[00:00:01]</span><span class="text">[MTProto] Telegram Socket Stream Ready.</span></div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Simulated Native Telegram Modal Alert -->
+  <div class="tg-modal-overlay" id="tgModalAlert" onclick="if(event.target === this) closeTgModalAlert();">
+    <div class="tg-modal-box">
+      <div style="font-size: 2.2rem; margin-bottom: 12px; color: var(--accent-cyan);">⚡</div>
+      <h3 style="font-family: var(--font-display); font-size: 1.15rem; color: #fff; margin-bottom: 8px;">
+        Active Task Progress
+      </h3>
+      <p style="font-size: 0.9rem; color: var(--text-muted); line-height: 1.6; margin-bottom: 20px;" id="tgModalBody">
+        ⬇️ <b>Downloading:</b> 62.5%<br>
+        ⚡ <b>Speed:</b> 38.4 MB/s<br>
+        ⏱️ <b>ETA:</b> 4 seconds<br>
+        📦 <b>Chunk:</b> 148.2 MB / 237.1 MB<br>
+        🛡️ <b>Engine:</b> Turbo Socket
+      </p>
+      <button class="btn-cyber-primary" style="width: 100%; padding: 12px;" onclick="closeTgModalAlert();">
+        OK
+      </button>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

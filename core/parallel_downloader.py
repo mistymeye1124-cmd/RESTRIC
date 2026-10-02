@@ -90,16 +90,16 @@ async def turbo_parallel_download(
         raise ValueError("Unknown target file size")
 
     # Optimal concurrency: 4 concurrent MTProto streams is Telegram's proven sweet spot.
-    # Exceeding 4 concurrent streams to a single DC causes Telegram to forcefully reset sockets (Broken pipe).
+    # 512KB chunks prevent DC buffer bloating and eliminate TimeoutErrors on international routes.
     if total_size < 5 * 1024 * 1024:
         num_workers = 2
-        chunk_size = 512 * 1024
+        chunk_size = 256 * 1024
     elif total_size < 25 * 1024 * 1024:
         num_workers = 3
         chunk_size = 512 * 1024
     else:
         num_workers = min(max(num_workers, 3), 4)
-        chunk_size = 1024 * 1024
+        chunk_size = 512 * 1024
 
     fid = FileId.decode(target.file_id)
     dc_id = fid.dc_id
@@ -210,9 +210,10 @@ async def turbo_parallel_download(
                                 location=loc,
                                 offset=offset,
                                 limit=chunk_size,
-                            )
+                            ),
+                            timeout=40.0,
                         ),
-                        timeout=15.0,
+                        timeout=45.0,
                     )
 
                     if isinstance(r, raw.types.upload.File):
@@ -246,17 +247,19 @@ async def turbo_parallel_download(
                     consecutive_errors += 1
                     err_str = str(e) or repr(e)
 
-                    # Check for socket disconnects / broken pipe
-                    is_socket_err = (
-                        isinstance(e, (OSError, asyncio.TimeoutError))
+                    # Only restart session on genuine TCP broken socket / reset errors
+                    is_broken_socket = (
+                        isinstance(e, OSError)
                         or "Broken pipe" in err_str
                         or "ConnectionResetError" in err_str
                         or "socket.send" in err_str
                     )
 
-                    if is_socket_err:
-                        logger.warning("[TurboWorker %d] Socket error on offset %d (attempt %d/3): %s", worker_id, offset, retry + 1, err_str)
+                    if is_broken_socket:
+                        logger.warning("[TurboWorker %d] Socket disconnected on offset %d (attempt %d/3): %s. Reconnecting...", worker_id, offset, retry + 1, err_str)
                         await restart_worker_session(session, worker_id)
+                    elif isinstance(e, (asyncio.TimeoutError, TimeoutError)):
+                        logger.debug("[TurboWorker %d] Offset %d response delayed (attempt %d/3). Retrying...", worker_id, offset, retry + 1)
                     else:
                         logger.debug("[TurboWorker %d] Chunk error on offset %d (attempt %d/3): %s", worker_id, offset, retry + 1, err_str)
 

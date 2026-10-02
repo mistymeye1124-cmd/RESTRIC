@@ -199,9 +199,27 @@ async def main():
     disable_windows_quick_edit()
     prevent_windows_sleep()
 
-    print("[*] Starting Telegram Bot Client...")
+    # Dynamic bot session name based on token ID to prevent cross-bot session collisions
+    bot_id = BOT_TOKEN.split(":")[0] if ":" in BOT_TOKEN else "restricted_saver_bot"
+    session_name = f"bot_{bot_id}"
+
+    # Auto-clean legacy mismatched session if token was changed
+    legacy_session = os.path.join("sessions", "restricted_saver_bot.session")
+    if os.path.exists(legacy_session):
+        try:
+            import sqlite3
+            conn = sqlite3.connect(legacy_session)
+            row = conn.execute("SELECT user_id FROM sessions LIMIT 1").fetchone()
+            conn.close()
+            if row and str(row[0]) != str(bot_id):
+                os.remove(legacy_session)
+                print(f"[+] Detected bot token migration from {row[0]} to {bot_id}. Purged legacy session.")
+        except Exception:
+            pass
+
+    print(f"[*] Starting Telegram Bot Client ({session_name})...")
     bot = Client(
-        name="restricted_saver_bot",
+        name=session_name,
         api_id=API_ID,
         api_hash=API_HASH,
         bot_token=BOT_TOKEN,
@@ -224,12 +242,13 @@ async def main():
             err_msg = str(e).lower()
             if "database is locked" in err_msg:
                 print(f"[!] Session database is locked (attempt {attempt}/10). Cleaning lock & retrying in 2s...")
-                journal = os.path.join("sessions", "restricted_saver_bot.session-journal")
-                if os.path.exists(journal):
-                    try:
-                        os.remove(journal)
-                    except Exception:
-                        pass
+                for j_name in (f"{session_name}.session-journal", "restricted_saver_bot.session-journal"):
+                    journal = os.path.join("sessions", j_name)
+                    if os.path.exists(journal):
+                        try:
+                            os.remove(journal)
+                        except Exception:
+                            pass
                 await asyncio.sleep(2)
             elif any(k in err_msg for k in ("network", "timeout", "connection", "connect", "flood")):
                 print(f"[!] Network issue during Telegram start (attempt {attempt}/10): {e}. Retrying in 4s...")

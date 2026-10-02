@@ -407,11 +407,16 @@ async def download_restricted_media(
                             progress_callback=pyrogram_progress,
                             job_id=job_id,
                             active_jobs=active_jobs,
-                            num_workers=6,
+                            num_workers=4,
                             chunk_size=1024 * 1024,
                         )
                     except Exception as turbo_err:
                         logger.warning("[TurboDownloader] Parallel stream failed (%s), falling back to standard download_media", turbo_err)
+                        if os.path.exists(target_file_path):
+                            try:
+                                os.remove(target_file_path)
+                            except Exception:
+                                pass
                         downloaded_file = await current_client.download_media(
                             message=source_msg,
                             file_name=target_file_path,

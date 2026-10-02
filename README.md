@@ -57,10 +57,26 @@ PAYMENT_METHODS = {
 }
 ```
 
-### 2. Start the Bot
+### 2. 1-Click Auto Deploy (VPS / Docker / OpenShift)
+
+#### Option A: 1-Click Linux VPS (Recommended)
+On your Ubuntu/Debian/CentOS VPS, simply run:
 ```bash
-python main.py
+bash deploy.sh
 ```
+*This automatically configures Python, FFmpeg, virtual environment, and background systemd services with auto-restart on boot.*
+
+#### Option B: Docker Compose
+```bash
+docker compose up -d --build
+```
+
+#### Option C: Red Hat OpenShift
+```bash
+oc apply -f openshift.yaml
+```
+
+*For comprehensive bilingual instructions (English & Bangla), see [DEPLOY.md](DEPLOY.md).*
 
 ---
 

@@ -7,6 +7,14 @@ Bypasses all Telegram Bot API anti-phishing blocks and code expiration issues.
 
 import sys
 import asyncio
+
+# Ensure an asyncio event loop exists before Pyrogram imports for Python 3.12+ / 3.14
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
 from pyrogram import Client
 from config import API_ID, API_HASH
 from database import db

@@ -1,0 +1,26 @@
+# language: YAML, file: docker-compose.yml, target: Docker Compose / VPS / Cloud
+services:
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: restricted_telegram_bot
+    restart: unless-stopped
+    ports:
+      - "8888:8888"
+    environment:
+      - SERVICE_TYPE=both
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - .env
+    volumes:
+      - ./downloads:/app/downloads
+      - ./sessions:/app/sessions
+      - ./data:/app/data
+      - ./bot_database.db:/app/bot_database.db
+      - ./restricted_v2.db:/app/restricted_v2.db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"

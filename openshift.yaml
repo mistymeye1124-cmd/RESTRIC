@@ -1,0 +1,102 @@
+# language: YAML, file: openshift.yaml, target: Red Hat OpenShift / Kubernetes
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: bot-storage
+      labels:
+        app: restricted-bot
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 10Gi
+
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: restricted-bot
+      labels:
+        app: restricted-bot
+    spec:
+      replicas: 1
+      strategy:
+        type: Recreate
+      selector:
+        matchLabels:
+          app: restricted-bot
+      template:
+        metadata:
+          labels:
+            app: restricted-bot
+        spec:
+          containers:
+            - name: bot-container
+              image: image-registry.openshift-image-registry.svc:5000/default/restricted-bot:latest
+              imagePullPolicy: IfNotPresent
+              ports:
+                - containerPort: 8888
+                  name: http-studio
+              env:
+                - name: SERVICE_TYPE
+                  value: "both"
+                - name: PORT
+                  value: "8888"
+              envFrom:
+                - secretRef:
+                    name: bot-secrets
+                    optional: true
+              resources:
+                requests:
+                  memory: "512Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "2Gi"
+                  cpu: "2000m"
+              volumeMounts:
+                - name: bot-data
+                  mountPath: /app/sessions
+                  subPath: sessions
+                - name: bot-data
+                  mountPath: /app/downloads
+                  subPath: downloads
+                - name: bot-data
+                  mountPath: /app/data
+                  subPath: data
+          volumes:
+            - name: bot-data
+              persistentVolumeClaim:
+                claimName: bot-storage
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: restricted-bot-service
+      labels:
+        app: restricted-bot
+    spec:
+      selector:
+        app: restricted-bot
+      ports:
+        - port: 8888
+          targetPort: 8888
+          name: http
+
+  - apiVersion: route.openshift.io/v1
+    kind: Route
+    metadata:
+      name: restricted-bot-route
+      labels:
+        app: restricted-bot
+    spec:
+      to:
+        kind: Service
+        name: restricted-bot-service
+      port:
+        targetPort: http
+      tls:
+        termination: edge
+        insecureEdgeTerminationPolicy: Redirect

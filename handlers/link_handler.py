@@ -31,13 +31,13 @@ pending_wizard_reqs = {}  # {req_id: dict}
 pending_cache_prompts = {}  # {c_token: dict}
 
 
-@Client.on_message(filters.private & filters.text & filters.regex(r"(?:t|telegram)\.me/"))
+@Client.on_message(filters.private & filters.text & ~filters.regex(r"^/") & filters.regex(r"(?:t|telegram)\.me/"))
 async def telegram_link_listener(bot_client: Client, message: Message):
     user_id = message.from_user.id
-    raw_text = message.text.strip()
+    raw_text = (message.text or "").strip()
 
-    # If it's a join command, let login.py handle it
-    if raw_text.startswith("/join"):
+    # If it is a slash command (e.g. /range, /topic, /clone, /join), do not intercept here
+    if raw_text.startswith("/"):
         return
 
     # 0. Check Banned Status
@@ -937,9 +937,12 @@ async def wizard_text_fallback_listener(bot_client: Client, message: Message):
 async def range_command_handler(bot_client: Client, message: Message):
     """
     Downloads a specific range of messages (e.g. from 1019 to 1050).
-    Usage:
-      /range https://t.me/c/2459862936 1019 1050
-      /range https://t.me/channel_username 100 125
+    Supports:
+      - /range https://t.me/c/2459862936 1019 1050
+      - /range https://t.me/c/2459862936/1019 1050
+      - /range https://t.me/c/2459862936 1019-1050
+      - /range https://t.me/c/2459862936/1019-1050
+      - /range https://t.me/channel_username 50 75
     """
     user_id = message.from_user.id
     allowed, reason = await db.can_user_access_feature(user_id, "batch")
@@ -948,7 +951,36 @@ async def range_command_handler(bot_client: Client, message: Message):
         await message.reply_text(reason, reply_markup=markup)
         return
 
-    if len(message.command) < 4 or not message.command[2].isdigit() or not message.command[3].isdigit():
+    cmd = message.command
+    synthesized_link = None
+
+    if len(cmd) == 2:
+        # /range https://t.me/c/123/5-8
+        synthesized_link = cmd[1].strip()
+    elif len(cmd) == 3:
+        # /range https://t.me/c/123 5-8
+        if '-' in cmd[2]:
+            base = cmd[1].rstrip("/")
+            synthesized_link = f"{base}/{cmd[2].strip()}"
+        else:
+            # /range https://t.me/c/123/5 8
+            m = re.match(r"(https?://(?:t|telegram)\.me/(?:c/\d+|[a-zA-Z0-9_]+))/(\d+)", cmd[1].strip())
+            if m and cmd[2].isdigit():
+                base = m.group(1)
+                s_id = int(m.group(2))
+                e_id = int(cmd[2])
+                if s_id > e_id:
+                    s_id, e_id = e_id, s_id
+                synthesized_link = f"{base}/{s_id}-{e_id}"
+    elif len(cmd) >= 4 and cmd[2].isdigit() and cmd[3].isdigit():
+        base = cmd[1].rstrip("/")
+        s_id = int(cmd[2])
+        e_id = int(cmd[3])
+        if s_id > e_id:
+            s_id, e_id = e_id, s_id
+        synthesized_link = f"{base}/{s_id}-{e_id}"
+
+    if not synthesized_link:
         await message.reply_text(
             "📋 **Range Download Tool (নির্দিষ্ট রেঞ্জ ডাউনলোড)**\n\n"
             "Download any sequence of videos or messages from a starting ID to an ending ID.\n\n"
@@ -956,17 +988,11 @@ async def range_command_handler(bot_client: Client, message: Message):
             "`/range <channel_link> <start_id> <end_id>`\n\n"
             "**Examples:**\n"
             "• `/range https://t.me/c/2459862936 1019 1030`\n"
+            "• `/range https://t.me/c/2459862936/1019 1030`\n"
             "• `/range https://t.me/my_channel 50 75`"
         )
         return
 
-    base_link = message.command[1].rstrip("/")
-    start_id = int(message.command[2])
-    end_id = int(message.command[3])
-    if start_id > end_id:
-        start_id, end_id = end_id, start_id
-
-    synthesized_link = f"{base_link}/{start_id}-{end_id}"
     message.text = synthesized_link
     await telegram_link_listener(bot_client, message)
 

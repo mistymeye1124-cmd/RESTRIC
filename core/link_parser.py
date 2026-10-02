@@ -26,6 +26,69 @@ class TelegramLink:
         return f"<TelegramLink chat={self.chat_identifier} msg={self.message_id} topic={self.topic_id} private={self.is_private}>"
 
 
+def normalize_link_input(text: str) -> str:
+    """
+    Normalizes human-friendly variations of Telegram links into standard slash/range formats.
+    Examples:
+      - /range https://t.me/c/12345 5 8 -> https://t.me/c/12345/5-8
+      - https://t.me/c/12345 5 8 -> https://t.me/c/12345/5-8
+      - https://t.me/c/12345/5 8 -> https://t.me/c/12345/5-8
+      - https://t.me/c/12345 5-8 -> https://t.me/c/12345/5-8
+      - https://t.me/c/12345 5 -> https://t.me/c/12345/5
+      - https://t.me/mychannel 5 8 -> https://t.me/mychannel/5-8
+      - https://t.me/mychannel/5 8 -> https://t.me/mychannel/5-8
+      - https://t.me/mychannel 5-8 -> https://t.me/mychannel/5-8
+      - https://t.me/mychannel 5 -> https://t.me/mychannel/5
+    """
+    if not text:
+        return ""
+
+    # Strip command prefixes if passed directly into parser
+    text = re.sub(r'^\s*/(?:range|topic|batch|clone)\s+', '', text, flags=re.IGNORECASE)
+
+    # 1. Private topic with 3 numbers: /c/chan topic start end -> /c/chan/topic/start-end
+    text = re.sub(r'((?:https?://)?(?:t|telegram)\.me/c/\d+)[/\s]+(\d+)\s+(\d+)\s+(?:to\s+|-)?(\d+)', r'\1/\2/\3-\4', text)
+
+    # 2. Private channel with 2 numbers: /c/chan start end -> /c/chan/start-end
+    text = re.sub(r'((?:https?://)?(?:t|telegram)\.me/c/\d+)[/\s]+(\d+)\s+(?:to\s+|-)?(\d+)', r'\1/\2-\3', text)
+
+    # 3. Private channel with dash range: /c/chan 5-8 -> /c/chan/5-8
+    text = re.sub(r'((?:https?://)?(?:t|telegram)\.me/c/\d+)\s+(\d+-\d+)', r'\1/\2', text)
+
+    # 4. Private channel with 1 number: /c/chan 5 -> /c/chan/5
+    text = re.sub(r'((?:https?://)?(?:t|telegram)\.me/c/\d+)\s+(\d+)(?!\s*\d)', r'\1/\2', text)
+
+    # 5. Public topic with 3 numbers: /user/topic start end -> /user/topic/start-end
+    def pub_topic_sub(m):
+        if m.group(2).lower() in ('c', 'joinchat', 'addstickers', 'share', 'login', 's', 'iv', 'proxy'):
+            return m.group(0)
+        return f'{m.group(1)}/{m.group(3)}/{m.group(4)}-{m.group(5)}'
+    text = re.sub(r'((?:https?://)?(?:t|telegram)\.me/([a-zA-Z0-9_]+))[/\s]+(\d+)\s+(\d+)\s+(?:to\s+|-)?(\d+)', pub_topic_sub, text)
+
+    # 6. Public channel with 2 numbers: /user start end -> /user/start-end
+    def pub_range_sub(m):
+        if m.group(2).lower() in ('c', 'joinchat', 'addstickers', 'share', 'login', 's', 'iv', 'proxy'):
+            return m.group(0)
+        return f'{m.group(1)}/{m.group(3)}-{m.group(4)}'
+    text = re.sub(r'((?:https?://)?(?:t|telegram)\.me/([a-zA-Z0-9_]+))[/\s]+(\d+)\s+(?:to\s+|-)?(\d+)', pub_range_sub, text)
+
+    # 7. Public channel with dash range: /user 5-8 -> /user/5-8
+    def pub_dash_sub(m):
+        if m.group(2).lower() in ('c', 'joinchat', 'addstickers', 'share', 'login', 's', 'iv', 'proxy'):
+            return m.group(0)
+        return f'{m.group(1)}/{m.group(3)}'
+    text = re.sub(r'((?:https?://)?(?:t|telegram)\.me/([a-zA-Z0-9_]+))\s+(\d+-\d+)', pub_dash_sub, text)
+
+    # 8. Public channel with 1 number: /user 5 -> /user/5
+    def pub_single_sub(m):
+        if m.group(2).lower() in ('c', 'joinchat', 'addstickers', 'share', 'login', 's', 'iv', 'proxy'):
+            return m.group(0)
+        return f'{m.group(1)}/{m.group(3)}'
+    text = re.sub(r'((?:https?://)?(?:t|telegram)\.me/([a-zA-Z0-9_]+))\s+(\d+)(?!\s*\d)', pub_single_sub, text)
+
+    return text
+
+
 def parse_telegram_link(text: str, max_per_link: int = 50) -> List[TelegramLink]:
     """
     Parses any text containing one or more Telegram links, ranges, or forum topics.
@@ -40,8 +103,11 @@ def parse_telegram_link(text: str, max_per_link: int = 50) -> List[TelegramLink]
     results: List[TelegramLink] = []
     seen = set()
 
+    # Pre-normalize any human-friendly space-separated or range notations
+    normalized_text = normalize_link_input(text)
+
     # Split text by whitespace and newlines to inspect each candidate token or URL
-    tokens = text.split()
+    tokens = normalized_text.split()
     for token in tokens:
         token = token.strip().rstrip(".,;:)>]}")
         if not ("t.me/" in token or "telegram.me/" in token):

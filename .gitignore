@@ -1,0 +1,87 @@
+# ==========================================
+# GITIGNORE: Telegram Restricted Content Bot
+# ==========================================
+
+# 1. Environment & Secret Credentials (CRITICAL - DO NOT REMOVE)
+.env
+.env.local
+.env.*.local
+
+# 2. Telegram Sessions & Auth Keys (CRITICAL - DO NOT REMOVE)
+*.session
+*.session-journal
+sessions/
+*.auth
+*.session-shm
+*.session-wal
+
+# 3. Databases (Holds user tokens, payment history, active logins)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+bot_database.db
+restricted_v2.db
+
+# 4. Downloaded & Temporary Media (Prevents repository bloat)
+downloads/
+scratch/
+*.mp4
+*.mkv
+*.mov
+*.webm
+*.avi
+*.ts
+*.mp3
+*.part
+*.temp
+*_branded.mp4
+*_wm.mp4
+*_owner_wm.mp4
+*_stage1.mp4
+
+# 5. Sensitive User Branding, Cookies & Logs
+data/branding/*
+!data/branding/.gitkeep
+cookies/*.txt
+!cookies/.gitkeep
+*.log
+logs/
+
+# 6. Python Artifacts & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+env/
+ENV/
+.venv/
+
+# 7. IDE & OS Junk Files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini

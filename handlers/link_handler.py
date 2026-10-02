@@ -287,6 +287,7 @@ async def run_batch_harvest_pipeline(
         active_jobs[item_job_id] = {"cancelled": False}
 
         prefix_label = f"[{idx}/{total}] " if total > 1 else ""
+        batch_label = f"[{idx}/{total}] (Msg #{l_link.message_id})" if total > 1 else f"(Msg #{l_link.message_id})"
 
         # Adaptive inter-item anti-ban jitter — only for batch (>1 item), not singles
         # Random Gaussian-like micro-delay (0.6s - 1.2s) completely evades MTProto fixed-frequency scraping detection.
@@ -453,6 +454,7 @@ async def run_batch_harvest_pipeline(
             status_message=s_msg,
             job_id=item_job_id,
             res_pref=res_pref,
+            batch_info=batch_label,
         )
         if not dl_res:
             skipped += 1
@@ -625,6 +627,7 @@ async def run_batch_harvest_pipeline(
                 upload_as_doc=user_settings.get("upload_as_doc", False),
                 auto_forward_chat_id=auto_forward_id,
                 user_id=user_id,
+                batch_info=batch_label,
             )
             if uploaded:
                 delivered += 1

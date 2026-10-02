@@ -141,6 +141,7 @@ async def upload_unlocked_media(
     upload_as_doc: bool = False,
     auto_forward_chat_id: Optional[int] = None,
     user_id: Optional[int] = None,
+    batch_info: Optional[str] = None,
 ) -> bool:
     """
     Delivers unlocked restricted content to target chat with progress tracking.
@@ -229,8 +230,12 @@ async def upload_unlocked_media(
         success_all = True
 
         for p_idx, part_file in enumerate(part_files, 1):
+            if batch_info:
+                act = f"Sending {batch_info} ({p_idx}/{total_parts})" if total_parts > 1 else f"Sending {batch_info}"
+            else:
+                act = f"Sending to Telegram ({p_idx}/{total_parts})" if total_parts > 1 else "Sending to Telegram"
             tracker = ProgressTracker(
-                action_name=f"Sending to Telegram ({p_idx}/{total_parts})" if total_parts > 1 else "Sending to Telegram",
+                action_name=act,
                 block_char="🟩",
             )
             if job_id in active_jobs:

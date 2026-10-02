@@ -179,6 +179,7 @@ async def download_restricted_media(
     status_message: Message,
     job_id: str,
     res_pref: str = "original",
+    batch_info: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Downloads or extracts content from restricted Telegram message with live progress UI.
@@ -188,7 +189,8 @@ async def download_restricted_media(
     - Automatic Hot-Swap to alternate session on FloodWait/PeerFlood.
     - Thread-safe transmission cancellation.
     """
-    tracker = ProgressTracker(action_name="Downloading from Telegram", block_char="🟦")
+    action_label = f"Downloading {batch_info}" if batch_info else "Downloading from Telegram"
+    tracker = ProgressTracker(action_name=action_label, block_char="🟦")
     current_client = client
     session_key = _session_key_from_client(current_client)
     limiter = rate_registry.get_sync(session_key)

@@ -6,12 +6,24 @@ echo "=========================================================="
 echo "🔄 Updating Telegram Restricted Forward Bot via Git..."
 echo "=========================================================="
 
-# 1. Pull latest code from remote repository
-echo "[*] Pulling latest changes from Git..."
-git pull
+# 1. Pull latest code from remote repository safely
+echo "[*] Fetching and pulling latest changes from Git..."
+# Prevent local modifications on VPS from blocking update while preserving .env and database
+git fetch origin main
+
+# Check if there are local uncommitted changes to tracked files
+if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+    echo "[!] Stashing temporary local changes on VPS..."
+    git stash
+fi
+
+git pull origin main || {
+    echo "[!] Standard pull failed, applying clean fast-forward sync..."
+    git reset --hard origin/main
+}
 
 # 2. Check if Docker is running
-if [ -f "docker-compose.yml" ] && docker compose ps --services --filter "status=running" 2>/dev/null | grep -q "telegram-bot"; then
+if [ -f "docker-compose.yml" ] && command -v docker >/dev/null 2>&1 && docker compose ps --services --filter "status=running" 2>/dev/null | grep -q "telegram-bot"; then
     echo "[*] Rebuilding and restarting Docker containers..."
     docker compose up -d --build
     echo "=========================================================="
@@ -23,20 +35,27 @@ fi
 
 # 3. Update dependencies if requirements changed for Native mode
 if [ -d "venv" ]; then
+    echo "[*] Updating Python virtual environment dependencies..."
     source venv/bin/activate
-    pip install --upgrade pip setuptools wheel
-    pip install -r requirements.txt
+    pip install --upgrade pip setuptools wheel --quiet
+    pip install -r requirements.txt --quiet
 fi
 
 # 4. Restart systemd services
 if command -v systemctl >/dev/null 2>&1; then
-    if systemctl is-active --quiet bot; then
+    sudo systemctl daemon-reload 2>/dev/null || true
+
+    if systemctl is-active --quiet bot 2>/dev/null; then
         echo "[*] Restarting background bot service..."
         sudo systemctl restart bot
         echo "[+] bot.service restarted."
+    elif [ -f "/etc/systemd/system/bot.service" ]; then
+        echo "[*] Starting bot service..."
+        sudo systemctl start bot
+        echo "[+] bot.service started."
     fi
 
-    if systemctl is-active --quiet bot-studio; then
+    if systemctl is-active --quiet bot-studio 2>/dev/null; then
         echo "[*] Restarting Web Studio service..."
         sudo systemctl restart bot-studio
         echo "[+] bot-studio.service restarted."
@@ -45,7 +64,7 @@ if command -v systemctl >/dev/null 2>&1; then
     echo "=========================================================="
     echo "✅ Bot updated & restarted successfully!"
     echo "=========================================================="
-    sudo systemctl status bot --no-pager || true
+    sudo systemctl status bot --no-pager -n 5 2>/dev/null || true
 else
-    echo "[!] Not running systemd. If using manually, restart your 'python main.py' process."
+    echo "[!] Not running systemd. If running in screen/tmux or manually, restart your 'python main.py' process."
 fi

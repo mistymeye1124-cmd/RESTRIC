@@ -8,7 +8,9 @@ echo              STOPPING TELEGRAM BOT PROCESSES
 echo ======================================================================
 echo.
 
-powershell -Command "$procs = Get-CimInstance Win32_Process -Filter \"CommandLine LIKE '%%main.py%%'\"; if ($procs) { $procs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Host \"[+] Stopped process ID $($_.ProcessId)\" } } else { Write-Host \"[*] No running bot processes found.\" }"
+taskkill /F /FI "WINDOWTITLE eq Telegram Restricted Downloader*" /T >nul 2>&1
+taskkill /F /IM python.exe /FI "MODULES eq *main.py*" >nul 2>&1
+powershell -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*main.py*' -or $_.CommandLine -like '*start_bot*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 
 if exist "sessions\restricted_saver_bot.session-journal" (
     del /f /q "sessions\restricted_saver_bot.session-journal" >nul 2>&1

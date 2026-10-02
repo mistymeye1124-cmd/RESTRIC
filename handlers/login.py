@@ -9,6 +9,7 @@ Supports:
 
 import os
 import io
+import re
 import base64
 import asyncio
 from pathlib import Path
@@ -1086,8 +1087,15 @@ async def auth_flow_listener(client: Client, message: Message):
         message.continue_propagation()
         return
 
-    # Case 1: Pasting raw StringSession (Pyrogram string sessions are typically > 150 chars)
-    if len(text) > 150:
+    # Case 1: Pasting raw StringSession (Pyrogram string sessions are unbroken ASCII base64 strings with no spaces or newlines)
+    is_session_string = (
+        len(text) >= 120
+        and " " not in text
+        and "\n" not in text
+        and text.isascii()
+        and bool(re.match(r"^[A-Za-z0-9+/=_-]+$", text))
+    )
+    if is_session_string:
         status_msg = await message.reply_text("🔄 Verifying Pyrogram StringSession...")
         fingerprint = get_fingerprint_for_user(user_id)
         temp_client = Client(

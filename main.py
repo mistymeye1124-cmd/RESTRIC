@@ -236,6 +236,11 @@ async def main():
     print(f"👑 Admin IDs configured: {config.ADMIN_IDS}")
     print("⚡ Priority Multi-Worker Queue: ACTIVE")
     print("🛡️ Anti-Ban Engine & Device Fingerprinting: ACTIVE")
+
+    # Start silent 24-hour automated database backup daemon
+    from handlers.admin import start_auto_backup_loop
+    asyncio.create_task(start_auto_backup_loop(bot))
+    print("💾 Automated 24h Cloud Database Backup Daemon: ACTIVE")
     print("=" * 65)
 
     # Register bot menu commands in Telegram UI
@@ -243,6 +248,7 @@ async def main():
         from pyrogram.types import BotCommand
         await bot.set_bot_commands([
             BotCommand("start", "Start bot & view menu"),
+            BotCommand("backup", "💾 Cloud Database Backup (Admin)"),
             BotCommand("watermark", "🎬 Video Watermark & Branding Studio"),
             BotCommand("wmon", "🟢 Enable Video Watermark"),
             BotCommand("wmoff", "🔴 Disable Watermark (⚡ Ultra Turbo Speed Pass)"),

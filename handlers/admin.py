@@ -109,7 +109,10 @@ async def build_admin_panel_data():
                 InlineKeyboardButton("🛡️ Anti-Ban Health", callback_data="adm_view_antiban"),
             ],
             [
+                InlineKeyboardButton("💾 Backup Database", callback_data="adm_btn_backup_db"),
                 InlineKeyboardButton("🔄 Refresh Dashboard", callback_data="adm_open_panel"),
+            ],
+            [
                 InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main"),
             ]
         ]
@@ -1756,6 +1759,10 @@ async def render_system_settings_menu():
             [
                 InlineKeyboardButton("📁 Set Auto-Archive Channel", callback_data="adm_btn_set_archive"),
                 InlineKeyboardButton("❌ Remove Archive", callback_data="adm_clear_archive"),
+            ],
+            [
+                InlineKeyboardButton("💾 Backup Database Now", callback_data="adm_btn_backup_db"),
+                InlineKeyboardButton("📥 Migration & Restore", callback_data="adm_btn_restore_guide"),
             ],
             [
                 InlineKeyboardButton("🔙 Back to Admin Dashboard", callback_data="adm_open_panel"),
@@ -4064,4 +4071,222 @@ async def set_emoji_handler(client: Client, message: Message):
     set_custom_emoji_id(name, eid)
     val_disp = f"`{eid}`" if eid else "Standard Unicode Fallback"
     await message.reply_text(f"✅ **Saved Custom Emoji for `{name}`:** {val_disp}")
+
+
+# =====================================================================
+# 11. CLOUD DATABASE BACKUP, RESTORE & MIGRATION COCKPIT
+# =====================================================================
+
+@Client.on_callback_query(filters.regex(r"^adm_btn_backup_db$"))
+async def adm_btn_backup_db_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("⛔ Admin access only.", show_alert=True)
+        return
+    await callback_query.answer("⏳ Generating clean database snapshot...", show_alert=False)
+    status_msg = await callback_query.message.reply_text("⏳ **Generating SQLite VACUUM snapshot...**")
+    try:
+        from pathlib import Path
+        b_file = await db.create_backup_file(Path("backups"))
+        stats = await db.get_business_stats()
+        sz_str = human_readable_size(b_file.stat().st_size)
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+        caption = (
+            "💾 **DATABASE SNAPSHOT BACKUP** 💾\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"• 👥 **Total Users:** `{stats['total_users']}`\n"
+            f"• 💎 **Active VIP Members:** `{stats['premium_users']}`\n"
+            f"• 📦 **Total Media Delivered:** `{stats['total_downloads']}`\n"
+            f"• 📁 **File Size:** `{sz_str}`\n"
+            f"• ⏰ **Snapshot Time:** `{now_str}`\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "💡 **Migration & Recovery Instructions:**\n"
+            "• **To Restore on Any VPS:**\n"
+            "  1. Download this file and save it as `bot_database.db`\n"
+            "  2. Place it in your bot directory (replacing old db)\n"
+            "  3. Restart bot: `sudo systemctl restart bot`\n"
+            "• **Or Restore directly in Bot:**\n"
+            "  Reply to this document message with `/restore` command."
+        )
+        await client.send_document(
+            chat_id=callback_query.from_user.id,
+            document=str(b_file),
+            caption=caption
+        )
+        await status_msg.delete()
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Failed to generate database backup: {e}")
+
+
+@Client.on_callback_query(filters.regex(r"^adm_btn_restore_guide$"))
+async def adm_btn_restore_guide_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        return
+    await callback_query.answer()
+    text = (
+        "📥 **DATABASE MIGRATION & RECOVERY GUIDE** 📥\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "If you change your VPS (e.g. Hostinger KVM 2 to KVM 4 or any server), follow either of these methods:\n\n"
+        "🔹 **Method 1: Direct Telegram Restore (Easiest)**\n"
+        "1. Click **💾 Backup Database** to get your `.db` file in Telegram.\n"
+        "2. On your new VPS, start the bot once.\n"
+        "3. Simply reply to that `.db` backup file in Telegram with `/restore`!\n"
+        "4. The bot automatically updates all tables without touching SSH!\n\n"
+        "🔹 **Method 2: SSH / SFTP Manual Migration**\n"
+        "1. On old VPS: Stop bot `sudo systemctl stop bot`\n"
+        "2. Copy `bot_database.db` and `.env` to new VPS folder\n"
+        "3. On new VPS: Start bot `sudo systemctl start bot`\n"
+        "4. That's it! 100% of user data and VIP status remains intact.\n\n"
+        "🤖 *The bot also sends an automated silent backup to your archive channel every 24 hours.*"
+    )
+    markup = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("💾 Backup Database Now", callback_data="adm_btn_backup_db"),
+                InlineKeyboardButton("🔙 Back to Settings", callback_data="adm_view_sys_settings"),
+            ]
+        ]
+    )
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await callback_query.message.reply_text(text, reply_markup=markup)
+
+
+@Client.on_message(filters.command(["backup", "dbbackup"]) & filters.private)
+async def backup_command(client: Client, message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    status_msg = await message.reply_text("⏳ **Creating SQLite VACUUM snapshot...**")
+    try:
+        from pathlib import Path
+        b_file = await db.create_backup_file(Path("backups"))
+        stats = await db.get_business_stats()
+        sz_str = human_readable_size(b_file.stat().st_size)
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+        caption = (
+            "💾 **DATABASE SNAPSHOT BACKUP** 💾\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"• 👥 **Total Users:** `{stats['total_users']}`\n"
+            f"• 💎 **Active VIP Members:** `{stats['premium_users']}`\n"
+            f"• 📦 **Total Media Delivered:** `{stats['total_downloads']}`\n"
+            f"• 📁 **File Size:** `{sz_str}`\n"
+            f"• ⏰ **Snapshot Time:** `{now_str}`\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "💡 **Migration & Recovery Instructions:**\n"
+            "• To restore on any new VPS, save this file as `bot_database.db` and restart.\n"
+            "• Or reply to this document with `/restore`."
+        )
+        await client.send_document(
+            chat_id=message.from_user.id,
+            document=str(b_file),
+            caption=caption
+        )
+        await status_msg.delete()
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Backup failed: {e}")
+
+
+@Client.on_message(filters.command(["restore", "dbrestore"]) & filters.private)
+async def restore_command(client: Client, message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    target_msg = message.reply_to_message if message.reply_to_message and message.reply_to_message.document else (message if message.document else None)
+    if not target_msg or not target_msg.document:
+        await message.reply_text(
+            "📥 **RESTORE DATABASE**\n\n"
+            "Send or reply to a `.db` database backup file with `/restore`.\n\n"
+            "⚠️ **Warning:** This will replace current database tables with the uploaded snapshot!"
+        )
+        return
+    doc = target_msg.document
+    if not (doc.file_name.endswith(".db") or doc.file_name.endswith(".sqlite")):
+        await message.reply_text("❌ File must be an SQLite `.db` database file.")
+        return
+    status_msg = await message.reply_text("⏳ **Downloading & verifying database snapshot...**")
+    try:
+        from pathlib import Path
+        temp_dl = Path("backups") / "incoming_restore.db"
+        temp_dl.parent.mkdir(parents=True, exist_ok=True)
+        await client.download_media(doc, file_name=str(temp_dl))
+        
+        # Test integrity
+        import aiosqlite
+        async with aiosqlite.connect(str(temp_dl)) as test_db:
+            cur = await test_db.execute("PRAGMA integrity_check;")
+            res = (await cur.fetchone())[0]
+            if res != "ok":
+                await status_msg.edit_text(f"❌ Database integrity check failed: `{res}`")
+                temp_dl.unlink()
+                return
+        
+        # Safety backup of current db
+        cur_db = Path("bot_database.db")
+        if cur_db.exists():
+            safety_bak = Path("backups") / f"pre_restore_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+            import shutil
+            shutil.copy2(cur_db, safety_bak)
+            
+        # Overwrite with incoming
+        import shutil
+        shutil.copy2(temp_dl, cur_db)
+        try:
+            temp_dl.unlink()
+        except Exception:
+            pass
+        
+        # Re-initialize DB
+        await db.init()
+        await refresh_admin_cache()
+        stats = await db.get_business_stats()
+        await status_msg.edit_text(
+            "🎉 **DATABASE RESTORED SUCCESSFULLY!** 🎉\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"• 👥 **Users Restored:** `{stats['total_users']}`\n"
+            f"• 💎 **VIP Subscribers:** `{stats['premium_users']}`\n"
+            f"• 📦 **Delivered Media:** `{stats['total_downloads']}`\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "All tables, payment accounts, and user settings are active and live!"
+        )
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Restore failed: {e}")
+
+
+async def start_auto_backup_loop(client: Client):
+    """Silent background loop that sends a complete database backup to ADMIN_ARCHIVE_CHANNEL every 24 hours."""
+    while True:
+        try:
+            await asyncio.sleep(86400)  # 24 hours
+            archive_ch = await db.get_admin_archive_channel()
+            target_chat = archive_ch if archive_ch else (ADMIN_IDS[0] if ADMIN_IDS else None)
+            if target_chat:
+                from pathlib import Path
+                b_file = await db.create_backup_file(Path("backups"))
+                stats = await db.get_business_stats()
+                sz_str = human_readable_size(b_file.stat().st_size)
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+                caption = (
+                    "🗄️ **AUTOMATED 24-HOUR DATABASE BACKUP** 🗄️\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"• 👥 **Total Users:** `{stats['total_users']}`\n"
+                    f"• 💎 **VIP Members:** `{stats['premium_users']}`\n"
+                    f"• 📦 **Media Delivered:** `{stats['total_downloads']}`\n"
+                    f"• 📁 **Size:** `{sz_str}`\n"
+                    f"• ⏰ **Time:** `{now_str}`\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "💡 *Automated Cloud Snapshot. Safe to download and restore on any new server.*"
+                )
+                await client.send_document(
+                    chat_id=target_chat,
+                    document=str(b_file),
+                    caption=caption
+                )
+                try:
+                    b_file.unlink()
+                except Exception:
+                    pass
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[!] Auto backup loop exception: {e}")
+            await asyncio.sleep(300)
 

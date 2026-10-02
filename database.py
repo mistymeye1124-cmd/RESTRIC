@@ -4,6 +4,7 @@ Enterprise Async Database with Coupons, Resolution Settings, Cookies, Subscripti
 and High-Concurrency Monetization Tables.
 """
 
+import asyncio
 import aiosqlite
 import time
 from datetime import datetime, date, timedelta
@@ -1386,6 +1387,41 @@ class Database:
         async with aiosqlite.connect(self.db_file) as db:
             cur = await db.execute("SELECT 1 FROM dynamic_admins WHERE admin_id = ?", (user_id,))
             return bool(await cur.fetchone())
+
+    # =========================================================================
+    # CLOUD DATABASE SNAPSHOT & BACKUP GENERATOR
+    # =========================================================================
+
+    async def create_backup_file(self, backup_dir: Any = None) -> Any:
+        """
+        Creates an atomic, consolidated SQLite database snapshot using SQLite's native online backup API.
+        Works seamlessly during live database operations with zero locks or transaction conflicts.
+        """
+        import sqlite3
+        from pathlib import Path
+        if backup_dir is None:
+            b_dir = Path(self.db_file).parent / "backups"
+        else:
+            b_dir = Path(backup_dir)
+        b_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        target_path = b_dir / f"bot_database_backup_{timestamp}.db"
+        if target_path.exists():
+            try:
+                target_path.unlink()
+            except Exception:
+                pass
+
+        def _do_backup():
+            src = sqlite3.connect(self.db_file, timeout=20.0)
+            src.execute("PRAGMA wal_checkpoint(PASSIVE);")
+            dst = sqlite3.connect(str(target_path))
+            src.backup(dst)
+            dst.close()
+            src.close()
+
+        await asyncio.to_thread(_do_backup)
+        return target_path
 
     # --- Tier Permissions & Feature Access Matrix ---
 

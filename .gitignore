@@ -24,6 +24,8 @@ sessions/
 *.sqlite3
 bot_database.db
 restricted_v2.db
+backups/
+*.tar.gz
 
 # 4. Downloaded & Temporary Media (Prevents repository bloat)
 downloads/

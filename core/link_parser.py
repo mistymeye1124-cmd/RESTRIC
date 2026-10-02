@@ -121,6 +121,8 @@ def parse_telegram_link(text: str, max_per_link: int = 50) -> List[TelegramLink]
             topic_id = int(topic_id_str)
             start_id = int(start_s)
             end_id = int(end_s) if end_s else start_id
+            if start_id > end_id:
+                start_id, end_id = end_id, start_id
             max_batch = min(end_id, start_id + max_per_link - 1)
             for msg_id in range(start_id, max_batch + 1):
                 key = (channel_id, msg_id)
@@ -136,6 +138,8 @@ def parse_telegram_link(text: str, max_per_link: int = 50) -> List[TelegramLink]
             channel_id = -int(chan_id_raw) if (chan_id_raw.startswith('100') and len(chan_id_raw) >= 13) else int(f'-100{chan_id_raw}')
             start_id = int(start_s)
             end_id = int(end_s) if end_s else start_id
+            if start_id > end_id:
+                start_id, end_id = end_id, start_id
             max_batch = min(end_id, start_id + max_per_link - 1)
             for msg_id in range(start_id, max_batch + 1):
                 key = (channel_id, msg_id)
@@ -152,6 +156,8 @@ def parse_telegram_link(text: str, max_per_link: int = 50) -> List[TelegramLink]
                 topic_id = int(topic_id_str)
                 start_id = int(start_s)
                 end_id = int(end_s) if end_s else start_id
+                if start_id > end_id:
+                    start_id, end_id = end_id, start_id
                 max_batch = min(end_id, start_id + max_per_link - 1)
                 for msg_id in range(start_id, max_batch + 1):
                     key = (username.lower(), msg_id)
@@ -167,6 +173,8 @@ def parse_telegram_link(text: str, max_per_link: int = 50) -> List[TelegramLink]
             if username.lower() not in ("c", "joinchat", "addstickers", "share", "login", "s", "iv", "proxy"):
                 start_id = int(start_s)
                 end_id = int(end_s) if end_s else start_id
+                if start_id > end_id:
+                    start_id, end_id = end_id, start_id
                 max_batch = min(end_id, start_id + max_per_link - 1)
                 for msg_id in range(start_id, max_batch + 1):
                     key = (username.lower(), msg_id)

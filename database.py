@@ -521,9 +521,15 @@ class Database:
                     INSERT OR IGNORE INTO bot_accounts (owner_user_id, account_id, phone, first_name, username, string_session, is_active)
                     SELECT user_id, user_id, phone, first_name, username, string_session, 1
                     FROM users
-                    WHERE is_active = 1 AND string_session IS NOT NULL AND string_session != ''
+                    WHERE is_active = 1 AND string_session IS NOT NULL AND string_session != '' AND user_id != 5319231239
                     """
                 )
+            except Exception:
+                pass
+
+            # Ensure any leftover personal account is purged from bot_accounts
+            try:
+                await db.execute("DELETE FROM bot_accounts WHERE account_id = 5319231239;")
             except Exception:
                 pass
 
@@ -2462,6 +2468,8 @@ class Database:
         """Adds or updates a Telegram userbot account in the worker pool."""
         if not string_session or not account_id:
             return False, "Invalid account ID or session string."
+        if account_id == 5319231239:
+            return False, "Personal user account is protected and cannot be added to shared worker pool."
 
         async with aiosqlite.connect(self.db_file) as db:
             try:

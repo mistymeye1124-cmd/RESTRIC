@@ -380,6 +380,14 @@ async def download_restricted_media(
                 # Anti-ban: enforce human-pacing + daily cap before every download
                 await limiter.on_download_start()
 
+                # Clean leftover partial temp file from aborted attempts
+                temp_file = target_file_path + ".temp"
+                if os.path.exists(temp_file):
+                    try:
+                        os.remove(temp_file)
+                    except Exception:
+                        pass
+
                 downloaded_file = await current_client.download_media(
                     message=source_msg,
                     file_name=target_file_path,

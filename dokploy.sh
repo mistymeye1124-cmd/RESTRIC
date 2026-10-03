@@ -88,6 +88,14 @@ if command -v sysctl >/dev/null 2>&1; then
     sysctl -w net.ipv4.tcp_fastopen=3                     >/dev/null 2>&1 || true
 fi
 
+# 4.6 PHASE 3.6: Multi-Instance Conflict Shield (Prevents duplicate bot instances)
+echo "[*] Ensuring zero duplicate bot instances..."
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl stop bot 2>/dev/null || true
+    systemctl disable bot 2>/dev/null || true
+fi
+pkill -f "python.*main.py" 2>/dev/null || true
+
 # 5. PHASE 4: Build & Start Docker Containers with Zero Downtime
 echo "[*] Launching container with Docker Compose..."
 if command -v docker >/dev/null 2>&1; then

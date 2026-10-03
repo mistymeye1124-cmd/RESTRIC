@@ -383,8 +383,34 @@ async def main():
     print("[+] Bot stopped cleanly.", flush=True)
 
 
+_single_instance_lock_socket = None
+
+def acquire_single_instance_lock(port: int = 45892):
+    """
+    Guarantees that ONLY ONE instance of the bot can run on this host machine.
+    Prevents duplicate bot execution, triple-click glitches, and conflicting MTProto sessions.
+    """
+    global _single_instance_lock_socket
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", port))
+        s.listen(1)
+        _single_instance_lock_socket = s
+        return True
+    except (socket.error, OSError):
+        print("\n" + "=" * 65)
+        print("🚨 [INSTANCE SHIELD] Another bot instance is ALREADY running on this machine!")
+        print("Preventing duplicate messages and multi-process conflicts.")
+        print("Exiting secondary instance cleanly.")
+        print("=" * 65 + "\n", flush=True)
+        sys.exit(0)
+
+
 if __name__ == "__main__":
+    acquire_single_instance_lock()
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("\n[+] Exited.", flush=True)
+

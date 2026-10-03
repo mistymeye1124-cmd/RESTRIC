@@ -330,6 +330,14 @@ async def main():
     from handlers.admin import start_auto_backup_loop
     asyncio.create_task(start_auto_backup_loop(bot))
     print("💾 Automated 24h Cloud Database Backup Daemon: ACTIVE")
+
+    # 24/7 Automated VPS GitHub Watchdog & Auto-Updater Daemon (Zero-Terminal Updates)
+    try:
+        from core.auto_sync import vps_git_watchdog
+        asyncio.create_task(vps_git_watchdog(bot))
+        print("🚀 24/7 Automated VPS GitHub Sync Watchdog: ACTIVE")
+    except Exception as e:
+        print(f"[!] Watchdog warning: {e}")
     print("=" * 65)
 
     # Register bot menu commands in Telegram UI

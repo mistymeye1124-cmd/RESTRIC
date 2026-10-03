@@ -109,6 +109,10 @@ async def build_admin_panel_data():
                 InlineKeyboardButton("🛡️ Anti-Ban Health", callback_data="adm_view_antiban"),
             ],
             [
+                InlineKeyboardButton("🔄 Auto-Update VPS (Git)", callback_data="adm_btn_auto_update"),
+                InlineKeyboardButton("🛠️ Recover Stashed Workers", callback_data="adm_btn_recover_workers"),
+            ],
+            [
                 InlineKeyboardButton("💾 Backup Database", callback_data="adm_btn_backup_db"),
                 InlineKeyboardButton("🔄 Refresh Dashboard", callback_data="adm_open_panel"),
             ],
@@ -135,6 +139,58 @@ async def admin_panel_handler(client: Client, message: Message):
         except Exception:
             pass
     await message.reply_text(text, reply_markup=markup)
+
+
+@Client.on_message(filters.command(["update", "sync"]) & filters.private)
+async def admin_update_command_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    await refresh_admin_cache()
+    if not is_admin(user_id):
+        return
+    from core.auto_sync import execute_vps_update_and_restart
+    await execute_vps_update_and_restart(client, notify_chat_id=message.chat.id)
+
+
+@Client.on_message(filters.command(["recover", "restore"]) & filters.private)
+async def admin_recover_command_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    await refresh_admin_cache()
+    if not is_admin(user_id):
+        return
+    msg = await message.reply_text("🔄 Scanning filesystem, git stash, and databases for worker accounts...")
+    from core.auto_recover import run_auto_recovery
+    from config import DB_PATH
+    rec = run_auto_recovery(DB_PATH)
+    from core.client_manager import initialize_all_bot_accounts
+    await initialize_all_bot_accounts()
+    await msg.edit_text(f"✅ **Recovery Finished!**\n• Worker Accounts in Pool: `{rec}` active.\nCheck `/accounts` now!")
+
+
+@Client.on_callback_query(filters.regex(r"^adm_btn_auto_update$"))
+async def adm_btn_auto_update_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("⛔ Admin access only.", show_alert=True)
+        return
+    await callback_query.answer("🔄 Starting automated VPS git update...", show_alert=True)
+    from core.auto_sync import execute_vps_update_and_restart
+    await execute_vps_update_and_restart(client, notify_chat_id=callback_query.message.chat.id)
+
+
+@Client.on_callback_query(filters.regex(r"^adm_btn_recover_workers$"))
+async def adm_btn_recover_workers_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("⛔ Admin access only.", show_alert=True)
+        return
+    await callback_query.answer("🛠️ Auditing & recovering worker accounts...", show_alert=True)
+    from core.auto_recover import run_auto_recovery
+    from config import DB_PATH
+    rec = run_auto_recovery(DB_PATH)
+    from core.client_manager import initialize_all_bot_accounts
+    await initialize_all_bot_accounts()
+    await callback_query.message.reply_text(
+        f"✅ **Auto-Recovery Completed!**\n• Active Worker Accounts: `{rec}`\n"
+        "All stashed and recovered sessions are now online in `/accounts`!"
+    )
 
 
 @Client.on_callback_query(filters.regex(r"^(adm_open_panel|adm_back_to_panel)$"))

@@ -151,7 +151,10 @@ async def start_handler(client: Client, message: Message):
             await db.add_pending_referral(user_id, inviter_id)
 
         fsub_str = await db.get_force_sub_channel()
-        if str(fsub_str).startswith("http"):
+        fsub_invite = await db.get_force_sub_invite_link()
+        if fsub_invite:
+            join_url = fsub_invite
+        elif str(fsub_str).startswith("http"):
             join_url = fsub_str
         elif str(fsub_str).startswith("@"):
             join_url = f"https://t.me/{str(fsub_str).lstrip('@')}"

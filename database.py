@@ -1382,9 +1382,19 @@ class Database:
         val = await self.get_global_setting("force_sub_channel", str(FORCE_SUB_CHANNEL or ""))
         return val.strip()
 
-    async def set_force_sub_channel(self, channel: Any):
+    async def set_force_sub_channel(self, channel: Any, invite_link: str = ""):
         val = str(channel).strip() if channel is not None else ""
         await self.set_global_setting("force_sub_channel", val)
+        if invite_link:
+            await self.set_global_setting("force_sub_invite_link", invite_link.strip())
+        elif "|" in val:
+            parts = val.split("|", 1)
+            await self.set_global_setting("force_sub_channel", parts[0].strip())
+            await self.set_global_setting("force_sub_invite_link", parts[1].strip())
+
+    async def get_force_sub_invite_link(self) -> str:
+        val = await self.get_global_setting("force_sub_invite_link", "")
+        return val.strip()
 
     async def get_free_daily_limit(self) -> int:
         from config import FREE_DAILY_DOWNLOAD_LIMIT

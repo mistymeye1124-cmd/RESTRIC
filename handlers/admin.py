@@ -3322,6 +3322,48 @@ async def del_coupon_command(client: Client, message: Message):
     await message.reply_text(f"🗑️ Giveaway code `{code.upper()}` has been deleted.")
 
 
+@Client.on_message(filters.command(["setfsub", "fsub"]) & filters.private)
+async def set_fsub_command(client: Client, message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    if len(message.command) < 2:
+        cur_fsub = await db.get_force_sub_channel()
+        cur_inv = await db.get_force_sub_invite_link()
+        await message.reply_text(
+            "📢 **FORCE-SUBSCRIBE SETTINGS**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"• Current Target: `{cur_fsub or 'Disabled'}`\n"
+            f"• Current Link: `{cur_inv or 'None'}`\n\n"
+            "**Usage:**\n"
+            "• Public channel: `/setfsub @YourChannel`\n"
+            "• Private channel: `/setfsub <ChatID> <InviteLink>`\n"
+            "  _Example:_ `/setfsub -1002677227173 https://t.me/+nmsvkQklxts5ZjNl`\n"
+            "• Disable: `/setfsub off`"
+        )
+        return
+
+    arg = message.command[1].strip()
+    if arg.lower() in ("off", "none", "disable", "clear"):
+        await db.set_force_sub_channel("")
+        await message.reply_text("✅ **Force-Subscribe Gate disabled.**")
+        return
+
+    invite_link = message.command[2].strip() if len(message.command) > 2 else ""
+    if "t.me/+" in arg or "joinchat" in arg:
+        invite_link = arg
+        arg = "-1002677227173"
+
+    await db.set_force_sub_channel(arg, invite_link)
+    await message.reply_text(
+        "✅ **Force-Subscribe Channel Configured!**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• **Channel Target:** `{arg}`\n"
+        f"• **Join Invite Link:** `{invite_link or 'Auto'}`\n\n"
+        "⚠️ **CRITICAL REQUIREMENT:**\n"
+        "Ensure `@ProPrivateForwarder_bot` is added as an **Administrator** in your channel so it can verify whether users have joined!"
+    )
+
+
 @Client.on_message(filters.command("addpayment") & filters.private)
 async def add_payment_command(client: Client, message: Message):
     if not is_admin(message.from_user.id):
@@ -3707,8 +3749,19 @@ async def admin_input_interceptor(client: Client, message: Message):
             await db.set_force_sub_channel("")
             await message.reply_text("✅ **Force-subscribe disabled.**")
         else:
-            await db.set_force_sub_channel(clean_ch)
-            await message.reply_text(f"✅ **Force-subscribe channel set to:** `{clean_ch}`")
+            parts = clean_ch.split()
+            target_ch = parts[0]
+            inv_link = parts[1] if len(parts) > 1 else ""
+            if "t.me/+" in target_ch or "joinchat" in target_ch:
+                inv_link = target_ch
+                target_ch = "-1002677227173"
+            await db.set_force_sub_channel(target_ch, inv_link)
+            await message.reply_text(
+                f"✅ **Force-subscribe channel set!**\n"
+                f"• Target ID: `{target_ch}`\n"
+                f"• Invite Link: `{inv_link or 'Auto'}`\n\n"
+                "⚠️ Ensure `@ProPrivateForwarder_bot` is added as an **Administrator** in this channel!"
+            )
         s_text, s_markup = await render_system_settings_menu()
         await message.reply_text(s_text, reply_markup=s_markup)
         message.stop_propagation()

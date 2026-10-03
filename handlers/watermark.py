@@ -14,7 +14,7 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from database import db
 from core.state_manager import set_user_state, get_user_state, clear_user_state
-from core.watermark_engine import generate_watermark_preview
+from core.watermark_engine import generate_watermark_preview, generate_delogo_preview
 
 # Ensure branding asset directory exists
 BRANDING_DIR = Path("downloads") / "branding"
@@ -36,6 +36,21 @@ BOUNCE_SPEED_LABELS = {
     3: "⚡ 3x Normal (Default)",
     4: "🚀 4x Fast Bounce",
     5: "🌪️ 5x Ultra Turbo",
+}
+
+DELOGO_POS_LABELS = {
+    "top_right": "↗️ Top Right (উপরে ডানে)",
+    "top_left": "↖️ Top Left (উপরে বামে)",
+    "bottom_right": "↘️ Bottom Right (নিচে ডানে)",
+    "bottom_left": "↙️ Bottom Left (নিচে বামে)",
+    "center": "⏺️ Center (মাঝখানে)",
+}
+
+DELOGO_SIZE_LABELS = {
+    "small": "🔹 Small (180x60)",
+    "medium": "🔷 Medium (240x80)",
+    "large": "🔶 Large (320x110)",
+    "xlarge": "🛑 Extra Large (420x150)",
 }
 
 
@@ -74,8 +89,15 @@ async def render_watermark_dashboard(user_id: int):
     # VIP Premium User
     wm_settings = await db.get_watermark_settings(user_id)
     enabled = bool(wm_settings.get("enabled", 0))
-    status_str = "🟢 ACTIVE (Burning Watermark)" if enabled else "🔴 DISABLED (⚡ Turbo Pass — Clean Video)"
-    pipeline_str = "🎬 High-Definition Hardware Encoder" if enabled else "⚡ Ultra Turbo Pass (0-Second Delay / Clean Video)"
+    delogo_enabled = bool(wm_settings.get("delogo_enabled", 0))
+    delogo_pos = wm_settings.get("delogo_position", "top_right")
+    delogo_size = wm_settings.get("delogo_size", "medium")
+    delogo_pos_str = DELOGO_POS_LABELS.get(delogo_pos, delogo_pos)
+    delogo_size_str = DELOGO_SIZE_LABELS.get(delogo_size, delogo_size)
+
+    status_str = "🟢 ACTIVE (Burning Brand)" if enabled else "🔴 DISABLED (⚡ Turbo Pass — Clean Video)"
+    delogo_status_str = f"🟢 ACTIVE ({delogo_pos_str})" if delogo_enabled else "🔴 DISABLED"
+    pipeline_str = "🎬 High-Definition Hardware Encoder" if (enabled or delogo_enabled) else "⚡ Ultra Turbo Pass (0-Second Delay / Clean Video)"
 
     wm_text = wm_settings.get("watermark_text") or "_None_"
     hl_text = wm_settings.get("headline_text") or "_None_"
@@ -120,6 +142,8 @@ async def render_watermark_dashboard(user_id: int):
         active_modes.append("Intro Clip")
     if outro_path and os.path.exists(outro_path):
         active_modes.append("Outro Clip")
+    if delogo_enabled:
+        active_modes.append("🧹 Watermark Remover")
     mode_str = " + ".join(active_modes) if active_modes else "Standard"
 
     text = (
@@ -127,12 +151,14 @@ async def render_watermark_dashboard(user_id: int):
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "⚡ **DYNAMIC WATERMARK & BRANDING ENGINE**\n\n"
         "┌── 🎛️ **STUDIO ENGINE STATE** ────────┐\n"
-        f"│ • Studio Status: `{status_str}`\n"
+        f"│ • Bot Watermark: `{status_str}`\n"
+        f"│ • 🧹 Watermark Remover: `{delogo_status_str}`\n"
         f"│ • Video Pipeline: `{pipeline_str}`\n"
-        f"│ • Active Elements: `🎨 {mode_str if enabled else '⚪ None (Bypassed)'}`\n"
-        f"│ • Badge Styling: `✨ {style if enabled else '⚡ Ultra Fast Clean Pass'}`\n"
+        f"│ • Active Elements: `🎨 {mode_str if (enabled or delogo_enabled) else '⚪ None (Bypassed)'}`\n"
+        f"│ • Badge Styling: `✨ {style if enabled else '⚡ Clean Original Pass'}`\n"
         "└──────────────────────────────────────┘\n\n"
         "📐 **ACTIVE BRANDING MATRIX:**\n"
+        f"• 🧹 **100% Watermark Removal:** {'🟢 Active [' + delogo_pos_str + ' | ' + delogo_size_str + ']' if delogo_enabled else '⚪ Disabled'}\n"
         f"• ✏️ **Brand Text:** `{wm_text}`\n"
         f"• 🔲 **Text Background:** `{bg_display}` ({bg_opacity_pct}% Box Opacity)\n"
         f"• 🎨 **Text Color:** `{text_color}`\n"
@@ -144,19 +170,29 @@ async def render_watermark_dashboard(user_id: int):
         f"• 🏃 **Bounce Speed:** `{speed_str}`\n"
         f"• 🔅 **Transparency:** `{opacity_pct}%` | 📐 **Font Scale:** `{font_size}px`\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "💡 _Tip: ওয়াটারমার্ক OFF থাকলে কোনো এনকোডিং হবে না — সুপার ফাস্ট ০-ডিলেতে ডাউনলোড হবে!_"
+        "💡 _Tip: ওয়াটারমার্ক OFF রাখলে ১০০% ক্লিন ওরিজিনাল ভিডিও পাবেন। আর ভিডিওর আগের লোগো মুছতে নিচের 🧹 Watermark Removal বাটনে চাপুন!_"
     )
 
     toggle_btn = (
-        InlineKeyboardButton("🟢 Watermark: ON (Tap to Turn OFF ⚡)", callback_data="wm_toggle_status")
+        InlineKeyboardButton("🟢 Bot Watermark: ON (Tap to Turn OFF ⚡)", callback_data="wm_toggle_status")
         if enabled
-        else InlineKeyboardButton("🔴 Watermark: OFF ⚡ Turbo Speed (Tap to Turn ON)", callback_data="wm_toggle_status")
+        else InlineKeyboardButton("🔴 Bot Watermark: OFF (⚡ Clean Original)", callback_data="wm_toggle_status")
+    )
+
+    delogo_btn = (
+        InlineKeyboardButton(
+            f"🧹 100% Watermark Removal: {'🟢 ACTIVE' if delogo_enabled else '🔴 OFF'} (Config)",
+            callback_data="wm_view_delogo",
+        )
     )
 
     markup = InlineKeyboardMarkup(
         [
             [
                 toggle_btn,
+            ],
+            [
+                delogo_btn,
             ],
             [
                 InlineKeyboardButton("✏️ Text", callback_data="wm_prompt_text"),
@@ -189,6 +225,86 @@ async def render_watermark_dashboard(user_id: int):
             ]
         ]
     )
+    return text, markup
+
+
+async def render_delogo_dashboard(user_id: int):
+    """Renders the dedicated 100% Watermark Removal & Video Delogo Studio."""
+    can_clean, _ = await db.can_user_access_feature(user_id, "clean_video")
+    is_prem = await db.is_user_premium(user_id)
+    if not (is_prem or can_clean):
+        text = (
+            "🧹 **100% WATERMARK REMOVAL & VIDEO DELOGO STUDIO**\n\n"
+            "💎 **This is a VIP Premium Exclusive Feature!**\n\n"
+            "যেকোনো ভিডিও থেকে আগের চ্যানেল নেম, লোগো, বা ওয়াটারমার্ক সম্পূর্ণ মুছে ফেলে ফ্রেশ এবং ক্লিয়ার ওরিজিনাল ভিডিও পেতে VIP আপগ্রেড করুন।"
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💎 Upgrade to VIP", callback_data="user_view_premium")],
+            [InlineKeyboardButton("🔙 Back to Studio", callback_data="wm_back_to_studio")],
+        ])
+        return text, markup
+
+    wm_settings = await db.get_watermark_settings(user_id)
+    delogo_enabled = bool(wm_settings.get("delogo_enabled", 0))
+    delogo_pos = wm_settings.get("delogo_position", "top_right")
+    delogo_size = wm_settings.get("delogo_size", "medium")
+
+    pos_display = DELOGO_POS_LABELS.get(delogo_pos, delogo_pos)
+    size_display = DELOGO_SIZE_LABELS.get(delogo_size, delogo_size)
+    status_display = "🟢 ACTIVE (Erasing Watermarks)" if delogo_enabled else "🔴 DISABLED (No Removal)"
+
+    text = (
+        "🧹 **100% WATERMARK REMOVAL & VIDEO DELOGO STUDIO** 🧹\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "ভিডিওর মধ্যে থাকা আগের লোগো, চ্যানেল আইডি বা টিচারের ওয়াটারমার্ক স্মার্ট Delogo ইন্টারপোলেশন অ্যালগরিদমে সম্পূর্ণ মুছে ফেলুন।\n\n"
+        "┌── 🎛️ **REMOVER ENGINE CONFIG** ──────┐\n"
+        f"│ • Remover Status: `{status_display}`\n"
+        f"│ • Target Erase Area: `{pos_display}`\n"
+        f"│ • Eraser Box Size: `{size_display}`\n"
+        f"│ • Audio Quality: `⚡ 1:1 Direct Stream Copy (No Loss)`\n"
+        "└──────────────────────────────────────┘\n\n"
+        "🎯 **পজিশন ও সাইজ কীভাবে নির্বাচন করবেন:**\n"
+        "1️⃣ **পজিশন সিলেক্ট করুন:** ভিডিওর যে কোণায় লোগোটি আছে সেটি সিলেক্ট করুন (যেমন: ↗️ Top Right)।\n"
+        "2️⃣ **সাইজ পরিবর্তন করুন:** লোগো অনুযায়ী `Small`, `Medium`, `Large` বা `Extra Large` সিলেক্ট করুন।\n"
+        "3️⃣ **লাইভ টেস্ট করুন:** নিচে `👁️ Test Delogo Live Preview` তে ক্লিক করে ৩-সেকেন্ডের ডেমো ভিডিও দেখে নিন!\n\n"
+        "💡 _টিপ: বট ওয়াটারমার্ক OFF থাকলে এবং রিমুভার ON থাকলে ভিডিও সম্পূর্ণ ফ্রেশ ও ক্লিয়ার হবে!_"
+    )
+
+    toggle_btn = (
+        InlineKeyboardButton("🟢 Watermark Remover: ON (Tap to Turn OFF)", callback_data="wm_toggle_delogo")
+        if delogo_enabled
+        else InlineKeyboardButton("🔴 Watermark Remover: OFF (Tap to Turn ON)", callback_data="wm_toggle_delogo")
+    )
+
+    p_tl = "✅ ↖️ Top Left" if delogo_pos == "top_left" else "↖️ Top Left"
+    p_tr = "✅ ↗️ Top Right" if delogo_pos == "top_right" else "↗️ Top Right"
+    p_bl = "✅ ↙️ Bottom Left" if delogo_pos == "bottom_left" else "↙️ Bottom Left"
+    p_br = "✅ ↘️ Bottom Right" if delogo_pos == "bottom_right" else "↘️ Bottom Right"
+    p_ce = "✅ ⏺️ Center" if delogo_pos == "center" else "⏺️ Center"
+
+    markup = InlineKeyboardMarkup([
+        [toggle_btn],
+        [
+            InlineKeyboardButton(p_tl, callback_data="wm_set_delogo_pos:top_left"),
+            InlineKeyboardButton(p_tr, callback_data="wm_set_delogo_pos:top_right"),
+        ],
+        [
+            InlineKeyboardButton(p_bl, callback_data="wm_set_delogo_pos:bottom_left"),
+            InlineKeyboardButton(p_br, callback_data="wm_set_delogo_pos:bottom_right"),
+        ],
+        [
+            InlineKeyboardButton(p_ce, callback_data="wm_set_delogo_pos:center"),
+        ],
+        [
+            InlineKeyboardButton(f"📐 Eraser Size: {size_display} 🔄", callback_data="wm_cycle_delogo_size"),
+        ],
+        [
+            InlineKeyboardButton("👁️ Test Delogo Live Preview (3s Sample)", callback_data="wm_delogo_preview"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Branding Studio", callback_data="wm_back_to_studio"),
+        ],
+    ])
     return text, markup
 
 
@@ -1076,6 +1192,131 @@ async def wm_clear_all_callback(client: Client, callback_query: CallbackQuery):
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
         await callback_query.message.reply_text(text, reply_markup=markup)
+
+
+# =========================================================================
+# 6.5 DELOGO & 100% WATERMARK REMOVAL CONTROLS
+# =========================================================================
+
+@Client.on_callback_query(filters.regex(r"^wm_view_delogo$"))
+async def wm_view_delogo_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    text, markup = await render_delogo_dashboard(user_id)
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await callback_query.message.reply_text(text, reply_markup=markup)
+
+
+@Client.on_callback_query(filters.regex(r"^wm_back_to_studio$"))
+async def wm_back_to_studio_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    text, markup = await render_watermark_dashboard(user_id)
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await callback_query.message.reply_text(text, reply_markup=markup)
+
+
+@Client.on_callback_query(filters.regex(r"^wm_toggle_delogo$"))
+async def wm_toggle_delogo_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    can_clean, _ = await db.can_user_access_feature(user_id, "clean_video")
+    if not (await db.is_user_premium(user_id) or can_clean):
+        await callback_query.answer("VIP only feature.", show_alert=True)
+        return
+
+    current = await db.get_watermark_settings(user_id)
+    new_state = 0 if current.get("delogo_enabled", 0) else 1
+    await db.update_watermark_settings(user_id, delogo_enabled=new_state)
+
+    if new_state:
+        state_str = "🟢 100% Watermark Remover ON! Source logos will be erased."
+    else:
+        state_str = "🔴 Watermark Remover OFF! Videos processed normally."
+    await callback_query.answer(state_str, show_alert=True)
+
+    text, markup = await render_delogo_dashboard(user_id)
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await callback_query.message.reply_text(text, reply_markup=markup)
+
+
+@Client.on_callback_query(filters.regex(r"^wm_set_delogo_pos:(.+)"))
+async def wm_set_delogo_pos_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    pos = callback_query.matches[0].group(1)
+    await db.update_watermark_settings(user_id, delogo_position=pos)
+    pos_lbl = DELOGO_POS_LABELS.get(pos, pos)
+    await callback_query.answer(f"Erase Position: {pos_lbl}")
+
+    text, markup = await render_delogo_dashboard(user_id)
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await callback_query.message.reply_text(text, reply_markup=markup)
+
+
+@Client.on_callback_query(filters.regex(r"^wm_cycle_delogo_size$"))
+async def wm_cycle_delogo_size_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    current = await db.get_watermark_settings(user_id)
+    curr_size = current.get("delogo_size", "medium")
+    cycle_order = ["small", "medium", "large", "xlarge"]
+    idx = cycle_order.index(curr_size) if curr_size in cycle_order else 1
+    next_size = cycle_order[(idx + 1) % len(cycle_order)]
+    await db.update_watermark_settings(user_id, delogo_size=next_size)
+
+    size_lbl = DELOGO_SIZE_LABELS.get(next_size, next_size)
+    await callback_query.answer(f"Eraser Box Size: {size_lbl}")
+
+    text, markup = await render_delogo_dashboard(user_id)
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await callback_query.message.reply_text(text, reply_markup=markup)
+
+
+@Client.on_callback_query(filters.regex(r"^wm_delogo_preview$"))
+async def wm_delogo_preview_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    await callback_query.answer("Generating 3-Second Live Delogo HD Preview... ⏳", show_alert=False)
+
+    import time
+    wm_settings = await db.get_watermark_settings(user_id)
+    preview_path = str(BRANDING_DIR / f"delogo_prev_{user_id}_{int(time.time())}.mp4")
+
+    # Force delogo to be enabled in preview config so user sees removal action
+    test_cfg = dict(wm_settings)
+    test_cfg["delogo_enabled"] = 1
+
+    out_file = await generate_delogo_preview(preview_path, test_cfg)
+    if out_file and os.path.exists(out_file) and os.path.getsize(out_file) > 0:
+        pos_lbl = DELOGO_POS_LABELS.get(test_cfg.get("delogo_position", "top_right"))
+        size_lbl = DELOGO_SIZE_LABELS.get(test_cfg.get("delogo_size", "medium"))
+        cap = (
+            "🧹 **100% WATERMARK REMOVAL LIVE PREVIEW (3s SAMPLE)**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"• **Erase Target:** `{pos_lbl}`\n"
+            f"• **Box Dimension:** `{size_lbl}`\n"
+            "• **Status:** Cleanly Erased & Inpainted!\n\n"
+            "💡 _ভিডিওর আসল লোগোর মাপ বড় বা ছোট হলে স্টুডিও থেকে সাইজ পরিবর্তন করতে পারবেন।_"
+        )
+        try:
+            await client.send_video(
+                chat_id=user_id,
+                video=out_file,
+                caption=cap,
+            )
+            try:
+                os.remove(out_file)
+            except Exception:
+                pass
+        except Exception as e:
+            await callback_query.message.reply_text(f"❌ Failed to send preview: {e}")
+    else:
+        await callback_query.message.reply_text("❌ Could not render delogo preview. Please try again.")
 
 
 # =========================================================================

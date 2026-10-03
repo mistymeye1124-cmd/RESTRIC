@@ -204,25 +204,44 @@ async def omni_url_listener(client: Client, message: Message):
                 pass
             dl_path = cleaned_path
 
-        # Step: Apply VIP Custom Watermark if enabled
+        # Step: Apply 100% Watermark Removal & VIP Custom Watermark
         is_prem = await db.is_user_premium(user_id)
         if is_prem and dl_path and os.path.exists(dl_path):
             user_wm = await db.get_watermark_settings(user_id)
-            if user_wm.get("enabled"):
-                try:
-                    from core.watermark_engine import apply_video_watermark
-                    ext = os.path.splitext(dl_path)[1] or ".mp4"
-                    wm_out = f"{dl_path}_omni_wm{ext}"
-                    final_wm = await apply_video_watermark(dl_path, wm_out, user_wm)
-                    if final_wm and final_wm != dl_path and os.path.exists(final_wm):
-                        try:
-                            if os.path.exists(dl_path):
-                                os.remove(dl_path)
-                        except Exception:
-                            pass
-                        dl_path = final_wm
-                except Exception as wm_err:
-                    print(f"[!] Omni watermark error: {wm_err}")
+            if dl_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts")):
+                # Delogo removal if active
+                if user_wm.get("delogo_enabled"):
+                    try:
+                        from core.watermark_engine import apply_video_delogo
+                        ext = os.path.splitext(dl_path)[1] or ".mp4"
+                        delogo_out = f"{dl_path}_omni_delogo{ext}"
+                        final_delogo = await apply_video_delogo(dl_path, delogo_out, user_wm)
+                        if final_delogo and final_delogo != dl_path and os.path.exists(final_delogo):
+                            try:
+                                if os.path.exists(dl_path):
+                                    os.remove(dl_path)
+                            except Exception:
+                                pass
+                            dl_path = final_delogo
+                    except Exception as dl_err:
+                        print(f"[!] Omni delogo error: {dl_err}")
+
+                # Custom watermark if active
+                if user_wm.get("enabled"):
+                    try:
+                        from core.watermark_engine import apply_video_watermark
+                        ext = os.path.splitext(dl_path)[1] or ".mp4"
+                        wm_out = f"{dl_path}_omni_wm{ext}"
+                        final_wm = await apply_video_watermark(dl_path, wm_out, user_wm)
+                        if final_wm and final_wm != dl_path and os.path.exists(final_wm):
+                            try:
+                                if os.path.exists(dl_path):
+                                    os.remove(dl_path)
+                            except Exception:
+                                pass
+                            dl_path = final_wm
+                    except Exception as wm_err:
+                        print(f"[!] Omni watermark error: {wm_err}")
 
         user_settings = await db.get_settings(user_id)
         auto_forward_id = user_settings.get("auto_forward_chat_id")

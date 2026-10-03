@@ -246,26 +246,46 @@ async def _run_channel_clone_worker(
                         pass
                     dl_res["file_path"] = cleaned
 
-            # Apply Custom Watermark for VIP users if enabled
+            # Apply 100% Watermark Removal & Custom Watermark for VIP users
             is_prem = await db.is_user_premium(user_id)
             if is_prem and dl_res.get("file_path"):
                 user_wm = await db.get_watermark_settings(user_id)
                 current_fp = dl_res["file_path"]
-                if user_wm.get("enabled") and current_fp.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts")):
-                    ext = os.path.splitext(current_fp)[1] or ".mp4"
-                    wm_fp = f"{current_fp}_clone_wm{ext}"
-                    try:
-                        from core.watermark_engine import apply_video_watermark
-                        final_wm = await apply_video_watermark(current_fp, wm_fp, user_wm)
-                        if final_wm and final_wm != current_fp and os.path.exists(final_wm):
-                            try:
-                                if os.path.exists(current_fp):
-                                    os.remove(current_fp)
-                            except Exception:
-                                pass
-                            dl_res["file_path"] = final_wm
-                    except Exception as wm_err:
-                        print(f"[!] Cloner watermark error: {wm_err}")
+                if current_fp.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts")):
+                    # Delogo removal if active
+                    if user_wm.get("delogo_enabled"):
+                        try:
+                            from core.watermark_engine import apply_video_delogo
+                            ext = os.path.splitext(current_fp)[1] or ".mp4"
+                            delogo_fp = f"{current_fp}_clone_delogo{ext}"
+                            final_delogo = await apply_video_delogo(current_fp, delogo_fp, user_wm)
+                            if final_delogo and final_delogo != current_fp and os.path.exists(final_delogo):
+                                try:
+                                    if os.path.exists(current_fp):
+                                        os.remove(current_fp)
+                                except Exception:
+                                    pass
+                                current_fp = final_delogo
+                                dl_res["file_path"] = final_delogo
+                        except Exception as dl_err:
+                            print(f"[!] Cloner delogo error: {dl_err}")
+
+                    # Custom watermark if active
+                    if user_wm.get("enabled"):
+                        ext = os.path.splitext(current_fp)[1] or ".mp4"
+                        wm_fp = f"{current_fp}_clone_wm{ext}"
+                        try:
+                            from core.watermark_engine import apply_video_watermark
+                            final_wm = await apply_video_watermark(current_fp, wm_fp, user_wm)
+                            if final_wm and final_wm != current_fp and os.path.exists(final_wm):
+                                try:
+                                    if os.path.exists(current_fp):
+                                        os.remove(current_fp)
+                                except Exception:
+                                    pass
+                                dl_res["file_path"] = final_wm
+                        except Exception as wm_err:
+                            print(f"[!] Cloner watermark error: {wm_err}")
 
             # Format Caption with Smart Ad-Stripper & Custom Replacements
             raw_caption = dl_res.get("caption") or dl_res.get("text") or ""

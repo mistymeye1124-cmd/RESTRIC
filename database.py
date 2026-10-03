@@ -213,6 +213,18 @@ class Database:
                 await db.execute("ALTER TABLE watermark_settings ADD COLUMN text_color TEXT DEFAULT 'white';")
             except Exception:
                 pass
+            try:
+                await db.execute("ALTER TABLE watermark_settings ADD COLUMN delogo_enabled INTEGER DEFAULT 0;")
+            except Exception:
+                pass
+            try:
+                await db.execute("ALTER TABLE watermark_settings ADD COLUMN delogo_position TEXT DEFAULT 'top_right';")
+            except Exception:
+                pass
+            try:
+                await db.execute("ALTER TABLE watermark_settings ADD COLUMN delogo_size TEXT DEFAULT 'medium';")
+            except Exception:
+                pass
 
             # 4. Payment Transactions (bKash / Nagad / Crypto)
             await db.execute(
@@ -1052,6 +1064,9 @@ class Database:
                 d.setdefault("bg_color", "black")
                 d.setdefault("bg_opacity", 0.75)
                 d.setdefault("text_color", "white")
+                d.setdefault("delogo_enabled", 0)
+                d.setdefault("delogo_position", "top_right")
+                d.setdefault("delogo_size", "medium")
                 _cache_set(("get_wm", user_id), d)
                 return d
             default = {
@@ -1069,6 +1084,9 @@ class Database:
                 "bg_color": "black",
                 "bg_opacity": 0.75,
                 "text_color": "white",
+                "delogo_enabled": 0,
+                "delogo_position": "top_right",
+                "delogo_size": "medium",
             }
             _cache_set(("get_wm", user_id), default)
             return default
@@ -1084,9 +1102,9 @@ class Database:
                 INSERT INTO watermark_settings (
                     user_id, enabled, watermark_text, headline_text, logo_path,
                     position, font_size, opacity, intro_clip_path, outro_clip_path, style, bounce_speed,
-                    bg_color, bg_opacity, text_color
+                    bg_color, bg_opacity, text_color, delogo_enabled, delogo_position, delogo_size
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     enabled = excluded.enabled,
                     watermark_text = excluded.watermark_text,
@@ -1101,7 +1119,10 @@ class Database:
                     bounce_speed = excluded.bounce_speed,
                     bg_color = excluded.bg_color,
                     bg_opacity = excluded.bg_opacity,
-                    text_color = excluded.text_color
+                    text_color = excluded.text_color,
+                    delogo_enabled = excluded.delogo_enabled,
+                    delogo_position = excluded.delogo_position,
+                    delogo_size = excluded.delogo_size
                 """,
                 (
                     user_id,
@@ -1119,6 +1140,9 @@ class Database:
                     current.get("bg_color", "black"),
                     float(current.get("bg_opacity", 0.75)),
                     current.get("text_color", "white"),
+                    int(current.get("delogo_enabled", 0)),
+                    str(current.get("delogo_position", "top_right")),
+                    str(current.get("delogo_size", "medium")),
                 ),
             )
             await db.commit()

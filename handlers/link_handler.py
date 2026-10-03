@@ -16,7 +16,7 @@ from core.link_parser import parse_telegram_link
 from core.client_manager import get_user_client
 from core.download_engine import download_restricted_media, active_jobs
 from core.upload_engine import upload_unlocked_media
-from core.watermark_engine import apply_video_watermark, apply_dual_video_watermark
+from core.watermark_engine import apply_video_watermark, apply_dual_video_watermark, apply_video_delogo
 from core.media_processor import compress_or_rescale_video, extract_audio_mp3, strip_video_metadata
 from core.caption_cleaner import format_custom_caption, strip_competitor_ads
 from core.progress import ProgressTracker, get_progress_markup
@@ -541,9 +541,7 @@ async def run_batch_harvest_pipeline(
                 original_path = await compress_or_rescale_video(original_path, scaled_path, int(effective_res))
                 dl_res["file_path"] = original_path
 
-            # Step C: Dual-Layer Watermarking & Branding Engine
-            # Free Users: Global Owner watermark for Full Video.
-            # VIP Users: Global Owner watermark for Half Video (first 50% runtime) + VIP User Custom Watermark!
+            # Step C: 100% Watermark Removal & Dual-Layer Branding Engine
             is_video_candidate = original_path and (original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".flv")) or dl_res.get("media_type") == "video")
             if is_video_candidate and original_path and os.path.exists(original_path):
                 global_wm = await db.get_global_watermark_config()
@@ -553,6 +551,25 @@ async def run_batch_harvest_pipeline(
                 if not is_prem and can_clean:
                     global_wm = None
 
+                # Sub-step C.1: 100% Video Delogo (Erase burned-in logos/watermarks)
+                if is_prem and user_wm and user_wm.get("delogo_enabled"):
+                    try:
+                        await s_msg.edit_text(f"🧹 **{prefix_label}Erasing Original Watermark & Logo...**")
+                    except Exception:
+                        pass
+                    ext = os.path.splitext(original_path)[1] or ".mp4"
+                    delogo_out = f"{original_path}_delogo{ext}"
+                    delogo_res = await apply_video_delogo(original_path, delogo_out, user_wm)
+                    if delogo_res and delogo_res != original_path and os.path.exists(delogo_res):
+                        try:
+                            if os.path.exists(original_path):
+                                os.remove(original_path)
+                        except Exception:
+                            pass
+                        original_path = delogo_res
+                        dl_res["file_path"] = delogo_res
+
+                # Sub-step C.2: Dual-Layer Watermarking & Branding Engine
                 ext = os.path.splitext(original_path)[1] or ".mp4"
                 wm_path = f"{original_path}_brand{ext}"
 

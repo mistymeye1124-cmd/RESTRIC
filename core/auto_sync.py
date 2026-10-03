@@ -183,13 +183,13 @@ async def execute_vps_update_and_restart(
         await asyncio.to_thread(lambda: _run_git(["fetch", "origin", "main"]))
 
         # Stash only tracked file changes (code, not db/sessions)
-        rc, _ = await asyncio.to_thread(
+        diff_res = await asyncio.to_thread(
             lambda: subprocess.run(
                 ["git", "diff-index", "--quiet", "HEAD", "--"],
                 capture_output=True, check=False, cwd=str(_BOT_DIR)
             )
         )
-        if rc != 0:
+        if diff_res.returncode != 0:
             await asyncio.to_thread(lambda: _run_git(
                 ["stash", "push", "--message", f"auto-sync stash"]
             ))

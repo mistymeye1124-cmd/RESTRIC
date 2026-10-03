@@ -77,10 +77,11 @@ async def render_premium_card(user_id: int):
     text += f"\n{instructions}"
 
     buy_buttons.append([
+        InlineKeyboardButton("🎟️ Redeem Giveaway Code", callback_data="user_prompt_redeem"),
         InlineKeyboardButton("📊 Compare Free vs VIP", callback_data="user_view_features"),
-        InlineKeyboardButton("📞 Admin Support", url=support_link),
     ])
     buy_buttons.append([
+        InlineKeyboardButton("📞 Admin Support", url=support_link),
         InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main"),
     ])
 
@@ -379,3 +380,17 @@ async def manual_reject_trx_command(client: Client, message: Message):
     except Exception:
         pass
     await message.reply_text(f"❌ Transaction `{trx_id}` rejected.")
+
+
+@Client.on_callback_query(filters.regex(r"^user_prompt_redeem$"))
+async def prompt_redeem_callback(client: Client, callback_query: CallbackQuery):
+    await callback_query.answer()
+    await callback_query.message.reply_text(
+        "🎟️ **REDEEM VIP GIVEAWAY CODE** 🎁\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "To redeem your VIP voucher or giveaway code, simply send the following command:\n\n"
+        "👉 `/redeem <YOUR_CODE>`\n\n"
+        "💡 **Example:**\n"
+        "`/redeem VIP2026`\n\n"
+        "✨ Your VIP access and high-speed downloading will be unlocked instantly!"
+    )

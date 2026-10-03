@@ -3183,24 +3183,143 @@ async def set_user_limit_command(client: Client, message: Message):
     await message.reply_text(f"🔄 **Daily download counter reset for User `{target_uid}`!**")
 
 
-@Client.on_message(filters.command("addcoupon") & filters.private)
-async def add_coupon_command(client: Client, message: Message):
+@Client.on_message(filters.command(["gencode", "addcoupon", "createcode", "giveaway"]) & filters.private)
+async def gencode_command(client: Client, message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    if len(message.command) < 2:
+        await message.reply_text(
+            "🎟️ **GIVEAWAY CODE GENERATOR** 🎁\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "**Usage:** `/gencode <DAYS> [MAX_CLAIMS] [CUSTOM_CODE]`\n\n"
+            "**Examples:**\n"
+            "• `/gencode 7 50 VIPGIVEAWAY` ➔ 7 Days VIP, first 50 users\n"
+            "• `/gencode 30 100` ➔ 30 Days VIP, 100 users (Auto-generated code)\n"
+            "• `/gencode 3` ➔ 3 Days VIP, 1 user single claim"
+        )
+        return
+    try:
+        import random
+        import string
+        days = int(message.command[1])
+        uses = int(message.command[2]) if len(message.command) > 2 and message.command[2].isdigit() else 1
+        if len(message.command) > 3:
+            code = message.command[3].strip().upper()
+        elif len(message.command) == 3 and not message.command[2].isdigit():
+            code = message.command[2].strip().upper()
+            uses = 1
+        else:
+            rand_suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=5))
+            code = f"VIP-{days}D-{rand_suffix}"
+
+        ok = await db.create_coupon(code, days, uses)
+        if not ok:
+            await message.reply_text("❌ Could not create giveaway code in database.")
+            return
+
+        bot_me = getattr(client, "me", None)
+        bot_uname = bot_me.username if bot_me else "your_bot"
+
+        # Ready-to-broadcast Telegram card
+        broadcast_card = (
+            "🎁 **SPECIAL VIP MEMBERSHIP GIVEAWAY!** 🎁\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"⚡ Unlock **{days} Days** of VIP Premium Access for FREE!\n\n"
+            f"🎟️ **Redeem Code:** `{code}`\n"
+            f"👥 **Claim Slots:** First **{uses}** users only!\n\n"
+            f"👇 **How to Claim:**\n"
+            f"1. Open bot: @{bot_uname}\n"
+            f"2. Send command: `/redeem {code}`\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "⚠️ _Hurry up before all slots are claimed!_"
+        )
+
+        await message.reply_text(
+            f"✅ **Giveaway Code Created Successfully!**\n\n"
+            f"• **Code:** `{code}`\n"
+            f"• **VIP Duration:** `{days} Days`\n"
+            f"• **Max Users:** `{uses} Users (1 claim per user)`\n\n"
+            f"📢 **Ready-to-Post Telegram Channel Card (Tap to copy below):**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{broadcast_card}"
+        )
+    except Exception as e:
+        await message.reply_text(f"❌ Error creating giveaway code: {e}")
+
+
+@Client.on_message(filters.command(["genvoucher", "genvouchers", "batchvouchers"]) & filters.private)
+async def gen_batch_vouchers_command(client: Client, message: Message):
     if not is_admin(message.from_user.id):
         return
     if len(message.command) < 3:
-        await message.reply_text("Usage: `/addcoupon <CODE> <DAYS> [MAX_USES]`\nExample: `/addcoupon VIPFREE 30 100`")
+        await message.reply_text(
+            "🎟️ **BATCH VOUCHER GENERATOR (FOR CONTEST WINNERS)**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Generates multiple unique, single-use VIP codes to distribute to winners!\n\n"
+            "**Usage:** `/genvoucher <DAYS> <COUNT>`\n"
+            "**Example:** `/genvoucher 30 5` ➔ Generates 5 unique 30-day VIP codes."
+        )
         return
     try:
-        code = message.command[1].strip().upper()
-        days = int(message.command[2])
-        uses = int(message.command[3]) if len(message.command) > 3 else 1
-        ok = await db.create_coupon(code, days, uses)
-        if ok:
-            await message.reply_text(f"🎉 **Coupon Created!**\n• Code: `{code}`\n• VIP Duration: `{days} days`\n• Max Claims: `{uses}`")
-        else:
-            await message.reply_text("❌ Could not create coupon.")
+        import random
+        import string
+        days = int(message.command[1])
+        count = min(int(message.command[2]), 50)  # max 50 at once
+
+        generated = []
+        for _ in range(count):
+            rand_code = f"VIP{days}-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+            if await db.create_coupon(rand_code, days, 1):
+                generated.append(rand_code)
+
+        lines = [
+            f"🎉 **Successfully Generated {len(generated)} VIP Vouchers!**",
+            f"• **Duration:** `{days} Days Each`",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "📋 **Copy & send individually to winners:**\n",
+        ]
+        for idx, c in enumerate(generated, 1):
+            lines.append(f"{idx}. `/redeem {c}`")
+
+        await message.reply_text("\n".join(lines))
     except Exception as e:
-        await message.reply_text(f"❌ Error: {e}")
+        await message.reply_text(f"❌ Error generating vouchers: {e}")
+
+
+@Client.on_message(filters.command(["coupons", "vouchers", "giveaways"]) & filters.private)
+async def list_coupons_command(client: Client, message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    all_c = await db.get_all_coupons()
+    if not all_c:
+        await message.reply_text("ℹ️ No active giveaway codes or vouchers found.\nCreate one with `/gencode <days> <users>`!")
+        return
+
+    lines = [
+        "🎟️ **ACTIVE GIVEAWAY CODES & VOUCHERS**",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+    ]
+    for idx, c in enumerate(all_c, 1):
+        code = c["code"]
+        days = c["days"]
+        uses = c["uses_left"]
+        lines.append(f"{idx}. `{code}` ➔ **{days}d VIP** | 👥 Left: `{uses}`")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("🗑️ _To delete any code:_ `/delcoupon <CODE>`")
+    await message.reply_text("\n".join(lines))
+
+
+@Client.on_message(filters.command(["delcoupon", "delvoucher"]) & filters.private)
+async def del_coupon_command(client: Client, message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    if len(message.command) < 2:
+        await message.reply_text("Usage: `/delcoupon <CODE>`")
+        return
+    code = message.command[1].strip()
+    await db.delete_coupon(code)
+    await message.reply_text(f"🗑️ Giveaway code `{code.upper()}` has been deleted.")
 
 
 @Client.on_message(filters.command("addpayment") & filters.private)

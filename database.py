@@ -255,6 +255,16 @@ class Database:
                 )
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS redeemed_coupons (
+                    user_id INTEGER,
+                    code TEXT,
+                    redeemed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, code)
+                )
+                """
+            )
 
             # 5.1 Dynamic Payment Methods (bKash, Nagad, Rocket, Binance, Bank, etc.)
             await db.execute(
@@ -756,49 +766,7 @@ class Database:
             )
             await db.commit()
 
-    # --- Coupon / Promo Code System ---
 
-    async def create_coupon(self, code: str, days: int, max_uses: int = 1) -> bool:
-        try:
-            async with aiosqlite.connect(self.db_file) as db:
-                await db.execute(
-                    """
-                    INSERT INTO coupons (code, days, uses_left)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(code) DO UPDATE SET
-                        days = excluded.days,
-                        uses_left = excluded.uses_left
-                    """,
-                    (code.strip().upper(), days, max_uses),
-                )
-                await db.commit()
-            return True
-        except Exception:
-            return False
-
-    async def redeem_coupon(self, user_id: int, code: str) -> Tuple[bool, str]:
-        code_clean = code.strip().upper()
-        async with aiosqlite.connect(self.db_file) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT * FROM coupons WHERE code = ?", (code_clean,))
-            coupon = await cur.fetchone()
-            if not coupon:
-                return False, "❌ Invalid promo code."
-
-            uses_left = coupon["uses_left"]
-            if uses_left <= 0:
-                return False, "❌ This promo code has already been fully redeemed."
-
-            days = coupon["days"]
-            # Decrement use
-            await db.execute(
-                "UPDATE coupons SET uses_left = uses_left - 1 WHERE code = ?",
-                (code_clean,),
-            )
-            await db.commit()
-
-        await self.add_premium(user_id, days)
-        return True, f"🎉 Promo code applied! You received **{days} days** of VIP Premium access!"
 
     # --- Session Management ---
 
@@ -1772,24 +1740,56 @@ class Database:
                 return False
 
     async def redeem_coupon(self, user_id: int, code: str) -> Tuple[bool, str]:
-        """Redeems a coupon for user and extends VIP subscription."""
+        """Redeems a coupon for user and extends VIP subscription with anti-abuse protection."""
+        if not code or not str(code).strip():
+            return False, "❌ Please enter a valid coupon/giveaway code."
+
+        code_clean = str(code).strip().upper()
         async with aiosqlite.connect(self.db_file) as db:
-            cur = await db.execute("SELECT days, uses_left FROM coupons WHERE code = ?", (code.strip().upper(),))
+            # 1. Anti-Abuse Check: Has this user already claimed this specific giveaway code?
+            cur = await db.execute("SELECT 1 FROM redeemed_coupons WHERE user_id = ? AND code = ?", (user_id, code_clean))
+            if await cur.fetchone():
+                return False, "⚠️ **Already Redeemed:** You have already claimed this giveaway voucher! Each user can only claim it once."
+
+            # 2. Check Coupon Availability
+            cur = await db.execute("SELECT days, uses_left FROM coupons WHERE code = ?", (code_clean,))
             row = await cur.fetchone()
             if not row:
-                return False, "❌ Invalid or expired coupon code."
+                return False, "❌ **Invalid Code:** This promo/giveaway code does not exist or has expired."
             days, uses_left = row[0], row[1]
             if uses_left <= 0:
-                return False, "⚠️ This coupon has reached its maximum claim limit!"
+                return False, "⚠️ **Fully Claimed:** This giveaway code has reached its maximum claim limit!"
 
+            # 3. Decrement and Record User Claim Atomically
             if uses_left == 1:
-                await db.execute("DELETE FROM coupons WHERE code = ?", (code.strip().upper(),))
+                await db.execute("DELETE FROM coupons WHERE code = ?", (code_clean,))
             else:
-                await db.execute("UPDATE coupons SET uses_left = uses_left - 1 WHERE code = ?", (code.strip().upper(),))
+                await db.execute("UPDATE coupons SET uses_left = uses_left - 1 WHERE code = ?", (code_clean,))
+            await db.execute("INSERT OR REPLACE INTO redeemed_coupons (user_id, code) VALUES (?, ?)", (user_id, code_clean))
             await db.commit()
 
         await self.add_premium(user_id, days)
-        return True, f"🎉 **Coupon Redeemed!**\nYou received **{days} days** of VIP Premium access!"
+        return True, (
+            "🎉 **GIVEAWAY CODE REDEEMED!** 🎁\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"✨ Congratulations! You received **+{days} Days** of VIP Premium access!\n"
+            "⚡ Unlimited daily downloads & Turbo speed are now active on your account."
+        )
+
+    async def get_all_coupons(self) -> List[Dict[str, Any]]:
+        """Returns list of all active coupons."""
+        async with aiosqlite.connect(self.db_file) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT code, days, uses_left, created_at FROM coupons ORDER BY created_at DESC")
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+    async def delete_coupon(self, code: str) -> bool:
+        """Deletes a coupon."""
+        async with aiosqlite.connect(self.db_file) as db:
+            await db.execute("DELETE FROM coupons WHERE code = ?", (code.strip().upper(),))
+            await db.commit()
+            return True
 
 
     # =========================================================================

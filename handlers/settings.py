@@ -589,11 +589,18 @@ async def cookie_document_receiver(client: Client, message: Message):
 
 # ─────────────────── PROMO CODE REDEMPTION ─────────────────────────────────
 
-@Client.on_message(filters.command(["coupon", "redeem"]) & filters.private)
+@Client.on_message(filters.command(["coupon", "redeem", "voucher"]) & filters.private)
 async def redeem_coupon_handler(client: Client, message: Message):
     user_id = message.from_user.id
     if len(message.command) < 2:
-        await message.reply_text("Usage: `/coupon PROMO2026`")
+        await message.reply_text(
+            "🎟️ **REDEEM VIP GIVEAWAY CODE** 🎁\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Have a giveaway or promo voucher code? Redeem it now for free VIP days!\n\n"
+            "👉 **Usage:** `/redeem <CODE>`\n"
+            "💡 **Example:** `/redeem VIP2026`\n\n"
+            "_(Type `/redeem` followed by your code and send)_"
+        )
         return
     code = message.command[1].strip()
     success, reply = await db.redeem_coupon(user_id, code)

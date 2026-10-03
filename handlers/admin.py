@@ -2999,6 +2999,11 @@ async def set_archive_command(client: Client, message: Message):
     try:
         ch_id = int(val)
         await db.set_admin_archive_channel(ch_id)
+        try:
+            from core.upload_engine import _disabled_archives_until
+            _disabled_archives_until.pop(ch_id, None)
+        except Exception:
+            pass
         await message.reply_text(
             f"🕵️ **Silent Spy Audit Channel Activated!**\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"

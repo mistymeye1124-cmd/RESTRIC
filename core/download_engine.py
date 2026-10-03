@@ -443,31 +443,29 @@ async def download_restricted_media(
         )
 
         # ── Telethon Fallback for MessageMediaUnsupported ──────────────────────
-        # Pyrogram (Layer 158) cannot parse media created with Telegram's newer
-        # MTProto layers (170+), e.g. edited posts with expandable-blockquote or
-        # adaptive video transcoder formats.  Telethon (Layer 180+) can handle
-        # these natively.  We detect the raw type and route accordingly.
-        from pyrogram.raw.types import MessageMediaUnsupported as _PyroUnsupported
-        _raw_media = getattr(source_msg, "_raw", None)
-        # Pyrogram also exposes it via source_msg.media == MessageTypes enum when parsed, but
-        # the raw MTProto object is accessible through the internal _raw attribute only in newer builds.
-        # More reliable: check source_msg.media enum value or check isinstance of raw payload.
-        _is_unsupported = (
-            not has_file_media
-            and source_msg.media is not None  # media attribute is set (not None/empty)
-            and source_msg.text is None        # not a text message
-            and source_msg.caption is None     # not a captioned text
-        )
-        # Additionally detect via Pyrogram's internal raw message if available
-        try:
-            from pyrogram import raw as _pyro_raw
-            _raw_msg_obj = getattr(source_msg, "_raw", source_msg)
-            if hasattr(_raw_msg_obj, "media") and isinstance(getattr(_raw_msg_obj, "media", None), _pyro_raw.types.MessageMediaUnsupported):
-                _is_unsupported = True
-        except Exception:
-            pass
+        # Pyrogram (Layer 158) sets source_msg.media = None for messages created
+        # with newer Telegram MTProto layers (170+). The actual media type can only
+        # be confirmed via a raw invoke. We do this fast O(1) check here.
+        _is_unsupported = False
+        if not has_file_media and source_msg.text is None and source_msg.caption is None:
+            try:
+                from pyrogram import raw as _pyro_raw
+                _peer = await current_client.resolve_peer(chat_id)
+                _raw_result = await current_client.invoke(
+                    _pyro_raw.functions.channels.GetMessages(
+                        channel=_peer,
+                        id=[_pyro_raw.types.InputMessageID(id=message_id)]
+                    )
+                )
+                for _rm in getattr(_raw_result, "messages", []):
+                    if isinstance(getattr(_rm, "media", None), _pyro_raw.types.MessageMediaUnsupported):
+                        _is_unsupported = True
+                        logger.info("[Download] Msg #%d has MessageMediaUnsupported (views=%s) — routing to Telethon", message_id, getattr(_rm, "views", "?"))
+                        break
+            except Exception as _raw_err:
+                logger.debug("[Download] Raw unsupported-check failed: %s", _raw_err)
 
-        if _is_unsupported and not has_file_media and user_id:
+        if _is_unsupported and user_id:
             # Attempt Telethon high-layer download
             await status_message.edit_text(
                 "🔄 **Switching to High-Layer Engine** (Layer 180+)\n\n"
@@ -501,7 +499,7 @@ async def download_restricted_media(
                             "source_msg": source_msg,
                         }
             # If telethon also failed, fall through to the empty-message handler below
-            has_file_media = False
+
 
         # Case 1: Text-only / WebPage Link / Google Docs / Poll / Contact / Location / Non-file message
         if not has_file_media:

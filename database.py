@@ -2534,6 +2534,7 @@ class Database:
         username: str = "",
         string_session: str = "",
         can_share: int = 1,
+        is_tg_premium: int = 0,
     ) -> Tuple[bool, str]:
         """Adds or updates a Telegram userbot account in the worker pool."""
         if not string_session or not account_id:
@@ -2544,9 +2545,9 @@ class Database:
                 await db.execute(
                     """
                     INSERT INTO bot_accounts (
-                        owner_user_id, account_id, phone, first_name, username, string_session, is_active, status, can_share
+                        owner_user_id, account_id, phone, first_name, username, string_session, is_active, status, can_share, is_tg_premium
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, 1, 'healthy', ?)
+                    VALUES (?, ?, ?, ?, ?, ?, 1, 'healthy', ?, ?)
                     ON CONFLICT(account_id) DO UPDATE SET
                         owner_user_id = excluded.owner_user_id,
                         phone = excluded.phone,
@@ -2555,9 +2556,10 @@ class Database:
                         string_session = excluded.string_session,
                         is_active = 1,
                         status = 'healthy',
-                        can_share = excluded.can_share
+                        can_share = excluded.can_share,
+                        is_tg_premium = CASE WHEN excluded.is_tg_premium = 1 THEN 1 ELSE bot_accounts.is_tg_premium END
                     """,
-                    (owner_user_id, account_id, phone, first_name, username, string_session, can_share),
+                    (owner_user_id, account_id, phone, first_name, username, string_session, can_share, is_tg_premium),
                 )
                 await db.commit()
                 return True, f"Account {account_id} added successfully to pool."
@@ -2568,7 +2570,7 @@ class Database:
         self, owner_user_id: Optional[int] = None, active_only: bool = False
     ) -> List[Dict[str, Any]]:
         """Retrieves bot accounts, optionally filtered by owner or active status."""
-        query = "SELECT id, owner_user_id, account_id, phone, first_name, username, string_session, is_active, status, flood_wait_until, total_downloads, daily_downloads, last_used_at, created_at, COALESCE(can_share, 1) FROM bot_accounts"
+        query = "SELECT id, owner_user_id, account_id, phone, first_name, username, string_session, is_active, status, flood_wait_until, total_downloads, daily_downloads, last_used_at, created_at, COALESCE(can_share, 1), COALESCE(is_tg_premium, 0) FROM bot_accounts"
         params = []
         conditions = []
 
@@ -2604,6 +2606,7 @@ class Database:
                     "last_used_at": r[12],
                     "created_at": r[13],
                     "can_share": r[14] if len(r) > 14 else 1,
+                    "is_tg_premium": r[15] if len(r) > 15 else 0,
                 }
                 for r in rows
             ]
@@ -2613,7 +2616,7 @@ class Database:
         async with aiosqlite.connect(self.db_file) as db:
             cursor = await db.execute(
                 """
-                SELECT id, owner_user_id, account_id, phone, first_name, username, string_session, is_active, status, flood_wait_until, total_downloads, daily_downloads, last_used_at, created_at, COALESCE(can_share, 1)
+                SELECT id, owner_user_id, account_id, phone, first_name, username, string_session, is_active, status, flood_wait_until, total_downloads, daily_downloads, last_used_at, created_at, COALESCE(can_share, 1), COALESCE(is_tg_premium, 0)
                 FROM bot_accounts WHERE account_id = ?
                 """,
                 (account_id,),
@@ -2637,6 +2640,7 @@ class Database:
                 "last_used_at": r[12],
                 "created_at": r[13],
                 "can_share": r[14] if len(r) > 14 else 1,
+                "is_tg_premium": r[15] if len(r) > 15 else 0,
             }
 
     async def toggle_bot_account_sharing(self, account_id: int, owner_user_id: Optional[int] = None) -> Tuple[bool, int]:
@@ -2691,6 +2695,23 @@ class Database:
                 (1 if is_premium else 0, account_id),
             )
             await db.commit()
+
+    async def toggle_bot_account_tg_premium(self, account_id: int) -> Tuple[bool, int]:
+        """Toggles account is_tg_premium (1 -> 0 or 0 -> 1)."""
+        async with aiosqlite.connect(self.db_file) as db:
+            query = "SELECT COALESCE(is_tg_premium, 0) FROM bot_accounts WHERE account_id = ?"
+            cursor = await db.execute(query, (account_id,))
+            row = await cursor.fetchone()
+            if not row:
+                return False, -1
+            current = row[0]
+            new_state = 0 if current == 1 else 1
+            await db.execute(
+                "UPDATE bot_accounts SET is_tg_premium = ? WHERE account_id = ?",
+                (new_state, account_id),
+            )
+            await db.commit()
+            return True, new_state
 
     async def increment_bot_account_downloads(self, account_id: int):
         """Increments download telemetry for an account and touches last_used_at."""

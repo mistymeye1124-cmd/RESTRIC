@@ -176,7 +176,15 @@ async def load_bot_account_client(account_record: Dict[str, Any]) -> Optional[Cl
     try:
         await client.start()
         me = await client.get_me()
-        is_tg_prem = bool(getattr(me, "is_premium", False))
+        raw_is_prem = bool(getattr(me, "is_premium", False))
+        db_is_prem = bool(account_record.get("is_tg_premium", 0))
+        is_tg_prem = raw_is_prem or db_is_prem
+
+        if raw_is_prem and not db_is_prem:
+            try:
+                asyncio.create_task(db.update_bot_account_tg_premium(account_id, True))
+            except Exception:
+                pass
 
         owner_id = account_record.get("owner_user_id", account_id)
         is_admin_owner = owner_id in ADMIN_IDS
@@ -323,6 +331,27 @@ async def toggle_account_active(account_id: int, owner_user_id: Optional[int] = 
         rec = await db.get_bot_account_by_id(account_id)
         if rec:
             await load_bot_account_client(rec)
+
+    return True, new_state
+
+
+async def toggle_account_premium(account_id: int) -> Tuple[bool, int]:
+    """Toggles account Telegram Premium Turbo VIP state and syncs in-memory metadata."""
+    ok, new_state = await db.toggle_bot_account_tg_premium(account_id)
+    if not ok:
+        return False, -1
+
+    if account_id in account_metadata:
+        account_metadata[account_id]["is_tg_premium"] = bool(new_state)
+        if new_state == 1:
+            account_metadata[account_id]["can_share"] = 1
+            await db.set_bot_account_sharing(account_id, 1)
+    else:
+        account_metadata[account_id] = {
+            "owner_user_id": account_id,
+            "can_share": 1,
+            "is_tg_premium": bool(new_state),
+        }
 
     return True, new_state
 
@@ -518,6 +547,11 @@ async def initialize_admin_pool(sessions: List[str]):
 
             # Auto-save to bot_accounts DB
             primary_admin = ADMIN_IDS[0] if ADMIN_IDS else me.id
+            is_tg_prem = bool(getattr(me, "is_premium", False))
+            db_rec = await db.get_bot_account_by_id(me.id)
+            if db_rec and db_rec.get("is_tg_premium"):
+                is_tg_prem = True
+
             await db.add_or_update_bot_account(
                 owner_user_id=primary_admin,
                 account_id=me.id,
@@ -526,6 +560,7 @@ async def initialize_admin_pool(sessions: List[str]):
                 username=me.username or "",
                 string_session=sess_clean,
                 can_share=1,
+                is_tg_premium=1 if is_tg_prem else 0,
             )
             account_pool[me.id] = client
             account_metadata[me.id] = {
@@ -535,6 +570,7 @@ async def initialize_admin_pool(sessions: List[str]):
                 "first_name": me.first_name or "",
                 "can_share": 1,
                 "device_model": fingerprint.get("device_model", "Official Telegram"),
+                "is_tg_premium": is_tg_prem,
             }
         except Exception as e:
             print(f"[!] Could not load admin pool account {idx+1}: {e}")

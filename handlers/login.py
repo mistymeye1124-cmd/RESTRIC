@@ -48,6 +48,7 @@ from core.client_manager import (
     register_and_start_account,
     unregister_account,
     toggle_account_active,
+    toggle_account_premium,
     account_pool,
     account_metadata,
     get_configured_proxy,
@@ -170,10 +171,21 @@ async def render_accounts_cockpit(user_id: int):
             phone_str = f" | 📞 `+{phone.lstrip('+')}`" if phone else ""
 
             meta = account_metadata.get(aid, {})
-            is_tg_prem = meta.get("is_tg_premium", False)
+            live_client = account_pool.get(aid)
+            live_prem = bool(getattr(getattr(live_client, "me", None), "is_premium", False))
+            meta_prem = bool(meta.get("is_tg_premium", False))
+            db_prem = bool(acc.get("is_tg_premium", False))
+            is_tg_prem = live_prem or meta_prem or db_prem
+
+            if live_prem and not meta_prem:
+                meta["is_tg_premium"] = True
+                try:
+                    asyncio.create_task(db.update_bot_account_tg_premium(aid, True))
+                except Exception:
+                    pass
 
             if is_tg_prem:
-                role_title = "⭐ 👑 [MASTER TURBO VIP]"
+                role_title = "⭐ 👑 [MASTER TURBO VIP - TELEGRAM PREMIUM]"
             elif aid in ADMIN_IDS or aid == user_id:
                 role_title = "👑 [PRIMARY ADMIN]"
             else:
@@ -191,22 +203,33 @@ async def render_accounts_cockpit(user_id: int):
                 st_badge = "🟢 Healthy & Ready"
 
             can_sh = acc.get("can_share", 1)
-            mode_badge = "⚡ Shared Worker Pool" if can_sh else "🛡️ Personal Only"
-            toggle_mode_text = "🛡️ Personal" if can_sh else "⚡ Worker"
+            if is_tg_prem:
+                mode_badge = "🚀 Turbo VIP (8x Streams - Shared)"
+                toggle_mode_text = "🛡️ Personal" if can_sh else "⚡ Worker"
+            else:
+                mode_badge = "⚡ Shared Worker Pool" if can_sh else "🛡️ Personal Only"
+                toggle_mode_text = "🛡️ Personal" if can_sh else "⚡ Worker"
+
+            prem_badge = "⭐ Active (8 Streams Multiplier)" if is_tg_prem else "Standard (4 Streams)"
 
             text_lines.append(
                 f"{idx}. {role_title} **{uname}** (`{aid}`){phone_str}\n"
                 f"   📱 **Hardware:** `{device}`\n"
                 f"   📊 **Telemetry:** `{dl_today}` today | `{dl_total}` total downloads\n"
-                f"   ⚡ **Status:** {st_badge} | **Mode:** `{mode_badge}`\n"
+                f"   ⚡ **Status:** {st_badge} | **Premium:** `{prem_badge}`\n"
+                f"   🔄 **Mode:** `{mode_badge}`\n"
             )
 
             is_act = bool(acc.get("is_active"))
             toggle_text = "⏸️ Pause" if is_act else "▶️ Resume"
+            prem_btn_text = "⭐ VIP Turbo: ON 🟢" if is_tg_prem else "⭐ Set as Turbo VIP"
             buttons.append([
                 InlineKeyboardButton(f"{toggle_text}", callback_data=f"acc_toggle:{aid}"),
                 InlineKeyboardButton(f"{toggle_mode_text}", callback_data=f"acc_toggle_share:{aid}"),
-                InlineKeyboardButton("🗑️ Remove", callback_data=f"acc_del_confirm:{aid}"),
+                InlineKeyboardButton(f"{prem_btn_text}", callback_data=f"acc_toggle_prem:{aid}"),
+            ])
+            buttons.append([
+                InlineKeyboardButton("🗑️ Remove Account", callback_data=f"acc_del_confirm:{aid}"),
             ])
 
     buttons.append([
@@ -358,6 +381,28 @@ async def acc_toggle_share_callback(client: Client, callback_query: CallbackQuer
 
     mode_label = "⚡ Shared Worker Pool" if new_val == 1 else "🛡️ Personal Only"
     await callback_query.answer(f"Account mode set to: {mode_label}", show_alert=True)
+    text, markup = await render_accounts_cockpit(user_id)
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        pass
+
+
+@Client.on_callback_query(filters.regex(r"^acc_toggle_prem:(\d+)$"))
+async def acc_toggle_prem_callback(client: Client, callback_query: CallbackQuery):
+    target_aid = int(callback_query.matches[0].group(1))
+    user_id = callback_query.from_user.id
+    if user_id not in ADMIN_IDS:
+        await callback_query.answer("⚠️ Only Bot Admins can designate VIP Turbo accounts.", show_alert=True)
+        return
+
+    ok, new_val = await toggle_account_premium(target_aid)
+    if not ok:
+        await callback_query.answer("⚠️ Could not toggle account VIP Turbo status.", show_alert=True)
+        return
+
+    status_str = "⭐ VIP Turbo ACTIVE (8 Parallel Streams Enabled)" if new_val == 1 else "⚪ VIP Turbo Deactivated (Standard Mode)"
+    await callback_query.answer(f"Account {target_aid}: {status_str}", show_alert=True)
     text, markup = await render_accounts_cockpit(user_id)
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)

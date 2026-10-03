@@ -92,20 +92,32 @@ async def _telethon_fallback_download(
     Uses Telethon (Layer 180+) to download a message that Pyrogram marks as
     MessageMediaUnsupported.  Works for edited posts, new expandable-blockquote
     videos, and any media format newer than MTProto Layer 158.
+    Uses MemorySession (direct auth_key injection) instead of StringSession
+    to avoid base64 padding issues.
     Returns the local file path on success, None on failure.
     """
     try:
         from telethon import TelegramClient
-        from telethon.sessions import StringSession
+        from telethon.sessions import MemorySession
+        from telethon.crypto import AuthKey as TeleAuthKey
         from config import API_ID, API_HASH
     except ImportError:
         logger.error("[TelethonFallback] Telethon is not installed — cannot handle MessageMediaUnsupported")
         return None
 
     try:
-        tele_session = _pyro_session_to_telethon(pyro_session_str)
+        # Decode Pyrogram 2.x session: dc_id[1] | api_id[4] | test_mode[1] | auth_key[256] | ...
+        raw_sess = base64.urlsafe_b64decode(pyro_session_str + "=" * (-len(pyro_session_str) % 4))
+        dc_id = raw_sess[0]
+        auth_key_bytes = raw_sess[6:262]  # 256-byte auth key
+
+        # Build a MemorySession with the extracted credentials
+        session = MemorySession()
+        session.set_dc(dc_id, _TELE_DC_IPS.get(dc_id, "91.108.56.130"), 443)
+        session.auth_key = TeleAuthKey(auth_key_bytes)
+
         client = TelegramClient(
-            StringSession(tele_session),
+            session,
             int(API_ID),
             API_HASH,
             receive_updates=False,
@@ -122,27 +134,28 @@ async def _telethon_fallback_download(
             await client.disconnect()
             return None
 
-        # Determine a safe file extension from Telethon attributes
+        # Determine a safe file extension from Telethon document attributes
         ext = ".mp4"  # default for video
         if hasattr(msg, "document") and msg.document:
-            from telethon.tl.types import DocumentAttributeFilename, DocumentAttributeVideo, DocumentAttributeAudio
-            for attr in getattr(msg.document, "attributes", []):
-                if isinstance(attr, DocumentAttributeFilename) and attr.file_name:
-                    _, e = os.path.splitext(attr.file_name)
-                    if e:
-                        ext = e.lower()
-                        break
+            try:
+                from telethon.tl.types import DocumentAttributeFilename
+                for attr in getattr(msg.document, "attributes", []):
+                    if isinstance(attr, DocumentAttributeFilename) and attr.file_name:
+                        _, e = os.path.splitext(attr.file_name)
+                        if e:
+                            ext = e.lower()
+                            break
+            except Exception:
+                pass
 
         # Ensure extension on out_path
         if not os.path.splitext(out_path)[1]:
             out_path = out_path + ext
 
         total_size = getattr(getattr(msg, "document", None) or getattr(msg, "media", None), "size", None) or 0
-        downloaded_bytes = [0]
         _last_cb_time = [0.0]
 
         def _tele_progress(received, total):
-            downloaded_bytes[0] = received
             now = time.time()
             if now - _last_cb_time[0] > 0.5 and progress_callback:
                 asyncio.get_event_loop().call_soon_threadsafe(
@@ -150,7 +163,8 @@ async def _telethon_fallback_download(
                 )
                 _last_cb_time[0] = now
 
-        logger.info("[TelethonFallback] Starting download of msg %d via Telethon", message_id)
+        logger.info("[TelethonFallback] Starting download of msg %d via Telethon (DC%d, %.1f MB)",
+                    message_id, dc_id, total_size / (1024 * 1024) if total_size else 0)
         os.makedirs(os.path.dirname(out_path) if os.path.dirname(out_path) else ".", exist_ok=True)
         result_path = await client.download_media(
             msg,

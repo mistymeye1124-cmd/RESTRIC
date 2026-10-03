@@ -453,13 +453,13 @@ async def run_batch_harvest_pipeline(
                     print(f"[!] Cached delivery fallback to download: {cache_err}")
 
         ghost_mode_active = bool(user_settings.get("ghost_mode", 1))
-        ghost_line = "• 👻 Ghost Mode: `Active (Zero-Trace)`\n" if ghost_mode_active else ""
+        ghost_line = "• 🛡️ Anti-Ban Shield: `Active (Zero-Trace Stealth)`\n" if ghost_mode_active else ""
         try:
             await s_msg.edit_text(
-                f"⬇️ **Downloading from Telegram {prefix_label}**\n"
-                f"• Message ID: `{l_link.message_id}`\n"
+                f"⬇️ **Connecting to Secure MTProto Stream {prefix_label}**\n"
+                f"• Target Message: `#{l_link.message_id}`\n"
                 f"{ghost_line}"
-                f"• Progress: _Initializing stream..._",
+                f"• Status: ⚡ _Handshaking high-speed data stream..._",
                 reply_markup=get_progress_markup(b_job_id, res_pref),
             )
         except Exception:

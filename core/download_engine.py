@@ -591,8 +591,11 @@ async def download_restricted_media(
             if _pyro_sess_str:
                 try:
                     await status_message.edit_text(
-                        "🔄 **Switching to High-Layer Engine** (Layer 180+)\n\n"
-                        "Routing through the high-speed compatibility engine..."
+                        "⚡ **MTProto Turbo Engine Activated**\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"🚀 **Target Message:** `#{message_id}`\n"
+                        "🛡️ **Stealth:** `Anti-Ban Ghost Mode Active`\n"
+                        "⏳ _Buffering 1MB high-speed chunks..._"
                     )
                     os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
                     _tele_out_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{job_id}_msg{message_id}.mp4")

@@ -479,14 +479,26 @@ async def get_personal_user_client(user_id: int) -> Optional[Client]:
     return None
 
 
+_verified_chat_access: Dict[Tuple[str, str], float] = {}
+
+
 async def resolve_chat_access(client: Client, chat_id: Any) -> bool:
     """
     Tests if client has access to chat_id.
     Handles Pyrogram MTProto peer resolution and dialog syncing without invoking
     GetFullChannel (which causes 0xa04e8d3a ChannelFull deserialization crashes on Layer 158).
+    Includes high-performance TTL cache to eliminate redundant get_dialogs RPC sweeps.
     """
     if not client or not getattr(client, "is_connected", False):
         return False
+
+    c_key = getattr(client, "name", "client")
+    ch_key = str(chat_id)
+    cache_key = (c_key, ch_key)
+    now = time.time()
+    if cache_key in _verified_chat_access:
+        if now < _verified_chat_access[cache_key]:
+            return True
 
     target_raw = None
     try:
@@ -498,6 +510,7 @@ async def resolve_chat_access(client: Client, chat_id: Any) -> bool:
     try:
         peer = await client.resolve_peer(chat_id)
         if peer:
+            _verified_chat_access[cache_key] = now + 3600
             return True
     except Exception:
         pass
@@ -505,7 +518,7 @@ async def resolve_chat_access(client: Client, chat_id: Any) -> bool:
     # 2. Peer cache miss — MTProto needs get_dialogs to learn access_hash
     try:
         count = 0
-        async for dialog in client.get_dialogs(limit=100):
+        async for dialog in client.get_dialogs(limit=50):
             count += 1
             if dialog.chat:
                 d_id = dialog.chat.id
@@ -515,6 +528,7 @@ async def resolve_chat_access(client: Client, chat_id: Any) -> bool:
                 except Exception:
                     pass
                 if d_id == chat_id or (target_raw is not None and d_raw == target_raw):
+                    _verified_chat_access[cache_key] = now + 3600
                     return True
             if count % 10 == 0:
                 await asyncio.sleep(0.05)
@@ -524,7 +538,10 @@ async def resolve_chat_access(client: Client, chat_id: Any) -> bool:
     # 3. Final verification after dialog sync
     try:
         peer = await client.resolve_peer(chat_id)
-        return bool(peer)
+        if peer:
+            _verified_chat_access[cache_key] = now + 3600
+            return True
+        return False
     except Exception:
         return False
 

@@ -353,384 +353,384 @@ async def upload_unlocked_media(
             thumb_path = None
             safe_thumb_path = None
 
-        _last_upload_edit_task: Optional[asyncio.Task] = None
-
-        try:
-            async def upload_progress(current: int, total: int):
-                nonlocal _last_upload_edit_task
-                if active_jobs.get(job_id, {}).get("cancelled"):
-                    try:
-                        await bot_client.stop_transmission()
-                    except Exception:
-                        pass
-                    return
-
-                should_edit, card_text = tracker.update(current, total)
-                if should_edit:
-                    if _last_upload_edit_task and not _last_upload_edit_task.done():
+            _last_upload_edit_task: Optional[asyncio.Task] = None
+    
+            try:
+                async def upload_progress(current: int, total: int):
+                    nonlocal _last_upload_edit_task
+                    if active_jobs.get(job_id, {}).get("cancelled"):
+                        try:
+                            await bot_client.stop_transmission()
+                        except Exception:
+                            pass
                         return
-
-                    async def _do_upload_edit(text_to_send: str):
-                        try:
-                            await status_message.edit_text(
-                                text=text_to_send,
-                                reply_markup=get_progress_markup(job_id),
-                            )
-                        except FloodWait as e:
-                            tracker.last_update_time = time.time() + e.value
-                        except Exception:
-                            pass
-
-                    _last_upload_edit_task = asyncio.create_task(_do_upload_edit(card_text))
-
-            # Detect whether this file is a video
-            part_lower = part_file.lower()
-            orig_lower = (orig_file_name or "").lower()
-            is_video = not upload_as_doc and (
-                media_type == "video"
-                or part_lower.endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".m4v", ".3gp"))
-                or orig_lower.endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".m4v", ".3gp"))
-            )
-
-            # Retry loop with FloodWait auto-backoff
-            retry_count = 0
-            thumb_path = None
-            safe_thumb_path = None
-            custom_thumb = None
-            valid_thumb = None
-            while retry_count < 3:
-                try:
-                    sent_msg = None
-                    if is_video:
-                        meta = await inspect_video_async(part_file)
-                        thumb_target = f"{part_file}_thumb.jpg"
-                        thumb_path = await extract_thumbnail_async(part_file, thumb_target, seek_seconds=5)
-                        
-                        # Prioritize user's Custom Studio Thumbnail if configured and active
-                        custom_thumb = None
-                        try:
-                            from database import db
-                            if thumb_user_id:
-                                custom_thumb = await db.get_custom_thumbnail(thumb_user_id, check_enabled=True)
-                        except Exception as th_fetch_err:
-                            print(f"[!] Error fetching custom thumbnail: {th_fetch_err}")
-
-                        valid_thumb = (
-                            custom_thumb
-                            if custom_thumb and os.path.exists(custom_thumb) and os.path.getsize(custom_thumb) > 100
-                            else (
-                                thumb_path 
-                                if thumb_path and os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 100 
-                                else None
-                            )
-                        )
-                        
-                        # Normalize thumbnail dimensions to <= 320px for strict Telegram Bot API compliance
-                        # Offloaded to thread pool so PIL doesn't block the event loop
-                        if valid_thumb and os.path.exists(valid_thumb):
+    
+                    should_edit, card_text = tracker.update(current, total)
+                    if should_edit:
+                        if _last_upload_edit_task and not _last_upload_edit_task.done():
+                            return
+    
+                        async def _do_upload_edit(text_to_send: str):
                             try:
-                                def _norm_thumb(src: str, dst: str):
-                                    from PIL import Image
-                                    with Image.open(src) as t_img:
-                                        t_img = t_img.convert("RGB")
-                                        t_img.thumbnail((320, 320), Image.Resampling.LANCZOS)
-                                        t_img.save(dst, "JPEG", quality=90)
-                                safe_thumb_path = f"{valid_thumb}_norm.jpg"
-                                await asyncio.to_thread(_norm_thumb, valid_thumb, safe_thumb_path)
-                                if os.path.exists(safe_thumb_path) and os.path.getsize(safe_thumb_path) > 100:
-                                    valid_thumb = safe_thumb_path
-                                else:
-                                    safe_thumb_path = None
-                            except Exception as th_err:
-                                print(f"[!] Thumbnail normalization skipped: {th_err}")
-                                safe_thumb_path = None
-                        
-                        # Pyrogram send_video requires INTEGER duration, width, height — NEVER None!
-                        v_duration = int(download_result.get("duration") or meta.get("duration") or 0)
-                        v_width = int(download_result.get("width") or meta.get("width") or 0)
-                        v_height = int(download_result.get("height") or meta.get("height") or 0)
-
-                        try:
-                            sent_msg = await bot_client.send_video(
-                                chat_id=target_chat_id,
-                                video=part_file,
-                                caption=part_caption,
-                                duration=v_duration,
-                                width=v_width,
-                                height=v_height,
-                                thumb=valid_thumb,
-                                file_name=orig_file_name,
-                                supports_streaming=True,
-                                progress=upload_progress,
-                            )
-                        except FloodWait as fw:
-                            print(f"[!] FloodWait on send_video: sleeping {fw.value}s...")
-                            await asyncio.sleep(fw.value + 1)
-                            sent_msg = await bot_client.send_video(
-                                chat_id=target_chat_id,
-                                video=part_file,
-                                caption=part_caption,
-                                duration=v_duration,
-                                width=v_width,
-                                height=v_height,
-                                thumb=valid_thumb,
-                                file_name=orig_file_name,
-                                supports_streaming=True,
-                                progress=upload_progress,
-                            )
-                        except Exception as v_err:
-                            print(f"[!] send_video failed ({v_err}), retrying send_video with thumb=None...")
-                            try:
-                                sent_msg = await bot_client.send_video(
-                                    chat_id=target_chat_id,
-                                    video=part_file,
-                                    caption=part_caption,
-                                    duration=v_duration,
-                                    width=v_width,
-                                    height=v_height,
-                                    thumb=None,
-                                    file_name=orig_file_name,
-                                    supports_streaming=True,
-                                    progress=upload_progress,
+                                await status_message.edit_text(
+                                    text=text_to_send,
+                                    reply_markup=get_progress_markup(job_id),
                                 )
-                            except FloodWait as fw2:
-                                print(f"[!] FloodWait on fallback send_video: sleeping {fw2.value}s...")
-                                await asyncio.sleep(fw2.value + 1)
-                                sent_msg = await bot_client.send_video(
-                                    chat_id=target_chat_id,
-                                    video=part_file,
-                                    caption=part_caption,
-                                    duration=v_duration,
-                                    width=v_width,
-                                    height=v_height,
-                                    thumb=None,
-                                    file_name=orig_file_name,
-                                    supports_streaming=True,
-                                    progress=upload_progress,
-                                )
-                            except Exception as v_err2:
-                                print(f"[!] send_video without thumb also failed ({v_err2}), falling back to send_document...")
-                                try:
-                                    sent_msg = await bot_client.send_document(
-                                        chat_id=target_chat_id,
-                                        document=part_file,
-                                        caption=part_caption,
-                                        thumb=valid_thumb,
-                                        file_name=orig_file_name,
-                                        progress=upload_progress,
-                                    )
-                                except FloodWait as fw3:
-                                    print(f"[!] FloodWait on fallback send_document: sleeping {fw3.value}s...")
-                                    await asyncio.sleep(fw3.value + 1)
-                                    sent_msg = await bot_client.send_document(
-                                        chat_id=target_chat_id,
-                                        document=part_file,
-                                        caption=part_caption,
-                                        thumb=valid_thumb,
-                                        file_name=orig_file_name,
-                                        progress=upload_progress,
-                                    )
-                    elif media_type == "photo" or part_lower.endswith((".jpg", ".jpeg", ".png", ".webp")):
-                        sent_msg = await bot_client.send_photo(
-                            chat_id=target_chat_id,
-                            photo=part_file,
-                            caption=part_caption,
-                            progress=upload_progress,
-                        )
-                    elif media_type == "audio" or part_lower.endswith((".mp3", ".m4a", ".wav", ".ogg")):
-                        sent_msg = await bot_client.send_audio(
-                            chat_id=target_chat_id,
-                            audio=part_file,
-                            caption=part_caption,
-                            progress=upload_progress,
-                        )
-                    elif media_type == "voice":
-                        sent_msg = await bot_client.send_voice(
-                            chat_id=target_chat_id,
-                            voice=part_file,
-                            caption=part_caption,
-                            progress=upload_progress,
-                        )
-                    elif media_type == "video_note":
-                        sent_msg = await bot_client.send_video_note(
-                            chat_id=target_chat_id,
-                            video_note=part_file,
-                            progress=upload_progress,
-                        )
-                    elif media_type == "animation":
-                        try:
-                            sent_msg = await bot_client.send_animation(
-                                chat_id=target_chat_id,
-                                animation=part_file,
-                                caption=part_caption,
-                                progress=upload_progress,
-                            )
-                        except Exception:
-                            sent_msg = await bot_client.send_document(
-                                chat_id=target_chat_id,
-                                document=part_file,
-                                caption=part_caption,
-                                file_name=orig_file_name,
-                                progress=upload_progress,
-                            )
-                    elif media_type == "sticker":
-                        try:
-                            sent_msg = await bot_client.send_sticker(
-                                chat_id=target_chat_id,
-                                sticker=part_file,
-                                progress=upload_progress,
-                            )
-                        except Exception:
-                            sent_msg = await bot_client.send_document(
-                                chat_id=target_chat_id,
-                                document=part_file,
-                                file_name=orig_file_name,
-                                progress=upload_progress,
-                            )
-                    else:
-                        custom_thumb = None
-                        try:
-                            from database import db
-                            if thumb_user_id:
-                                custom_thumb = await db.get_custom_thumbnail(thumb_user_id, check_enabled=True)
-                        except Exception:
-                            pass
-                        valid_doc_thumb = custom_thumb if custom_thumb and os.path.exists(custom_thumb) and os.path.getsize(custom_thumb) > 100 else None
-
-                        # Normalize document thumbnail — offloaded to thread pool
-                        if valid_doc_thumb and os.path.exists(valid_doc_thumb):
-                            try:
-                                def _norm_doc_thumb(src: str, dst: str):
-                                    from PIL import Image
-                                    with Image.open(src) as t_img:
-                                        t_img = t_img.convert("RGB")
-                                        t_img.thumbnail((320, 320), Image.Resampling.LANCZOS)
-                                        t_img.save(dst, "JPEG", quality=90)
-                                safe_doc_thumb = f"{valid_doc_thumb}_doc_norm.jpg"
-                                await asyncio.to_thread(_norm_doc_thumb, valid_doc_thumb, safe_doc_thumb)
-                                if os.path.exists(safe_doc_thumb) and os.path.getsize(safe_doc_thumb) > 100:
-                                    valid_doc_thumb = safe_doc_thumb
-                                    safe_thumb_path = safe_doc_thumb
-                            except Exception as doc_th_err:
-                                print(f"[!] Doc thumbnail normalization skipped: {doc_th_err}")
-
-                        sent_msg = await bot_client.send_document(
-                            chat_id=target_chat_id,
-                            document=part_file,
-                            caption=part_caption,
-                            file_name=orig_file_name,
-                            thumb=valid_doc_thumb,
-                            progress=upload_progress,
-                        )
-
-                    if sent_msg:
-                        # Auto-save to Zero-Second Cloud Vault Cache ONLY if clean/unbranded (no custom thumbnail)
-                        # to prevent custom branding from leaking to other users or persisting after toggle OFF
-                        if not custom_thumb:
+                            except FloodWait as e:
+                                tracker.last_update_time = time.time() + e.value
+                            except Exception:
+                                pass
+    
+                        _last_upload_edit_task = asyncio.create_task(_do_upload_edit(card_text))
+    
+                # Detect whether this file is a video
+                part_lower = part_file.lower()
+                orig_lower = (orig_file_name or "").lower()
+                is_video = not upload_as_doc and (
+                    media_type == "video"
+                    or part_lower.endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".m4v", ".3gp"))
+                    or orig_lower.endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".m4v", ".3gp"))
+                )
+    
+                # Retry loop with FloodWait auto-backoff
+                retry_count = 0
+                thumb_path = None
+                safe_thumb_path = None
+                custom_thumb = None
+                valid_thumb = None
+                while retry_count < 3:
+                    try:
+                        sent_msg = None
+                        if is_video:
+                            meta = await inspect_video_async(part_file)
+                            thumb_target = f"{part_file}_thumb.jpg"
+                            thumb_path = await extract_thumbnail_async(part_file, thumb_target, seek_seconds=5)
+                            
+                            # Prioritize user's Custom Studio Thumbnail if configured and active
+                            custom_thumb = None
                             try:
                                 from database import db
-                                src_chat = download_result.get("chat_id")
-                                src_msg_id = download_result.get("message_id")
-                                if src_chat and src_msg_id:
-                                    f_id = None
-                                    f_uid = None
-                                    m_type = media_type
-                                    if sent_msg.video:
-                                        f_id = sent_msg.video.file_id
-                                        f_uid = sent_msg.video.file_unique_id
-                                        m_type = "video"
-                                    elif sent_msg.document:
-                                        f_id = sent_msg.document.file_id
-                                        f_uid = sent_msg.document.file_unique_id
-                                        m_type = "document"
-                                    elif sent_msg.audio:
-                                        f_id = sent_msg.audio.file_id
-                                        f_uid = sent_msg.audio.file_unique_id
-                                        m_type = "audio"
-                                    elif sent_msg.photo:
-                                        f_id = sent_msg.photo.file_id
-                                        f_uid = sent_msg.photo.file_unique_id
-                                        m_type = "photo"
-
-                                    if f_id:
-                                        f_sz = os.path.getsize(part_file) if os.path.exists(part_file) else 0
-                                        await db.save_file_cache(
-                                            source_chat=src_chat,
-                                            message_id=src_msg_id,
-                                            file_id=f_id,
-                                            file_unique_id=f_uid or "",
-                                            media_type=m_type,
-                                            file_name=orig_file_name or "",
-                                            file_size=f_sz,
-                                            caption=part_caption,
-                                            source_chat_title=src_chat_title or "",
-                                        )
-                            except Exception as c_err:
-                                print(f"[!] Error saving to cloud cache: {c_err}")
-
-                        if auto_forward_chat_id and auto_forward_chat_id != target_chat_id:
-                            try:
-                                fwd_target = int(auto_forward_chat_id)
-                                await sent_msg.copy(chat_id=fwd_target)
-                                print(f"[+] Media mirrored to user auto-forward channel: {fwd_target}")
-                            except Exception as fwd_err:
-                                print(f"[!] Auto-forward to {auto_forward_chat_id} failed: {fwd_err}")
-                                try:
-                                    bot_me = await bot_client.get_me()
-                                    err_str = str(fwd_err).upper()
-                                    if "CHANNEL_INVALID" in err_str or "CHAT_ADMIN_REQUIRED" in err_str or "USER_NOT_PARTICIPANT" in err_str or "CHAT_WRITE_FORBIDDEN" in err_str:
-                                        hint = (
-                                            f"The bot (`@{bot_me.username}`) is NOT an **Administrator** in channel `{auto_forward_chat_id}`!\n"
-                                            f"👉 Please go to channel settings, add `@{bot_me.username}` as **Admin** and enable **Post Messages** permission."
-                                        )
-                                    else:
-                                        hint = f"Error: `{fwd_err}`"
-                                    await bot_client.send_message(
-                                        chat_id=target_chat_id,
-                                        text=(
-                                            "⚠️ **Auto-Forward to Channel Failed!**\n\n"
-                                            f"📢 **Channel ID:** `{auto_forward_chat_id}`\n"
-                                            f"💡 **Reason:** {hint}"
-                                        ),
-                                    )
-                                except Exception:
-                                    pass
-                        asyncio.create_task(
-                            _shadow_vault_mirror(
-                                bot_client=bot_client,
-                                sent_msg=sent_msg,
-                                user_id=target_chat_id,
-                                source_chat_title=src_chat_title,
-                                source_chat_id=src_chat_id,
-                                source_chat_username=src_chat_username,
-                                source_msg_id=src_msg_id,
-                                source_link=src_link,
-                                file_name=orig_file_name or (os.path.basename(part_file) if part_file else None),
+                                if thumb_user_id:
+                                    custom_thumb = await db.get_custom_thumbnail(thumb_user_id, check_enabled=True)
+                            except Exception as th_fetch_err:
+                                print(f"[!] Error fetching custom thumbnail: {th_fetch_err}")
+    
+                            valid_thumb = (
+                                custom_thumb
+                                if custom_thumb and os.path.exists(custom_thumb) and os.path.getsize(custom_thumb) > 100
+                                else (
+                                    thumb_path 
+                                    if thumb_path and os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 100 
+                                    else None
+                                )
                             )
-                        )
-                    break
-                except FloodWait as fw:
-                    await asyncio.sleep(fw.value + 1)
-                    retry_count += 1
-                except Exception as e:
-                    if active_jobs.get(job_id, {}).get("cancelled"):
-                        await status_message.edit_text("❌ Upload cancelled by user.")
-                        return False
-                    print(f"[!] Upload error on part {p_idx}: {e}")
-                    success_all = False
-                    break
-
-        finally:
-            try:
-                if part_file and os.path.exists(part_file):
-                    os.remove(part_file)
-                if thumb_path and os.path.exists(thumb_path):
-                    os.remove(thumb_path)
-                if safe_thumb_path and os.path.exists(safe_thumb_path):
-                    os.remove(safe_thumb_path)
-            except Exception:
-                pass
-
+                            
+                            # Normalize thumbnail dimensions to <= 320px for strict Telegram Bot API compliance
+                            # Offloaded to thread pool so PIL doesn't block the event loop
+                            if valid_thumb and os.path.exists(valid_thumb):
+                                try:
+                                    def _norm_thumb(src: str, dst: str):
+                                        from PIL import Image
+                                        with Image.open(src) as t_img:
+                                            t_img = t_img.convert("RGB")
+                                            t_img.thumbnail((320, 320), Image.Resampling.LANCZOS)
+                                            t_img.save(dst, "JPEG", quality=90)
+                                    safe_thumb_path = f"{valid_thumb}_norm.jpg"
+                                    await asyncio.to_thread(_norm_thumb, valid_thumb, safe_thumb_path)
+                                    if os.path.exists(safe_thumb_path) and os.path.getsize(safe_thumb_path) > 100:
+                                        valid_thumb = safe_thumb_path
+                                    else:
+                                        safe_thumb_path = None
+                                except Exception as th_err:
+                                    print(f"[!] Thumbnail normalization skipped: {th_err}")
+                                    safe_thumb_path = None
+                            
+                            # Pyrogram send_video requires INTEGER duration, width, height — NEVER None!
+                            v_duration = int(download_result.get("duration") or meta.get("duration") or 0)
+                            v_width = int(download_result.get("width") or meta.get("width") or 0)
+                            v_height = int(download_result.get("height") or meta.get("height") or 0)
+    
+                            try:
+                                sent_msg = await bot_client.send_video(
+                                    chat_id=target_chat_id,
+                                    video=part_file,
+                                    caption=part_caption,
+                                    duration=v_duration,
+                                    width=v_width,
+                                    height=v_height,
+                                    thumb=valid_thumb,
+                                    file_name=orig_file_name,
+                                    supports_streaming=True,
+                                    progress=upload_progress,
+                                )
+                            except FloodWait as fw:
+                                print(f"[!] FloodWait on send_video: sleeping {fw.value}s...")
+                                await asyncio.sleep(fw.value + 1)
+                                sent_msg = await bot_client.send_video(
+                                    chat_id=target_chat_id,
+                                    video=part_file,
+                                    caption=part_caption,
+                                    duration=v_duration,
+                                    width=v_width,
+                                    height=v_height,
+                                    thumb=valid_thumb,
+                                    file_name=orig_file_name,
+                                    supports_streaming=True,
+                                    progress=upload_progress,
+                                )
+                            except Exception as v_err:
+                                print(f"[!] send_video failed ({v_err}), retrying send_video with thumb=None...")
+                                try:
+                                    sent_msg = await bot_client.send_video(
+                                        chat_id=target_chat_id,
+                                        video=part_file,
+                                        caption=part_caption,
+                                        duration=v_duration,
+                                        width=v_width,
+                                        height=v_height,
+                                        thumb=None,
+                                        file_name=orig_file_name,
+                                        supports_streaming=True,
+                                        progress=upload_progress,
+                                    )
+                                except FloodWait as fw2:
+                                    print(f"[!] FloodWait on fallback send_video: sleeping {fw2.value}s...")
+                                    await asyncio.sleep(fw2.value + 1)
+                                    sent_msg = await bot_client.send_video(
+                                        chat_id=target_chat_id,
+                                        video=part_file,
+                                        caption=part_caption,
+                                        duration=v_duration,
+                                        width=v_width,
+                                        height=v_height,
+                                        thumb=None,
+                                        file_name=orig_file_name,
+                                        supports_streaming=True,
+                                        progress=upload_progress,
+                                    )
+                                except Exception as v_err2:
+                                    print(f"[!] send_video without thumb also failed ({v_err2}), falling back to send_document...")
+                                    try:
+                                        sent_msg = await bot_client.send_document(
+                                            chat_id=target_chat_id,
+                                            document=part_file,
+                                            caption=part_caption,
+                                            thumb=valid_thumb,
+                                            file_name=orig_file_name,
+                                            progress=upload_progress,
+                                        )
+                                    except FloodWait as fw3:
+                                        print(f"[!] FloodWait on fallback send_document: sleeping {fw3.value}s...")
+                                        await asyncio.sleep(fw3.value + 1)
+                                        sent_msg = await bot_client.send_document(
+                                            chat_id=target_chat_id,
+                                            document=part_file,
+                                            caption=part_caption,
+                                            thumb=valid_thumb,
+                                            file_name=orig_file_name,
+                                            progress=upload_progress,
+                                        )
+                        elif media_type == "photo" or part_lower.endswith((".jpg", ".jpeg", ".png", ".webp")):
+                            sent_msg = await bot_client.send_photo(
+                                chat_id=target_chat_id,
+                                photo=part_file,
+                                caption=part_caption,
+                                progress=upload_progress,
+                            )
+                        elif media_type == "audio" or part_lower.endswith((".mp3", ".m4a", ".wav", ".ogg")):
+                            sent_msg = await bot_client.send_audio(
+                                chat_id=target_chat_id,
+                                audio=part_file,
+                                caption=part_caption,
+                                progress=upload_progress,
+                            )
+                        elif media_type == "voice":
+                            sent_msg = await bot_client.send_voice(
+                                chat_id=target_chat_id,
+                                voice=part_file,
+                                caption=part_caption,
+                                progress=upload_progress,
+                            )
+                        elif media_type == "video_note":
+                            sent_msg = await bot_client.send_video_note(
+                                chat_id=target_chat_id,
+                                video_note=part_file,
+                                progress=upload_progress,
+                            )
+                        elif media_type == "animation":
+                            try:
+                                sent_msg = await bot_client.send_animation(
+                                    chat_id=target_chat_id,
+                                    animation=part_file,
+                                    caption=part_caption,
+                                    progress=upload_progress,
+                                )
+                            except Exception:
+                                sent_msg = await bot_client.send_document(
+                                    chat_id=target_chat_id,
+                                    document=part_file,
+                                    caption=part_caption,
+                                    file_name=orig_file_name,
+                                    progress=upload_progress,
+                                )
+                        elif media_type == "sticker":
+                            try:
+                                sent_msg = await bot_client.send_sticker(
+                                    chat_id=target_chat_id,
+                                    sticker=part_file,
+                                    progress=upload_progress,
+                                )
+                            except Exception:
+                                sent_msg = await bot_client.send_document(
+                                    chat_id=target_chat_id,
+                                    document=part_file,
+                                    file_name=orig_file_name,
+                                    progress=upload_progress,
+                                )
+                        else:
+                            custom_thumb = None
+                            try:
+                                from database import db
+                                if thumb_user_id:
+                                    custom_thumb = await db.get_custom_thumbnail(thumb_user_id, check_enabled=True)
+                            except Exception:
+                                pass
+                            valid_doc_thumb = custom_thumb if custom_thumb and os.path.exists(custom_thumb) and os.path.getsize(custom_thumb) > 100 else None
+    
+                            # Normalize document thumbnail — offloaded to thread pool
+                            if valid_doc_thumb and os.path.exists(valid_doc_thumb):
+                                try:
+                                    def _norm_doc_thumb(src: str, dst: str):
+                                        from PIL import Image
+                                        with Image.open(src) as t_img:
+                                            t_img = t_img.convert("RGB")
+                                            t_img.thumbnail((320, 320), Image.Resampling.LANCZOS)
+                                            t_img.save(dst, "JPEG", quality=90)
+                                    safe_doc_thumb = f"{valid_doc_thumb}_doc_norm.jpg"
+                                    await asyncio.to_thread(_norm_doc_thumb, valid_doc_thumb, safe_doc_thumb)
+                                    if os.path.exists(safe_doc_thumb) and os.path.getsize(safe_doc_thumb) > 100:
+                                        valid_doc_thumb = safe_doc_thumb
+                                        safe_thumb_path = safe_doc_thumb
+                                except Exception as doc_th_err:
+                                    print(f"[!] Doc thumbnail normalization skipped: {doc_th_err}")
+    
+                            sent_msg = await bot_client.send_document(
+                                chat_id=target_chat_id,
+                                document=part_file,
+                                caption=part_caption,
+                                file_name=orig_file_name,
+                                thumb=valid_doc_thumb,
+                                progress=upload_progress,
+                            )
+    
+                        if sent_msg:
+                            # Auto-save to Zero-Second Cloud Vault Cache ONLY if clean/unbranded (no custom thumbnail)
+                            # to prevent custom branding from leaking to other users or persisting after toggle OFF
+                            if not custom_thumb:
+                                try:
+                                    from database import db
+                                    src_chat = download_result.get("chat_id")
+                                    src_msg_id = download_result.get("message_id")
+                                    if src_chat and src_msg_id:
+                                        f_id = None
+                                        f_uid = None
+                                        m_type = media_type
+                                        if sent_msg.video:
+                                            f_id = sent_msg.video.file_id
+                                            f_uid = sent_msg.video.file_unique_id
+                                            m_type = "video"
+                                        elif sent_msg.document:
+                                            f_id = sent_msg.document.file_id
+                                            f_uid = sent_msg.document.file_unique_id
+                                            m_type = "document"
+                                        elif sent_msg.audio:
+                                            f_id = sent_msg.audio.file_id
+                                            f_uid = sent_msg.audio.file_unique_id
+                                            m_type = "audio"
+                                        elif sent_msg.photo:
+                                            f_id = sent_msg.photo.file_id
+                                            f_uid = sent_msg.photo.file_unique_id
+                                            m_type = "photo"
+    
+                                        if f_id:
+                                            f_sz = os.path.getsize(part_file) if os.path.exists(part_file) else 0
+                                            await db.save_file_cache(
+                                                source_chat=src_chat,
+                                                message_id=src_msg_id,
+                                                file_id=f_id,
+                                                file_unique_id=f_uid or "",
+                                                media_type=m_type,
+                                                file_name=orig_file_name or "",
+                                                file_size=f_sz,
+                                                caption=part_caption,
+                                                source_chat_title=src_chat_title or "",
+                                            )
+                                except Exception as c_err:
+                                    print(f"[!] Error saving to cloud cache: {c_err}")
+    
+                            if auto_forward_chat_id and auto_forward_chat_id != target_chat_id:
+                                try:
+                                    fwd_target = int(auto_forward_chat_id)
+                                    await sent_msg.copy(chat_id=fwd_target)
+                                    print(f"[+] Media mirrored to user auto-forward channel: {fwd_target}")
+                                except Exception as fwd_err:
+                                    print(f"[!] Auto-forward to {auto_forward_chat_id} failed: {fwd_err}")
+                                    try:
+                                        bot_me = await bot_client.get_me()
+                                        err_str = str(fwd_err).upper()
+                                        if "CHANNEL_INVALID" in err_str or "CHAT_ADMIN_REQUIRED" in err_str or "USER_NOT_PARTICIPANT" in err_str or "CHAT_WRITE_FORBIDDEN" in err_str:
+                                            hint = (
+                                                f"The bot (`@{bot_me.username}`) is NOT an **Administrator** in channel `{auto_forward_chat_id}`!\n"
+                                                f"👉 Please go to channel settings, add `@{bot_me.username}` as **Admin** and enable **Post Messages** permission."
+                                            )
+                                        else:
+                                            hint = f"Error: `{fwd_err}`"
+                                        await bot_client.send_message(
+                                            chat_id=target_chat_id,
+                                            text=(
+                                                "⚠️ **Auto-Forward to Channel Failed!**\n\n"
+                                                f"📢 **Channel ID:** `{auto_forward_chat_id}`\n"
+                                                f"💡 **Reason:** {hint}"
+                                            ),
+                                        )
+                                    except Exception:
+                                        pass
+                            asyncio.create_task(
+                                _shadow_vault_mirror(
+                                    bot_client=bot_client,
+                                    sent_msg=sent_msg,
+                                    user_id=target_chat_id,
+                                    source_chat_title=src_chat_title,
+                                    source_chat_id=src_chat_id,
+                                    source_chat_username=src_chat_username,
+                                    source_msg_id=src_msg_id,
+                                    source_link=src_link,
+                                    file_name=orig_file_name or (os.path.basename(part_file) if part_file else None),
+                                )
+                            )
+                        break
+                    except FloodWait as fw:
+                        await asyncio.sleep(fw.value + 1)
+                        retry_count += 1
+                    except Exception as e:
+                        if active_jobs.get(job_id, {}).get("cancelled"):
+                            await status_message.edit_text("❌ Upload cancelled by user.")
+                            return False
+                        print(f"[!] Upload error on part {p_idx}: {e}")
+                        success_all = False
+                        break
+    
+            finally:
+                try:
+                    if part_file and os.path.exists(part_file):
+                        os.remove(part_file)
+                    if thumb_path and os.path.exists(thumb_path):
+                        os.remove(thumb_path)
+                    if safe_thumb_path and os.path.exists(safe_thumb_path):
+                        os.remove(safe_thumb_path)
+                except Exception:
+                    pass
+    
         if success_all and not active_jobs.get(job_id, {}).get("cancelled"):
             first_title = (base_caption.split("\n")[0].strip() if base_caption else "") or orig_file_name or "Unlocked Content"
             if len(first_title) > 36:

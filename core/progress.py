@@ -129,18 +129,18 @@ class ProgressTracker:
         eta_str = f"{format_duration(eta_seconds)} remaining"
 
         is_dl = "Download" in self.action_name
-        action_title = "[ARM SQUAD] MEDIA EXTRACTOR" if is_dl else "[ARM SQUAD] MEDIA DISPATCHER"
+        action_title = "PRO HARVESTER TURBO" if is_dl else "PRO DISPATCHER TURBO"
 
         text = (
             f"⚡ **{action_title}** ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **Operation:** `{self.action_name}`\n"
             f"📊 **Progress:** `[{bar}] {self.percentage:.1f}%`\n\n"
-            f"╭── 📡 **TACTICAL TELEMETRY** ───────────\n"
+            f"╭── 📡 **LIVE TELEMETRY** ───────────────\n"
             f"│ 📦 **Transferred:** `{readable_cur}` / `{readable_tot}`\n"
             f"│ 🚀 **Throughput:** `{speed_str}` (Live)\n"
             f"│ ⏱️ **Estimated:** `{eta_str}`\n"
-            f"│ 🛡️ **Shield:** `Active Stealth Protection`\n"
+            f"│ 🛡️ **Shield:** `Active Anti-Ban Stealth (Zero Trace)`\n"
             f"╰────────────────────────────────────────╯\n"
             f"⚡ _Engine: {self.engine_tag}_"
         )

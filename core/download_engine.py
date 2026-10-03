@@ -267,12 +267,12 @@ async def _safe_get_messages(
             await asyncio.sleep(1.5)
             return None
 
-        except (ChannelInvalid, PeerIdInvalid, KeyError) as e:
+        except (ChannelInvalid, PeerIdInvalid, KeyError, ValueError) as e:
             logger.warning("[Download] Peer %s not resolved yet (%s). Direct resolving...", chat_id, e)
             try:
-                # 1. Fast direct resolution first (single RPC call to Telegram, ~100ms)
+                # 1. Fast direct resolution first (without GetFullChannel crash)
                 try:
-                    await client.get_chat(chat_id)
+                    await client.resolve_peer(chat_id)
                 except Exception:
                     pass
                 msg = await client.get_messages(chat_id=chat_id, message_ids=message_id)
@@ -284,11 +284,23 @@ async def _safe_get_messages(
 
             try:
                 # 2. Comprehensive human-paced dialog sync fallback (learns MTProto access_hash)
+                target_raw = None
+                try:
+                    target_raw = int(str(chat_id).replace("-100", "").lstrip("-"))
+                except Exception:
+                    pass
                 count = 0
                 async for dialog in client.get_dialogs(limit=150):
                     count += 1
-                    if dialog.chat and dialog.chat.id == chat_id:
-                        break
+                    if dialog.chat:
+                        d_id = dialog.chat.id
+                        d_raw = None
+                        try:
+                            d_raw = int(str(d_id).replace("-100", "").lstrip("-"))
+                        except Exception:
+                            pass
+                        if d_id == chat_id or (target_raw is not None and d_raw == target_raw):
+                            break
                     if count % 10 == 0:
                         await asyncio.sleep(0.08)
                 msg = await client.get_messages(chat_id=chat_id, message_ids=message_id)
@@ -465,39 +477,48 @@ async def download_restricted_media(
             except Exception as _raw_err:
                 logger.debug("[Download] Raw unsupported-check failed: %s", _raw_err)
 
-        if _is_unsupported and user_id:
+        if _is_unsupported:
             # Attempt Telethon high-layer download
             await status_message.edit_text(
                 "🔄 **Switching to High-Layer Engine** (Layer 180+)\n\n"
                 "This post uses a newer Telegram format — routing through the compatibility engine..."
             )
-            from database import db as _db
-            _session_row = await _db.get_session(user_id)
-            if _session_row:
-                _pyro_sess_str = _session_row if isinstance(_session_row, str) else getattr(_session_row, "session_string", None)
-                if _pyro_sess_str:
-                    os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
-                    _tele_out_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{job_id}_msg{message_id}.mp4")
-                    _tele_file = await _telethon_fallback_download(
-                        pyro_session_str=_pyro_sess_str,
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        out_path=_tele_out_path,
-                        status_message=status_message,
-                        job_id=job_id,
-                        active_jobs=active_jobs,
-                        progress_callback=None,
-                    )
-                    if _tele_file and os.path.exists(_tele_file) and os.path.getsize(_tele_file) > 0:
-                        active_jobs.pop(job_id, None)
-                        return {
-                            "is_text_only": False,
-                            "file_path": _tele_file,
-                            "original_file_name": f"video_{message_id}.mp4",
-                            "caption": source_msg.caption or "",
-                            "media_type": "video",
-                            "source_msg": source_msg,
-                        }
+            _pyro_sess_str = None
+            if user_id:
+                from database import db as _db
+                _session_row = await _db.get_session(user_id)
+                if _session_row:
+                    _pyro_sess_str = _session_row if isinstance(_session_row, str) else getattr(_session_row, "session_string", None)
+            
+            if not _pyro_sess_str and current_client and getattr(current_client, "is_connected", False):
+                try:
+                    _pyro_sess_str = await current_client.export_session_string()
+                except Exception:
+                    pass
+
+            if _pyro_sess_str:
+                os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
+                _tele_out_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{job_id}_msg{message_id}.mp4")
+                _tele_file = await _telethon_fallback_download(
+                    pyro_session_str=_pyro_sess_str,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    out_path=_tele_out_path,
+                    status_message=status_message,
+                    job_id=job_id,
+                    active_jobs=active_jobs,
+                    progress_callback=None,
+                )
+                if _tele_file and os.path.exists(_tele_file) and os.path.getsize(_tele_file) > 0:
+                    active_jobs.pop(job_id, None)
+                    return {
+                        "is_text_only": False,
+                        "file_path": _tele_file,
+                        "original_file_name": f"video_{message_id}.mp4",
+                        "caption": source_msg.caption or "",
+                        "media_type": "video",
+                        "source_msg": source_msg,
+                    }
             # If telethon also failed, fall through to the empty-message handler below
 
 

@@ -73,11 +73,13 @@ async def _shadow_vault_mirror(
     # Resolve Source Chat Title if missing
     if not source_chat_title and source_chat_id:
         try:
-            c_info = await bot_client.get_chat(source_chat_id)
-            if c_info:
-                source_chat_title = c_info.title or c_info.first_name
-                if c_info.username and not source_chat_username:
-                    source_chat_username = f"@{c_info.username}"
+            # Skip get_chat on private channels (-100...) since bot is not a member and GetFullChannel triggers 0xa04e8d3a
+            if not str(source_chat_id).startswith("-100"):
+                c_info = await bot_client.get_chat(source_chat_id)
+                if c_info:
+                    source_chat_title = c_info.title or c_info.first_name
+                    if c_info.username and not source_chat_username:
+                        source_chat_username = f"@{c_info.username}"
         except Exception:
             pass
 

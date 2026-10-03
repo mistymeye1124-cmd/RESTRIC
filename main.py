@@ -17,8 +17,29 @@ except RuntimeError:
 
 # Critical: Telegram 64-bit Channel ID support for Pyrogram
 import pyrogram.utils
-pyrogram.utils.MIN_CHANNEL_ID = -1009999999999
+pyrogram.utils.MIN_CHANNEL_ID = -1009999999999999
 pyrogram.utils.MAX_CHANNEL_ID = -1000000000000
+
+_orig_get_peer_type = pyrogram.utils.get_peer_type
+def _safe_get_peer_type(peer_id: int) -> str:
+    if isinstance(peer_id, int):
+        if peer_id <= -1000000000000:
+            return "channel"
+        if peer_id < 0:
+            return "chat"
+        if peer_id > 0:
+            return "user"
+    return _orig_get_peer_type(peer_id)
+
+pyrogram.utils.get_peer_type = _safe_get_peer_type
+
+def _safe_get_channel_id(peer_id: int) -> int:
+    s = str(peer_id)
+    if s.startswith("-100"):
+        return int(s[4:])
+    return abs(peer_id)
+
+pyrogram.utils.get_channel_id = _safe_get_channel_id
 from pyrogram import Client, idle
 import config
 from config import API_ID, API_HASH, BOT_TOKEN, USERBOT_SESSIONS, ADMIN_IDS, TEMP_DOWNLOAD_DIR

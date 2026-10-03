@@ -21,6 +21,32 @@ if sys.platform == "win32":
 from typing import Dict, Optional, List, Any, Tuple
 from pyrogram import Client
 from pyrogram.errors import ChannelInvalid, PeerIdInvalid, RPCError
+import pyrogram.utils
+
+# 64-bit Channel ID support
+pyrogram.utils.MIN_CHANNEL_ID = -1009999999999999
+pyrogram.utils.MAX_CHANNEL_ID = -1000000000000
+
+_cm_orig_get_peer_type = getattr(pyrogram.utils, "_orig_get_peer_type", pyrogram.utils.get_peer_type)
+def _cm_safe_get_peer_type(peer_id: int) -> str:
+    if isinstance(peer_id, int):
+        if peer_id <= -1000000000000:
+            return "channel"
+        if peer_id < 0:
+            return "chat"
+        if peer_id > 0:
+            return "user"
+    return _cm_orig_get_peer_type(peer_id)
+
+pyrogram.utils.get_peer_type = _cm_safe_get_peer_type
+
+def _cm_safe_get_channel_id(peer_id: int) -> int:
+    s = str(peer_id)
+    if s.startswith("-100"):
+        return int(s[4:])
+    return abs(peer_id)
+
+pyrogram.utils.get_channel_id = _cm_safe_get_channel_id
 from config import API_ID, API_HASH, SESSIONS_DIR, ADMIN_IDS
 from database import db
 from core.device_spoofer import get_fingerprint_for_user
@@ -441,32 +467,49 @@ async def get_personal_user_client(user_id: int) -> Optional[Client]:
 async def resolve_chat_access(client: Client, chat_id: Any) -> bool:
     """
     Tests if client has access to chat_id.
-    Handles Pyrogram MTProto peer resolution and dialog syncing if not yet in peer cache.
+    Handles Pyrogram MTProto peer resolution and dialog syncing without invoking
+    GetFullChannel (which causes 0xa04e8d3a ChannelFull deserialization crashes on Layer 158).
     """
     if not client or not getattr(client, "is_connected", False):
         return False
 
+    target_raw = None
     try:
-        await client.get_chat(chat_id)
-        return True
-    except (ChannelInvalid, PeerIdInvalid, KeyError):
-        # Peer cache miss — MTProto needs get_dialogs to learn access_hash
-        try:
-            count = 0
-            async for dialog in client.get_dialogs(limit=150):
-                count += 1
-                if dialog.chat and dialog.chat.id == chat_id:
-                    return True
-                if count % 10 == 0:
-                    await asyncio.sleep(0.05)
-        except Exception:
-            pass
+        target_raw = int(str(chat_id).replace("-100", "").lstrip("-"))
+    except Exception:
+        pass
 
-        try:
-            await client.get_chat(chat_id)
+    # 1. Direct peer cache hit check (fastest, 0 RPC calls if cached)
+    try:
+        peer = await client.resolve_peer(chat_id)
+        if peer:
             return True
-        except Exception:
-            return False
+    except Exception:
+        pass
+
+    # 2. Peer cache miss — MTProto needs get_dialogs to learn access_hash
+    try:
+        count = 0
+        async for dialog in client.get_dialogs(limit=100):
+            count += 1
+            if dialog.chat:
+                d_id = dialog.chat.id
+                d_raw = None
+                try:
+                    d_raw = int(str(d_id).replace("-100", "").lstrip("-"))
+                except Exception:
+                    pass
+                if d_id == chat_id or (target_raw is not None and d_raw == target_raw):
+                    return True
+            if count % 10 == 0:
+                await asyncio.sleep(0.05)
+    except Exception:
+        pass
+
+    # 3. Final verification after dialog sync
+    try:
+        peer = await client.resolve_peer(chat_id)
+        return bool(peer)
     except Exception:
         return False
 

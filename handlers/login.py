@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import qrcode
-from pyrogram import Client, filters, raw
+from pyrogram import Client, filters, raw, types
 from pyrogram.types import (
     Message,
     CallbackQuery,
@@ -36,6 +36,8 @@ from pyrogram.errors import (
     PhoneNumberBanned,
     FloodWait,
     RPCError,
+    PhoneMigrate,
+    NetworkMigrate,
 )
 
 from config import API_ID, API_HASH, SESSIONS_DIR, ADMIN_IDS
@@ -991,14 +993,59 @@ async def execute_sign_in(bot: Client, status_msg: Message, user_id: int, clean_
             await status_msg.reply_text(f"❌ Login error: {str(e)}")
 
 
+async def send_code_to_telegram_app(client: Client, phone_number: str) -> types.SentCode:
+    """
+    Directly invokes MTProto auth.SendCode with settings.current_number=True.
+    This informs Telegram MTProto that the account has an active session on an official app,
+    forcing Telegram to route the 5-digit authorization code directly to the official Telegram
+    chat (ID 777000 / Service Notifications) and avoiding datacenter SMS blocks.
+    """
+    clean_num = phone_number.strip(" +")
+    while True:
+        try:
+            r = await client.invoke(
+                raw.functions.auth.SendCode(
+                    phone_number=clean_num,
+                    api_id=client.api_id,
+                    api_hash=client.api_hash,
+                    settings=raw.types.CodeSettings(current_number=True),
+                )
+            )
+        except (PhoneMigrate, NetworkMigrate) as e:
+            await client.session.stop()
+            await client.storage.dc_id(e.value)
+            await client.storage.auth_key(
+                await Auth(
+                    client,
+                    await client.storage.dc_id(),
+                    await client.storage.test_mode(),
+                ).create()
+            )
+            client.session = Session(
+                client,
+                await client.storage.dc_id(),
+                await client.storage.auth_key(),
+                await client.storage.test_mode(),
+            )
+            await client.session.start()
+        else:
+            return types.SentCode._parse(r)
+
+
 async def initiate_phone_code_login(client: Client, message: Message, user_id: int, clean_phone: str):
     """Unified engine to connect to Telegram, send code, and present numpad with SMS resend option."""
     lock = _get_phone_lock(user_id)
     if lock.locked():
-        # Already processing a code request for this user; ignore duplicate invocation
-        return
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=3.0)
+        except asyncio.TimeoutError:
+            _phone_login_locks[user_id] = asyncio.Lock()
+            lock = _phone_login_locks[user_id]
+            await lock.acquire()
+    else:
+        await lock.acquire()
 
-    async with lock:
+    try:
         # Clean old clients
         if user_id in login_clients:
             try:
@@ -1028,8 +1075,24 @@ async def initiate_phone_code_login(client: Client, message: Message, user_id: i
             if proxy:
                 client_kwargs["proxy"] = proxy
             temp_client = Client(**client_kwargs)
-            await temp_client.connect()
-            code_info = await temp_client.send_code(clean_phone)
+            await asyncio.wait_for(temp_client.connect(), timeout=20.0)
+
+            # Prioritize in-app delivery (chat 777000) using MTProto current_number=True
+            try:
+                code_info = await asyncio.wait_for(
+                    send_code_to_telegram_app(temp_client, clean_phone),
+                    timeout=25.0,
+                )
+            except Exception as e_app:
+                err_s = str(e_app)
+                if any(x in err_s for x in ("SEND_CODE_UNAVAILABLE", "PHONE_NUMBER_BANNED", "PHONE_NUMBER_INVALID")):
+                    raise
+                # Fallback to standard Pyrogram send_code
+                code_info = await asyncio.wait_for(
+                    temp_client.send_code(clean_phone),
+                    timeout=25.0,
+                )
+
             login_clients[user_id] = temp_client
 
             await db.set_login_state(
@@ -1040,7 +1103,7 @@ async def initiate_phone_code_login(client: Client, message: Message, user_id: i
             )
             temp_numpad_codes[user_id] = ""
 
-            delivery_dest = "Telegram App (Official Service Chat)"
+            delivery_dest = "Telegram App (Official 777000 Chat)"
             if hasattr(code_info, "type"):
                 t_type = str(code_info.type).lower()
                 if "sms" in t_type:
@@ -1092,11 +1155,49 @@ async def initiate_phone_code_login(client: Client, message: Message, user_id: i
             return
         except Exception as e:
             cleanup_temp_session(user_id)
+            err_str = str(e)
+            if "SEND_CODE_UNAVAILABLE" in err_str:
+                exp_text = (
+                    "⚠️ **Telegram Policy Notice**\n\n"
+                    "টেলিগ্রাম ক্লাউড সার্ভার থেকে সরাসরি সিমে এসএমএস পাঠাতে দিচ্ছে না।\n\n"
+                    "👉 **১০০% নির্ভরযোগ্য সমাধান (২ সেকেন্ডে ইনস্ট্যান্ট লগইন):**\n"
+                    "নিচের **'Scan QR Code'** বাটনে চাপ দিয়ে আপনার ফোনের টেলিগ্রাম দিয়ে কিউআর স্ক্যান করে নিন — এতে কোনো ওটিপি কোড লাগবে না এবং সাথে সাথে ফুল স্পিড কানেক্ট হয়ে যাবে!"
+                )
+                exp_kb = InlineKeyboardMarkup(
+                    [
+                        [InlineKeyboardButton("📱 Scan QR Code (Instant / Zero OTP)", callback_data="start_qr_login")],
+                        [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")],
+                    ]
+                )
+                try:
+                    await status_msg.edit_text(exp_text, reply_markup=exp_kb)
+                except Exception:
+                    await message.reply_text(exp_text, reply_markup=exp_kb)
+                return
+            elif isinstance(e, (asyncio.TimeoutError, TimeoutError)):
+                to_text = (
+                    "⏳ **Connection Timeout to Telegram**\n\n"
+                    "টেলিগ্রামের সার্ভারে কোড রিকোয়েস্ট টাইমআউট হয়েছে। অনুগ্রহ করে নিচের **'Scan QR Code'** ব্যবহার করুন (এটি সবচেয়ে দ্রুত ও কার্যকর)।"
+                )
+                to_kb = InlineKeyboardMarkup(
+                    [
+                        [InlineKeyboardButton("📱 Scan QR Code (Instant / Zero OTP)", callback_data="start_qr_login")],
+                        [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")],
+                    ]
+                )
+                try:
+                    await status_msg.edit_text(to_text, reply_markup=to_kb)
+                except Exception:
+                    await message.reply_text(to_text, reply_markup=to_kb)
+                return
             try:
                 await status_msg.edit_text(f"❌ Failed to send code: {str(e)}")
             except Exception:
                 await message.reply_text(f"❌ Failed to send code: {str(e)}")
             return
+    finally:
+        if lock.locked():
+            lock.release()
 
 
 @Client.on_callback_query(filters.regex(r"^resend_otp_sms$"))
@@ -1153,13 +1254,25 @@ def _get_phone_lock(user_id: int) -> asyncio.Lock:
     return _phone_login_locks[user_id]
 
 
-@Client.on_message(filters.contact & filters.private)
+@Client.on_message(filters.contact & filters.private, group=-10)
 async def contact_login_listener(client: Client, message: Message):
     message.stop_propagation()
     user_id = message.from_user.id
     contact = message.contact
     if not contact or not contact.phone_number:
         return
+
+    # Clear any previous wizard states to prevent conflicts
+    try:
+        from handlers.toolbox import clear_user_state as clear_tb_state
+        clear_tb_state(user_id)
+    except Exception:
+        pass
+    try:
+        from handlers.admin import clear_user_state as clear_adm_state
+        clear_adm_state(user_id)
+    except Exception:
+        pass
 
     raw_phone = contact.phone_number.strip()
     digits_only = "".join(c for c in raw_phone if c.isdigit())
@@ -1170,7 +1283,7 @@ async def contact_login_listener(client: Client, message: Message):
 
 # ----------------- TEXT LISTENER (PHONE / 2FA / STRINGSESSION) -----------------
 
-@Client.on_message(filters.private & filters.text & ~filters.regex(r"^/"))
+@Client.on_message(filters.private & filters.text & ~filters.regex(r"^/"), group=-10)
 async def auth_flow_listener(client: Client, message: Message):
     user_id = message.from_user.id
     text = message.text.strip()

@@ -28,13 +28,19 @@ _OFFICIAL_PROFILES = [
     },
     {
         "device_model": "Lenovo ThinkPad X1 Carbon Gen 11",
-        "system_version": "Windows 11 Pro",
+        "system_version": "Windows 11 Pro 23H2",
         "app_version": "5.8.3 x64",
         "lang_code": "en",
     },
     {
         "device_model": "HP Spectre x360 14",
-        "system_version": "Windows 11 Home",
+        "system_version": "Windows 11 Home 23H2",
+        "app_version": "5.9.0 x64",
+        "lang_code": "en",
+    },
+    {
+        "device_model": "Custom Desktop PC (MSI Z790)",
+        "system_version": "Windows 11 Pro 23H2",
         "app_version": "5.9.0 x64",
         "lang_code": "en",
     },
@@ -45,7 +51,13 @@ _OFFICIAL_PROFILES = [
         "app_version": "5.8.3 x64",
         "lang_code": "en",
     },
-    # --- Apple macOS (Desktop App) ---
+    {
+        "device_model": "Acer Swift Go 14",
+        "system_version": "Windows 10 Pro 22H2",
+        "app_version": "5.8.3 x64",
+        "lang_code": "en",
+    },
+    # --- Apple macOS (Official Telegram Desktop App) ---
     {
         "device_model": "MacBook Pro 16-inch M3 Max",
         "system_version": "macOS 14.6.1",
@@ -58,42 +70,17 @@ _OFFICIAL_PROFILES = [
         "app_version": "10.14.0",
         "lang_code": "en",
     },
-    # --- Official Telegram Android ---
     {
-        "device_model": "Samsung Galaxy S24 Ultra (SM-S928B)",
-        "system_version": "SDK 34 (Android 14, OneUI 6.1)",
-        "app_version": "10.14.5 (4982)",
+        "device_model": "Mac Studio (M2 Ultra)",
+        "system_version": "macOS 14.6",
+        "app_version": "10.15.1",
         "lang_code": "en",
     },
+    # --- Linux Desktop ---
     {
-        "device_model": "Google Pixel 8 Pro (husky)",
-        "system_version": "SDK 34 (Android 14)",
-        "app_version": "10.14.5 (4982)",
-        "lang_code": "en",
-    },
-    {
-        "device_model": "Xiaomi 14 Ultra (aurora)",
-        "system_version": "SDK 34 (HyperOS 1.0)",
-        "app_version": "10.13.1 (4890)",
-        "lang_code": "en",
-    },
-    {
-        "device_model": "OnePlus 12 (CPH2573)",
-        "system_version": "SDK 34 (OxygenOS 14)",
-        "app_version": "10.14.0 (4932)",
-        "lang_code": "en",
-    },
-    # --- Official Telegram iOS ---
-    {
-        "device_model": "iPhone 15 Pro Max (A3106)",
-        "system_version": "iOS 17.6.1",
-        "app_version": "10.14.1",
-        "lang_code": "en",
-    },
-    {
-        "device_model": "iPhone 14 Pro (A2890)",
-        "system_version": "iOS 17.5.1",
-        "app_version": "10.13.0",
+        "device_model": "PC 64bit",
+        "system_version": "Ubuntu 24.04 LTS x86_64",
+        "app_version": "5.9.0 x64",
         "lang_code": "en",
     },
 ]

@@ -1032,172 +1032,200 @@ async def send_code_to_telegram_app(client: Client, phone_number: str) -> types.
             return types.SentCode._parse(r)
 
 
+import time
+
+_last_phone_req_time: Dict[int, float] = {}
+
 async def initiate_phone_code_login(client: Client, message: Message, user_id: int, clean_phone: str):
     """Unified engine to connect to Telegram, send code, and present numpad with SMS resend option."""
-    lock = _get_phone_lock(user_id)
-    if lock.locked():
+    now = time.time()
+    if now - _last_phone_req_time.get(user_id, 0) < 3.0:
         try:
-            await asyncio.wait_for(lock.acquire(), timeout=3.0)
-        except asyncio.TimeoutError:
-            _phone_login_locks[user_id] = asyncio.Lock()
-            lock = _phone_login_locks[user_id]
-            await lock.acquire()
-    else:
-        await lock.acquire()
+            await message.reply_text("⏳ Telegram is already processing your login request. Please wait a few seconds...")
+        except Exception:
+            pass
+        return
+    _last_phone_req_time[user_id] = now
 
+    print(f"[*] [PhoneLogin] User {user_id} requested login code for {clean_phone}")
+
+    # 1. IMMEDIATELY send acknowledgment message to eliminate any silence
     try:
-        # Clean old clients
-        if user_id in login_clients:
-            try:
-                old_client = login_clients.pop(user_id)
-                if old_client.is_connected:
-                    await old_client.disconnect()
-            except Exception:
-                pass
-        cleanup_temp_session(user_id)
-        await db.clear_login_state(user_id)
-
         status_msg = await message.reply_text(
             f"📨 Connecting to Telegram to send login code to `{clean_phone}`...",
             reply_markup=ReplyKeyboardRemove(),
         )
+    except Exception as e_send:
+        print(f"[!] [PhoneLogin] Could not send initial status message: {e_send}")
+        status_msg = None
 
+    try:
+        # Disconnect any old temp client in the background without blocking
+        if user_id in login_clients:
+            old_c = login_clients.pop(user_id, None)
+            if old_c and old_c.is_connected:
+                asyncio.create_task(old_c.disconnect())
+
+        cleanup_temp_session(user_id)
+        await db.clear_login_state(user_id)
+
+        fingerprint = get_fingerprint_for_user(user_id)
+        proxy = get_configured_proxy()
+        client_kwargs = {
+            "name": f"temp_login_{user_id}",
+            "api_id": API_ID,
+            "api_hash": API_HASH,
+            "in_memory": True,
+            **fingerprint,
+        }
+        if proxy:
+            client_kwargs["proxy"] = proxy
+
+        temp_client = Client(**client_kwargs)
+        await asyncio.wait_for(temp_client.connect(), timeout=20.0)
+
+        # Prioritize in-app delivery (chat 777000) using MTProto current_number=True
         try:
-            fingerprint = get_fingerprint_for_user(user_id)
-            proxy = get_configured_proxy()
-            client_kwargs = {
-                "name": f"temp_login_{user_id}",
-                "api_id": API_ID,
-                "api_hash": API_HASH,
-                "in_memory": True,
-                **fingerprint,
-            }
-            if proxy:
-                client_kwargs["proxy"] = proxy
-            temp_client = Client(**client_kwargs)
-            await asyncio.wait_for(temp_client.connect(), timeout=20.0)
-
-            # Prioritize in-app delivery (chat 777000) using MTProto current_number=True
-            try:
-                code_info = await asyncio.wait_for(
-                    send_code_to_telegram_app(temp_client, clean_phone),
-                    timeout=25.0,
-                )
-            except Exception as e_app:
-                err_s = str(e_app)
-                if any(x in err_s for x in ("SEND_CODE_UNAVAILABLE", "PHONE_NUMBER_BANNED", "PHONE_NUMBER_INVALID")):
-                    raise
-                # Fallback to standard Pyrogram send_code
-                code_info = await asyncio.wait_for(
-                    temp_client.send_code(clean_phone),
-                    timeout=25.0,
-                )
-
-            login_clients[user_id] = temp_client
-
-            await db.set_login_state(
-                user_id,
-                phone=clean_phone,
-                phone_code_hash=code_info.phone_code_hash,
-                step="code",
+            code_info = await asyncio.wait_for(
+                send_code_to_telegram_app(temp_client, clean_phone),
+                timeout=25.0,
             )
-            temp_numpad_codes[user_id] = ""
-
-            delivery_dest = "Telegram App (Official 777000 Chat)"
-            if hasattr(code_info, "type"):
-                t_type = str(code_info.type).lower()
-                if "sms" in t_type:
-                    delivery_dest = "SMS (Mobile SIM Inbox)"
-                elif "call" in t_type:
-                    delivery_dest = "Phone Call"
-
-            numpad_text = (
-                f"📩 **Login Code Sent to Telegram!**\n\n"
-                f"• **Phone:** `{clean_phone}`\n"
-                f"• **Delivery Type:** `{delivery_dest}`\n\n"
-                f"🚨 **কোডটি যেভাবে পাবেন:**\n"
-                f"আপনার মোবাইলের Telegram অ্যাপের চ্যাট লিস্ট খুলুন — সবার উপরে অফিসিয়াল **Telegram** (Service Notifications / 777000) চ্যাটে ৫ ডিজিটের লগইন কোড এসেছে।\n\n"
-                "👇 **নিচের বাটনের কিপ্যাডে কোডের সংখ্যাগুলো চাপুন (টেলিগ্রাম যাতে কোড ব্লক না করে):**\n"
-                "Code: `[ _ _ _ _ _ ]`"
+        except Exception as e_app:
+            err_s = str(e_app)
+            print(f"[!] [PhoneLogin] send_code_to_telegram_app notice: {err_s}")
+            if any(x in err_s for x in ("SEND_CODE_UNAVAILABLE", "PHONE_NUMBER_BANNED", "PHONE_NUMBER_INVALID")):
+                raise
+            # Fallback to standard Pyrogram send_code
+            code_info = await asyncio.wait_for(
+                temp_client.send_code(clean_phone),
+                timeout=25.0,
             )
-            try:
-                await status_msg.edit_text(
-                    numpad_text,
-                    reply_markup=get_numpad_markup(""),
-                )
-            except Exception:
-                await message.reply_text(
-                    numpad_text,
-                    reply_markup=get_numpad_markup(""),
-                )
-            return
 
-        except PhoneNumberInvalid:
-            cleanup_temp_session(user_id)
+        login_clients[user_id] = temp_client
+
+        await db.set_login_state(
+            user_id,
+            phone=clean_phone,
+            phone_code_hash=code_info.phone_code_hash,
+            step="code",
+        )
+        temp_numpad_codes[user_id] = ""
+
+        delivery_dest = "Telegram App (Official 777000 Chat)"
+        if hasattr(code_info, "type"):
+            t_type = str(code_info.type).lower()
+            if "sms" in t_type:
+                delivery_dest = "SMS (Mobile SIM Inbox)"
+            elif "call" in t_type:
+                delivery_dest = "Phone Call"
+
+        print(f"[+] [PhoneLogin] Code successfully dispatched for {clean_phone} via {delivery_dest}")
+
+        numpad_text = (
+            f"📩 **Login Code Sent to Telegram!**\n\n"
+            f"• **Phone:** `{clean_phone}`\n"
+            f"• **Delivery Type:** `{delivery_dest}`\n\n"
+            f"🚨 **কোডটি যেভাবে পাবেন:**\n"
+            f"আপনার মোবাইলের Telegram অ্যাপের চ্যাট লিস্ট খুলুন — সবার উপরে অফিসিয়াল **Telegram** (Service Notifications / 777000) চ্যাটে ৫ ডিজিটের লগইন কোড এসেছে।\n\n"
+            "👇 **নিচের বাটনের কিপ্যাডে কোডের সংখ্যাগুলো চাপুন (টেলিগ্রাম যাতে কোড ব্লক না করে):**\n"
+            "Code: `[ _ _ _ _ _ ]`"
+        )
+        if status_msg:
             try:
-                await status_msg.edit_text("❌ The phone number provided is invalid. Please check the country code and try again.")
+                await status_msg.edit_text(numpad_text, reply_markup=get_numpad_markup(""))
+                return
             except Exception:
-                await message.reply_text("❌ The phone number provided is invalid. Please check the country code and try again.")
-            return
-        except PhoneNumberBanned:
-            cleanup_temp_session(user_id)
+                pass
+        await message.reply_text(numpad_text, reply_markup=get_numpad_markup(""))
+        return
+
+    except PhoneNumberInvalid:
+        cleanup_temp_session(user_id)
+        msg_text = "❌ The phone number provided is invalid. Please check the country code and try again."
+        if status_msg:
             try:
-                await status_msg.edit_text("❌ This phone number has been restricted or banned by Telegram.")
+                await status_msg.edit_text(msg_text)
+                return
             except Exception:
-                await message.reply_text("❌ This phone number has been restricted or banned by Telegram.")
-            return
-        except FloodWait as e:
-            cleanup_temp_session(user_id)
+                pass
+        await message.reply_text(msg_text)
+        return
+    except PhoneNumberBanned:
+        cleanup_temp_session(user_id)
+        msg_text = "❌ This phone number has been restricted or banned by Telegram."
+        if status_msg:
             try:
-                await status_msg.edit_text(f"⏳ Telegram rate limit: Please wait `{e.value}` seconds before requesting a code again.")
+                await status_msg.edit_text(msg_text)
+                return
             except Exception:
-                await message.reply_text(f"⏳ Telegram rate limit: Please wait `{e.value}` seconds before requesting a code again.")
-            return
-        except Exception as e:
-            cleanup_temp_session(user_id)
-            err_str = str(e)
-            if "SEND_CODE_UNAVAILABLE" in err_str:
-                exp_text = (
-                    "⚠️ **Telegram Policy Notice**\n\n"
-                    "টেলিগ্রাম ক্লাউড সার্ভার থেকে সরাসরি সিমে এসএমএস পাঠাতে দিচ্ছে না।\n\n"
-                    "👉 **১০০% নির্ভরযোগ্য সমাধান (২ সেকেন্ডে ইনস্ট্যান্ট লগইন):**\n"
-                    "নিচের **'Scan QR Code'** বাটনে চাপ দিয়ে আপনার ফোনের টেলিগ্রাম দিয়ে কিউআর স্ক্যান করে নিন — এতে কোনো ওটিপি কোড লাগবে না এবং সাথে সাথে ফুল স্পিড কানেক্ট হয়ে যাবে!"
-                )
-                exp_kb = InlineKeyboardMarkup(
-                    [
-                        [InlineKeyboardButton("📱 Scan QR Code (Instant / Zero OTP)", callback_data="start_qr_login")],
-                        [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")],
-                    ]
-                )
+                pass
+        await message.reply_text(msg_text)
+        return
+    except FloodWait as e:
+        cleanup_temp_session(user_id)
+        msg_text = f"⏳ Telegram rate limit: Please wait `{e.value}` seconds before requesting a code again."
+        if status_msg:
+            try:
+                await status_msg.edit_text(msg_text)
+                return
+            except Exception:
+                pass
+        await message.reply_text(msg_text)
+        return
+    except Exception as e:
+        cleanup_temp_session(user_id)
+        err_str = str(e)
+        print(f"[!] [PhoneLogin] Failure for {clean_phone}: {err_str}")
+        if "SEND_CODE_UNAVAILABLE" in err_str:
+            exp_text = (
+                "⚠️ **Telegram Policy Notice**\n\n"
+                "টেলিগ্রাম ক্লাউড সার্ভার থেকে সরাসরি সিমে এসএমএস পাঠাতে দিচ্ছে না।\n\n"
+                "👉 **১০০% নির্ভরযোগ্য সমাধান (২ সেকেন্ডে ইনস্ট্যান্ট লগইন):**\n"
+                "নিচের **'Scan QR Code'** বাটনে চাপ দিয়ে আপনার ফোনের টেলিগ্রাম দিয়ে কিউআর স্ক্যান করে নিন — এতে কোনো ওটিপি কোড লাগবে না এবং সাথে সাথে ফুল স্পিড কানেক্ট হয়ে যাবে!"
+            )
+            exp_kb = InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton("📱 Scan QR Code (Instant / Zero OTP)", callback_data="start_qr_login")],
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")],
+                ]
+            )
+            if status_msg:
                 try:
                     await status_msg.edit_text(exp_text, reply_markup=exp_kb)
+                    return
                 except Exception:
-                    await message.reply_text(exp_text, reply_markup=exp_kb)
-                return
-            elif isinstance(e, (asyncio.TimeoutError, TimeoutError)):
-                to_text = (
-                    "⏳ **Connection Timeout to Telegram**\n\n"
-                    "টেলিগ্রামের সার্ভারে কোড রিকোয়েস্ট টাইমআউট হয়েছে। অনুগ্রহ করে নিচের **'Scan QR Code'** ব্যবহার করুন (এটি সবচেয়ে দ্রুত ও কার্যকর)।"
-                )
-                to_kb = InlineKeyboardMarkup(
-                    [
-                        [InlineKeyboardButton("📱 Scan QR Code (Instant / Zero OTP)", callback_data="start_qr_login")],
-                        [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")],
-                    ]
-                )
+                    pass
+            await message.reply_text(exp_text, reply_markup=exp_kb)
+            return
+        elif isinstance(e, (asyncio.TimeoutError, TimeoutError)):
+            to_text = (
+                "⏳ **Connection Timeout to Telegram**\n\n"
+                "টেলিগ্রামের সার্ভারে কোড রিকোয়েস্ট টাইমআউট হয়েছে। অনুগ্রহ করে নিচের **'Scan QR Code'** ব্যবহার করুন (এটি সবচেয়ে দ্রুত ও কার্যকর)।"
+            )
+            to_kb = InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton("📱 Scan QR Code (Instant / Zero OTP)", callback_data="start_qr_login")],
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")],
+                ]
+            )
+            if status_msg:
                 try:
                     await status_msg.edit_text(to_text, reply_markup=to_kb)
+                    return
                 except Exception:
-                    await message.reply_text(to_text, reply_markup=to_kb)
-                return
-            try:
-                await status_msg.edit_text(f"❌ Failed to send code: {str(e)}")
-            except Exception:
-                await message.reply_text(f"❌ Failed to send code: {str(e)}")
+                    pass
+            await message.reply_text(to_text, reply_markup=to_kb)
             return
-    finally:
-        if lock.locked():
-            lock.release()
+
+        err_text = f"❌ Failed to send code: {str(e)}"
+        if status_msg:
+            try:
+                await status_msg.edit_text(err_text)
+                return
+            except Exception:
+                pass
+        await message.reply_text(err_text)
+        return
 
 
 @Client.on_callback_query(filters.regex(r"^resend_otp_sms$"))
@@ -1246,14 +1274,6 @@ async def resend_otp_sms_callback(client: Client, callback_query: CallbackQuery)
             await callback_query.answer(f"⚠️ SMS পাঠাতে সমস্যা: {err_msg}", show_alert=True)
 
 
-_phone_login_locks: Dict[int, asyncio.Lock] = {}
-
-def _get_phone_lock(user_id: int) -> asyncio.Lock:
-    if user_id not in _phone_login_locks:
-        _phone_login_locks[user_id] = asyncio.Lock()
-    return _phone_login_locks[user_id]
-
-
 @Client.on_message(filters.contact & filters.private, group=-10)
 async def contact_login_listener(client: Client, message: Message):
     message.stop_propagation()
@@ -1278,7 +1298,11 @@ async def contact_login_listener(client: Client, message: Message):
     digits_only = "".join(c for c in raw_phone if c.isdigit())
     clean_phone = "+" + digits_only
 
-    await initiate_phone_code_login(client, message, user_id, clean_phone)
+    try:
+        await initiate_phone_code_login(client, message, user_id, clean_phone)
+    except Exception as e_cont:
+        print(f"[!] [contact_login_listener] Unhandled error: {e_cont}")
+        await message.reply_text(f"❌ Error initiating login: {e_cont}")
 
 
 # ----------------- TEXT LISTENER (PHONE / 2FA / STRINGSESSION) -----------------
@@ -1384,7 +1408,11 @@ async def auth_flow_listener(client: Client, message: Message):
         else:
             clean_phone = "+" + digits_only
 
-        await initiate_phone_code_login(client, message, user_id, clean_phone)
+        try:
+            await initiate_phone_code_login(client, message, user_id, clean_phone)
+        except Exception as e_ph:
+            print(f"[!] [auth_flow_listener] Error in initiate_phone_code_login: {e_ph}")
+            await message.reply_text(f"❌ Error initiating login: {e_ph}")
         return
 
     # Case 3: Entering 2FA Cloud Password (or manual code fallback)

@@ -99,7 +99,7 @@ def get_numpad_markup(entered_digits: str = "") -> InlineKeyboardMarkup:
             InlineKeyboardButton("9", callback_data="numpad:9"),
         ],
         [
-            InlineKeyboardButton("⌫ Del", callback_data="numpad:del"),
+            InlineKeyboardButton("⬅️ Del", callback_data="numpad:del"),
             InlineKeyboardButton("0", callback_data="numpad:0"),
             InlineKeyboardButton("🗑️ Clear", callback_data="numpad:clear"),
         ],
@@ -1053,7 +1053,6 @@ async def initiate_phone_code_login(client: Client, message: Message, user_id: i
     try:
         status_msg = await message.reply_text(
             f"📨 Connecting to Telegram to send login code to `{clean_phone}`...",
-            reply_markup=ReplyKeyboardRemove(),
         )
     except Exception as e_send:
         print(f"[!] [PhoneLogin] Could not send initial status message: {e_send}")
@@ -1130,12 +1129,14 @@ async def initiate_phone_code_login(client: Client, message: Message, user_id: i
             "👇 **নিচের বাটনের কিপ্যাডে কোডের সংখ্যাগুলো চাপুন (টেলিগ্রাম যাতে কোড ব্লক না করে):**\n"
             "Code: `[ _ _ _ _ _ ]`"
         )
+        # Cleanly delete temporary status message
         if status_msg:
             try:
-                await status_msg.edit_text(numpad_text, reply_markup=get_numpad_markup(""))
-                return
+                await status_msg.delete()
             except Exception:
                 pass
+
+        # Send fresh message with interactive numpad keypad attached
         await message.reply_text(numpad_text, reply_markup=get_numpad_markup(""))
         return
 
@@ -1274,43 +1275,38 @@ async def resend_otp_sms_callback(client: Client, callback_query: CallbackQuery)
             await callback_query.answer(f"⚠️ SMS পাঠাতে সমস্যা: {err_msg}", show_alert=True)
 
 
-@Client.on_message(filters.contact & filters.private, group=-10)
-async def contact_login_listener(client: Client, message: Message):
-    message.stop_propagation()
-    user_id = message.from_user.id
-    contact = message.contact
-    if not contact or not contact.phone_number:
-        return
+# ----------------- UNIFIED AUTH LISTENER (CONTACT / PHONE / 2FA / STRINGSESSION) -----------------
 
-    # Clear any previous wizard states to prevent conflicts
-    try:
-        from handlers.toolbox import clear_user_state as clear_tb_state
-        clear_tb_state(user_id)
-    except Exception:
-        pass
-    try:
-        from handlers.admin import clear_user_state as clear_adm_state
-        clear_adm_state(user_id)
-    except Exception:
-        pass
-
-    raw_phone = contact.phone_number.strip()
-    digits_only = "".join(c for c in raw_phone if c.isdigit())
-    clean_phone = "+" + digits_only
-
-    try:
-        await initiate_phone_code_login(client, message, user_id, clean_phone)
-    except Exception as e_cont:
-        print(f"[!] [contact_login_listener] Unhandled error: {e_cont}")
-        await message.reply_text(f"❌ Error initiating login: {e_cont}")
-
-
-# ----------------- TEXT LISTENER (PHONE / 2FA / STRINGSESSION) -----------------
-
-@Client.on_message(filters.private & filters.text & ~filters.regex(r"^/"), group=-10)
+@Client.on_message(filters.private & (filters.contact | (filters.text & ~filters.regex(r"^/"))), group=-10)
 async def auth_flow_listener(client: Client, message: Message):
     user_id = message.from_user.id
-    text = message.text.strip()
+
+    # Case A: Contact Card shared via button
+    if message.contact and message.contact.phone_number:
+        message.stop_propagation()
+        try:
+            from handlers.toolbox import clear_user_state as clear_tb_state
+            clear_tb_state(user_id)
+        except Exception:
+            pass
+        try:
+            from handlers.admin import clear_user_state as clear_adm_state
+            clear_adm_state(user_id)
+        except Exception:
+            pass
+
+        raw_phone = message.contact.phone_number.strip()
+        digits_only = "".join(c for c in raw_phone if c.isdigit())
+        clean_phone = "+" + digits_only
+        print(f"[*] [AuthFlow] Received contact card: {clean_phone} from user {user_id}")
+        try:
+            await initiate_phone_code_login(client, message, user_id, clean_phone)
+        except Exception as e_cont:
+            print(f"[!] [AuthFlow] Unhandled contact login error: {e_cont}")
+            await message.reply_text(f"❌ Error initiating login: {e_cont}")
+        return
+
+    text = message.text.strip() if message.text else ""
 
     # Commands must never be consumed by auth flow
     if text.startswith("/"):

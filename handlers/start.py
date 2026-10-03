@@ -314,7 +314,10 @@ async def render_start_card(client: Client, user_id: int, first_name: str):
 
     if user_id in ADMIN_IDS:
         markup_buttons.append([
+            InlineKeyboardButton("⚡ 👥 Worker Accounts", callback_data="view_my_accounts"),
             InlineKeyboardButton("👑 Master Admin Panel", callback_data="adm_open_panel"),
+        ])
+        markup_buttons.append([
             InlineKeyboardButton("🔄 Switch Test Mode", callback_data="adm_view_mode_menu"),
         ])
 

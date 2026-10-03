@@ -34,12 +34,26 @@ def _safe_get_peer_type(peer_id: int) -> str:
 pyrogram.utils.get_peer_type = _safe_get_peer_type
 
 def _safe_get_channel_id(peer_id: int) -> int:
-    s = str(peer_id)
-    if s.startswith("-100"):
-        return int(s[4:])
-    return abs(peer_id)
+    return -1000000000000 - peer_id
 
 pyrogram.utils.get_channel_id = _safe_get_channel_id
+
+# Critical: 64-bit peer resolution in Pyrogram SQLiteStorage
+from pyrogram.storage.sqlite_storage import SQLiteStorage
+_orig_get_peer_by_id = SQLiteStorage.get_peer_by_id
+
+async def _safe_get_peer_by_id(self, peer_id: int):
+    try:
+        return await _orig_get_peer_by_id(self, peer_id)
+    except KeyError:
+        s = str(peer_id)
+        if s.startswith("-100"):
+            alt_id = int(s[4:])
+        else:
+            alt_id = -int(f"100{abs(peer_id)}")
+        return await _orig_get_peer_by_id(self, alt_id)
+
+SQLiteStorage.get_peer_by_id = _safe_get_peer_by_id
 from pyrogram import Client, idle
 import config
 from config import API_ID, API_HASH, BOT_TOKEN, USERBOT_SESSIONS, ADMIN_IDS, TEMP_DOWNLOAD_DIR

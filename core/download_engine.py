@@ -44,6 +44,45 @@ from config import TEMP_DOWNLOAD_DIR
 from core.progress import ProgressTracker, get_progress_markup
 from core.rate_limiter import rate_registry
 from core.client_manager import get_next_available_pool_client, handle_dead_session, mark_account_flood_wait
+import pyrogram.utils
+from pyrogram.storage.sqlite_storage import SQLiteStorage
+
+# Ensure 64-bit Channel ID support
+pyrogram.utils.MIN_CHANNEL_ID = -1009999999999999
+pyrogram.utils.MAX_CHANNEL_ID = -1000000000000
+
+_de_orig_get_peer_type = getattr(pyrogram.utils, "_orig_get_peer_type", pyrogram.utils.get_peer_type)
+def _de_safe_get_peer_type(peer_id: int) -> str:
+    if isinstance(peer_id, int):
+        if peer_id <= -1000000000000:
+            return "channel"
+        if peer_id < 0:
+            return "chat"
+        if peer_id > 0:
+            return "user"
+    return _de_orig_get_peer_type(peer_id)
+
+pyrogram.utils.get_peer_type = _de_safe_get_peer_type
+
+def _de_safe_get_channel_id(peer_id: int) -> int:
+    return -1000000000000 - peer_id
+
+pyrogram.utils.get_channel_id = _de_safe_get_channel_id
+
+_de_orig_get_peer_by_id = getattr(SQLiteStorage, "_orig_get_peer_by_id", SQLiteStorage.get_peer_by_id)
+async def _de_safe_get_peer_by_id(self, peer_id: int):
+    try:
+        return await _de_orig_get_peer_by_id(self, peer_id)
+    except KeyError:
+        s = str(peer_id)
+        if s.startswith("-100"):
+            alt_id = int(s[4:])
+        else:
+            alt_id = -int(f"100{abs(peer_id)}")
+        return await _de_orig_get_peer_by_id(self, alt_id)
+
+SQLiteStorage._orig_get_peer_by_id = _de_orig_get_peer_by_id
+SQLiteStorage.get_peer_by_id = _de_safe_get_peer_by_id
 
 logger = logging.getLogger(__name__)
 
@@ -431,6 +470,50 @@ async def download_restricted_media(
                         break
 
         if source_msg is None:
+            # Pyrogram failed to fetch message (e.g. unknown Layer 170+ constructor). Fallback to Telethon High-Layer Engine (Layer 229)
+            _pyro_sess_str = None
+            if user_id:
+                from database import db as _db
+                _session_row = await _db.get_session(user_id)
+                if _session_row:
+                    _pyro_sess_str = _session_row if isinstance(_session_row, str) else getattr(_session_row, "session_string", None)
+            if not _pyro_sess_str and current_client and getattr(current_client, "is_connected", False):
+                try:
+                    _pyro_sess_str = await current_client.export_session_string()
+                except Exception:
+                    pass
+
+            if _pyro_sess_str:
+                try:
+                    await status_message.edit_text(
+                        "🔄 **Switching to High-Layer Engine** (Layer 180+)\n\n"
+                        "Routing through the high-speed compatibility engine..."
+                    )
+                    os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
+                    _tele_out_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{job_id}_msg{message_id}.mp4")
+                    _tele_file = await _telethon_fallback_download(
+                        pyro_session_str=_pyro_sess_str,
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        out_path=_tele_out_path,
+                        status_message=status_message,
+                        job_id=job_id,
+                        active_jobs=active_jobs,
+                        progress_callback=tracker.on_progress,
+                    )
+                    if _tele_file and os.path.exists(_tele_file) and os.path.getsize(_tele_file) > 0:
+                        active_jobs.pop(job_id, None)
+                        return {
+                            "is_text_only": False,
+                            "file_path": _tele_file,
+                            "original_file_name": f"video_{message_id}.mp4",
+                            "caption": "",
+                            "media_type": "video",
+                            "source_msg": None,
+                        }
+                except Exception as _tele_err:
+                    logger.debug("[Download] Telethon fallback for None msg: %s", _tele_err)
+
             await status_message.edit_text(
                 "❌ **Could not retrieve this message.**\n\n"
                 "Possible reasons:\n"
@@ -454,35 +537,13 @@ async def download_restricted_media(
             or source_msg.sticker
         )
 
-        # ── Telethon Fallback for MessageMediaUnsupported ──────────────────────
-        # Pyrogram (Layer 158) sets source_msg.media = None for messages created
-        # with newer Telegram MTProto layers (170+). The actual media type can only
-        # be confirmed via a raw invoke. We do this fast O(1) check here.
-        _is_unsupported = False
-        if not has_file_media and source_msg.text is None and source_msg.caption is None:
-            try:
-                from pyrogram import raw as _pyro_raw
-                _peer = await current_client.resolve_peer(chat_id)
-                _raw_result = await current_client.invoke(
-                    _pyro_raw.functions.channels.GetMessages(
-                        channel=_peer,
-                        id=[_pyro_raw.types.InputMessageID(id=message_id)]
-                    )
-                )
-                for _rm in getattr(_raw_result, "messages", []):
-                    if isinstance(getattr(_rm, "media", None), _pyro_raw.types.MessageMediaUnsupported):
-                        _is_unsupported = True
-                        logger.info("[Download] Msg #%d has MessageMediaUnsupported (views=%s) — routing to Telethon", message_id, getattr(_rm, "views", "?"))
-                        break
-            except Exception as _raw_err:
-                logger.debug("[Download] Raw unsupported-check failed: %s", _raw_err)
-
-        if _is_unsupported:
-            # Attempt Telethon high-layer download
-            await status_message.edit_text(
-                "🔄 **Switching to High-Layer Engine** (Layer 180+)\n\n"
-                "This post uses a newer Telegram format — routing through the compatibility engine..."
-            )
+        # ── Telethon Fallback for Layer 170+ / Edited Media ────────────────────
+        # Pyrogram (Layer 158) cannot parse media created with newer Telegram layers
+        # (e.g. edited video posts, MessageMediaUnsupported, Layer 170+ constructors).
+        # Whenever Pyrogram reports has_file_media == False, we automatically route
+        # through the Telethon High-Layer Engine (Layer 229) to check for and download
+        # any actual video/document before treating it as text or empty.
+        if not has_file_media:
             _pyro_sess_str = None
             if user_id:
                 from database import db as _db
@@ -497,29 +558,35 @@ async def download_restricted_media(
                     pass
 
             if _pyro_sess_str:
-                os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
-                _tele_out_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{job_id}_msg{message_id}.mp4")
-                _tele_file = await _telethon_fallback_download(
-                    pyro_session_str=_pyro_sess_str,
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    out_path=_tele_out_path,
-                    status_message=status_message,
-                    job_id=job_id,
-                    active_jobs=active_jobs,
-                    progress_callback=None,
-                )
-                if _tele_file and os.path.exists(_tele_file) and os.path.getsize(_tele_file) > 0:
-                    active_jobs.pop(job_id, None)
-                    return {
-                        "is_text_only": False,
-                        "file_path": _tele_file,
-                        "original_file_name": f"video_{message_id}.mp4",
-                        "caption": source_msg.caption or "",
-                        "media_type": "video",
-                        "source_msg": source_msg,
-                    }
-            # If telethon also failed, fall through to the empty-message handler below
+                try:
+                    await status_message.edit_text(
+                        "🔄 **Switching to High-Layer Engine** (Layer 180+)\n\n"
+                        "This post uses a newer Telegram format — routing through the compatibility engine..."
+                    )
+                    os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
+                    _tele_out_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{job_id}_msg{message_id}.mp4")
+                    _tele_file = await _telethon_fallback_download(
+                        pyro_session_str=_pyro_sess_str,
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        out_path=_tele_out_path,
+                        status_message=status_message,
+                        job_id=job_id,
+                        active_jobs=active_jobs,
+                        progress_callback=tracker.on_progress,
+                    )
+                    if _tele_file and os.path.exists(_tele_file) and os.path.getsize(_tele_file) > 0:
+                        active_jobs.pop(job_id, None)
+                        return {
+                            "is_text_only": False,
+                            "file_path": _tele_file,
+                            "original_file_name": f"video_{message_id}.mp4",
+                            "caption": source_msg.caption or source_msg.text or "",
+                            "media_type": "video",
+                            "source_msg": source_msg,
+                        }
+                except Exception as _tele_err:
+                    logger.debug("[Download] Telethon fallback check: %s", _tele_err)
 
 
         # Case 1: Text-only / WebPage Link / Google Docs / Poll / Contact / Location / Non-file message

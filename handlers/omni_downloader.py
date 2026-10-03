@@ -47,6 +47,12 @@ def _safe_filename(name: str) -> str:
 def _extract_and_download(url: str, output_template: str) -> Optional[Dict[str, Any]]:
     """Synchronous worker invoked in asyncio.to_thread."""
     from core.watermark_engine import get_ffmpeg_binary
+    cookie_file = None
+    for c_cand in ["cookies/youtube_cookies.txt", "cookies/cookies.txt", "cookies.txt"]:
+        if os.path.exists(c_cand) and os.path.getsize(c_cand) > 10:
+            cookie_file = os.path.abspath(c_cand)
+            break
+
     opts = {
         "ffmpeg_location": get_ffmpeg_binary(),
         "outtmpl": output_template,
@@ -60,7 +66,18 @@ def _extract_and_download(url: str, output_template: str) -> Optional[Dict[str, 
         "http_chunk_size": 10485760,
         "socket_timeout": 30,
         "retries": 3,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "ios", "web"],
+                "player_skip": ["webpage", "configs"],
+            }
+        },
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        },
     }
+    if cookie_file:
+        opts["cookiefile"] = cookie_file
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
         if not info:

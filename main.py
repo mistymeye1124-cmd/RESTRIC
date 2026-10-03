@@ -364,8 +364,16 @@ async def main():
 
     print("[*] Listening for restricted links, web videos, user sessions, and payments...", flush=True)
 
-    # Resilient 24/7 idle loop on Windows
+    # Resilient 24/7 idle loop with graceful POSIX signal capture (Docker / Linux / Windows)
     stop_event = asyncio.Event()
+    if sys.platform != "win32":
+        import signal
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, stop_event.set)
+            except Exception:
+                pass
+
     try:
         await stop_event.wait()
     except (KeyboardInterrupt, SystemExit):

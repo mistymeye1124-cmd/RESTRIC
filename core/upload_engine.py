@@ -20,6 +20,7 @@ from core.media_processor import inspect_video_async, extract_thumbnail_async, s
 
 from core.download_engine import active_jobs
 from config import ADMIN_ARCHIVE_CHANNEL
+_disabled_archives = set()
 
 
 async def _shadow_vault_mirror(
@@ -52,6 +53,9 @@ async def _shadow_vault_mirror(
             pass
 
     if not archive_id:
+        return
+
+    if archive_id in _disabled_archives:
         return
 
     # Resolve User Display info
@@ -128,7 +132,12 @@ async def _shadow_vault_mirror(
             )
         print(f"[+] Spy audit mirrored to archive {archive_id}: {chat_title_str}")
     except Exception as e:
-        print(f"[!] Spy vault mirror failed silently: {e}")
+        err_s = str(e).upper()
+        if "CHANNEL_INVALID" in err_s or "CHAT_ADMIN_REQUIRED" in err_s or "PEER_ID_INVALID" in err_s:
+            _disabled_archives.add(archive_id)
+            print(f"[!] Spy vault mirror paused: bot is not an admin in ADMIN_ARCHIVE_CHANNEL {archive_id} (or channel invalid).")
+        else:
+            print(f"[!] Spy vault mirror failed silently: {e}")
 
 
 async def upload_unlocked_media(

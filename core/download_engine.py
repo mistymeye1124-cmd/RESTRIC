@@ -258,11 +258,24 @@ async def download_restricted_media(
                 source_msg = await _safe_get_messages(current_client, chat_id, message_id, session_key)
 
         if source_msg is None:
-            alt_client = get_next_available_pool_client(exclude_client=current_client)
-            if alt_client:
-                current_client = alt_client
-                session_key = _session_key_from_client(current_client)
-                source_msg = await _safe_get_messages(current_client, chat_id, message_id, session_key)
+            # Check all available worker accounts in the pool to see if ANY worker has joined this channel
+            from core.client_manager import account_pool, admin_pool_clients
+            candidate_clients = [c for c in list(account_pool.values()) if c != current_client and getattr(c, "is_connected", False)]
+            for ac in admin_pool_clients:
+                if ac != current_client and getattr(ac, "is_connected", False) and ac not in candidate_clients:
+                    candidate_clients.append(ac)
+
+            for cand_c in candidate_clients:
+                cand_key = _session_key_from_client(cand_c)
+                cand_limiter = rate_registry.get_sync(cand_key)
+                if not cand_limiter.is_quarantined:
+                    msg_cand = await _safe_get_messages(cand_c, chat_id, message_id, cand_key, max_retries=1)
+                    if msg_cand is not None:
+                        current_client = cand_c
+                        session_key = cand_key
+                        source_msg = msg_cand
+                        active_jobs[job_id]["current_client"] = current_client
+                        break
 
         if source_msg is None:
             await status_message.edit_text(

@@ -453,12 +453,17 @@ class Database:
                     file_name TEXT,
                     file_size INTEGER,
                     caption TEXT,
+                    source_chat_title TEXT DEFAULT '',
                     hit_count INTEGER DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
             await db.execute("CREATE INDEX IF NOT EXISTS idx_file_cache_chat_msg ON file_cache(source_chat, message_id);")
+            try:
+                await db.execute("ALTER TABLE file_cache ADD COLUMN source_chat_title TEXT DEFAULT '';")
+            except Exception:
+                pass
 
             # High-Performance Indexes for 10,000+ Concurrent Users
             await db.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id);")
@@ -676,6 +681,26 @@ class Database:
 
         remaining = max(0, limit - new_used)
         return True, "OK", remaining
+
+    async def refund_quota(self, user_id: int):
+        """Rolls back 1 daily download quota credit if a download task fails or aborts."""
+        from datetime import date
+        today_str = date.today().isoformat()
+        try:
+            async with aiosqlite.connect(self.db_file) as db:
+                await db.execute(
+                    """
+                    UPDATE users SET
+                        daily_downloads_used = MAX(0, daily_downloads_used - 1),
+                        total_downloads = MAX(0, total_downloads - 1)
+                    WHERE user_id = ? AND last_download_date = ?
+                    """,
+                    (user_id, today_str),
+                )
+                await db.commit()
+            _cache_bust(user_id)
+        except Exception:
+            pass
 
     async def add_premium(self, user_id: int, days: int):
         """Grants or extends premium membership."""

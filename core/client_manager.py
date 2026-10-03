@@ -284,6 +284,14 @@ async def register_and_start_account(
         can_share=can_share,
     )
 
+    # Sync immediately to disk vault (data/sessions_vault.json) & .env
+    try:
+        from core.auto_recover import sync_db_to_sessions_vault
+        from config import DB_PATH
+        sync_db_to_sessions_vault(DB_PATH)
+    except Exception as e:
+        logger.warning("Error syncing to vault: %s", e)
+
     # 3. If already running, stop old instance first
     if account_id in account_pool:
         old_c = account_pool.pop(account_id, None)
@@ -319,7 +327,14 @@ async def unregister_account(account_id: int, owner_user_id: Optional[int] = Non
             pass
     active_userbots.pop(account_id, None)
     account_metadata.pop(account_id, None)
-    return await db.delete_bot_account(account_id, owner_user_id)
+    deleted = await db.delete_bot_account(account_id, owner_user_id)
+    try:
+        from core.auto_recover import sync_db_to_sessions_vault
+        from config import DB_PATH
+        sync_db_to_sessions_vault(DB_PATH)
+    except Exception as e:
+        logger.warning("Error syncing to vault after deletion: %s", e)
+    return deleted
 
 
 async def toggle_account_active(account_id: int, owner_user_id: Optional[int] = None) -> Tuple[bool, int]:

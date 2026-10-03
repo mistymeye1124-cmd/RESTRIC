@@ -660,6 +660,10 @@ async def run_batch_harvest_pipeline(
                 pass
         elif delivered == 0 and total == 1:
             try:
+                await db.refund_quota(user_id)
+            except Exception:
+                pass
+            try:
                 cur_text = getattr(s_msg, "text", "") or ""
                 if "CONTENT PROTECTED" not in cur_text and "UNAUTHORIZED" not in cur_text:
                     await s_msg.edit_text(

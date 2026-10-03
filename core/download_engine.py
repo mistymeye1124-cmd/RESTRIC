@@ -414,6 +414,36 @@ async def download_restricted_media(
         "current_client": current_client
     }
 
+    _last_edit_task: Optional[asyncio.Task] = None
+
+    async def _progress_callback(current: int, total: int):
+        nonlocal _last_edit_task
+        if active_jobs.get(job_id, {}).get("cancelled"):
+            active_client = active_jobs.get(job_id, {}).get("current_client", current_client)
+            try:
+                await active_client.stop_transmission()
+            except Exception:
+                pass
+            return
+
+        should_edit, card_text = tracker.update(current, total)
+        if should_edit:
+            if _last_edit_task and not _last_edit_task.done():
+                return
+
+            async def _do_edit(text_to_send: str):
+                try:
+                    await status_message.edit_text(
+                        text=text_to_send,
+                        reply_markup=get_progress_markup(job_id, res_pref),
+                    )
+                except FloodWait as e:
+                    tracker.last_update_time = time.time() + e.value
+                except Exception:
+                    pass
+
+            _last_edit_task = asyncio.create_task(_do_edit(card_text))
+
     # Quarantine check before starting
     if limiter.is_quarantined:
         alt_client = get_next_available_pool_client(exclude_client=current_client)
@@ -499,7 +529,7 @@ async def download_restricted_media(
                         status_message=status_message,
                         job_id=job_id,
                         active_jobs=active_jobs,
-                        progress_callback=tracker.on_progress,
+                        progress_callback=_progress_callback,
                     )
                     if _tele_file and os.path.exists(_tele_file) and os.path.getsize(_tele_file) > 0:
                         active_jobs.pop(job_id, None)
@@ -573,7 +603,7 @@ async def download_restricted_media(
                         status_message=status_message,
                         job_id=job_id,
                         active_jobs=active_jobs,
-                        progress_callback=tracker.on_progress,
+                        progress_callback=_progress_callback,
                     )
                     if _tele_file and os.path.exists(_tele_file) and os.path.getsize(_tele_file) > 0:
                         active_jobs.pop(job_id, None)
@@ -754,37 +784,7 @@ async def download_restricted_media(
 
         target_file_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{job_id}_{safe_name}")
 
-        _last_edit_task: Optional[asyncio.Task] = None
-
-        async def pyrogram_progress(current: int, total: int):
-            nonlocal _last_edit_task
-            if active_jobs.get(job_id, {}).get("cancelled"):
-                active_client = active_jobs.get(job_id, {}).get("current_client", current_client)
-                try:
-                    await active_client.stop_transmission()
-                except Exception:
-                    pass
-                return
-
-            should_edit, card_text = tracker.update(current, total)
-            if should_edit:
-                # If previous UI edit is still pending over network, skip to keep download pipeline running at 100% full speed
-                if _last_edit_task and not _last_edit_task.done():
-                    return
-
-                async def _do_edit(text_to_send: str):
-                    try:
-                        await status_message.edit_text(
-                            text=text_to_send,
-                            reply_markup=get_progress_markup(job_id, res_pref),
-                        )
-                    except FloodWait as e:
-                        # Back off next edit without stalling the media download stream!
-                        tracker.last_update_time = time.time() + e.value
-                    except Exception:
-                        pass
-
-                _last_edit_task = asyncio.create_task(_do_edit(card_text))
+        pyrogram_progress = _progress_callback
 
         downloaded_file = None
         for dl_attempt in range(1, 4):

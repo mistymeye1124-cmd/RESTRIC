@@ -1344,6 +1344,7 @@ async def web_video_link_listener(bot_client: Client, message: Message):
     from core.web_downloader import download_web_video
     user_settings = await db.get_settings(user_id)
     res_pref = user_settings.get("resolution", "720")
+    user_cookie = user_settings.get("cookies_path")
 
     dl_res = await download_web_video(
         url=raw_url,
@@ -1352,11 +1353,24 @@ async def web_video_link_listener(bot_client: Client, message: Message):
         tracker=tracker,
         get_markup_fn=get_progress_markup,
         is_cancelled_fn=is_cancelled,
+        cookie_file=user_cookie,
         resolution=res_pref,
     )
 
     if not dl_res or not dl_res.get("file_path") or not os.path.exists(dl_res["file_path"]):
-        await s_msg.edit_text("❌ Failed to download web video. The video may be private, restricted, or DRM-protected.")
+        err_msg = str(dl_res.get("error", "")) if isinstance(dl_res, dict) else ""
+        if "not a bot" in err_msg.lower() or "sign in" in err_msg.lower() or "cookies" in err_msg.lower():
+            await s_msg.edit_text(
+                "⚠️ **YouTube Bot Protection / Cookie Required**\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "YouTube has restricted video downloads from cloud servers without cookies.\n\n"
+                "👉 **How to solve (takes 30 seconds):**\n"
+                "1. Export a `cookies.txt` file from your browser using the free extension **'Get cookies.txt LOCALLY'**\n"
+                "2. Send the `.txt` file directly as a document to this bot!\n"
+                "3. YouTube downloads will immediately be unlocked and work at full speed."
+            )
+        else:
+            await s_msg.edit_text("❌ Failed to download web video. The video may be private, restricted, or DRM-protected.")
         return
 
     file_path = dl_res["file_path"]

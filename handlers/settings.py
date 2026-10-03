@@ -581,10 +581,27 @@ async def cookie_document_receiver(client: Client, message: Message):
     if not message.document.file_name.lower().endswith((".txt", ".cookie", ".cookies")):
         return
     user_id = message.from_user.id
+    os.makedirs(COOKIES_DIR, exist_ok=True)
     target_path = os.path.join(COOKIES_DIR, f"cookie_{user_id}.txt")
     await message.download(file_name=target_path)
     await db.update_settings(user_id, cookies_path=target_path)
-    await message.reply_text("✅ **Cookies Saved Successfully!**\nYou can now download from private web sources.")
+
+    from config import ADMIN_IDS
+    import shutil
+    if user_id in ADMIN_IDS:
+        try:
+            shutil.copy(target_path, os.path.join(COOKIES_DIR, "youtube_cookies.txt"))
+            shutil.copy(target_path, os.path.join(COOKIES_DIR, "cookies.txt"))
+        except Exception:
+            pass
+        await message.reply_text(
+            "👑 **Global System Cookies Installed!**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ Cookies have been saved as the **Global Server Cookie** for all bot users.\n"
+            "🚀 YouTube and all web video downloads are now unlocked across the bot!"
+        )
+    else:
+        await message.reply_text("✅ **Personal Cookies Saved Successfully!**\nYou can now download from private web sources.")
 
 
 # ─────────────────── PROMO CODE REDEMPTION ─────────────────────────────────

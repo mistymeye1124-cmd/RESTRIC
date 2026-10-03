@@ -83,6 +83,12 @@ async def download_web_video(
         ],
     }
 
+    if not cookie_file or not os.path.exists(cookie_file):
+        for c_cand in ["cookies/youtube_cookies.txt", "cookies/cookies.txt", "cookies.txt"]:
+            if os.path.exists(c_cand) and os.path.getsize(c_cand) > 10:
+                cookie_file = os.path.abspath(c_cand)
+                break
+
     if cookie_file and os.path.exists(cookie_file):
         ydl_opts["cookiefile"] = cookie_file
 
@@ -109,4 +115,4 @@ async def download_web_video(
         return res
     except Exception as e:
         print(f"[!] yt-dlp error: {e}")
-        return None
+        return {"error": str(e)}

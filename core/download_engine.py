@@ -376,14 +376,13 @@ async def download_restricted_media(
                     "source_msg": source_msg,
                 }
             else:
-                return {
-                    "is_text_only": True,
-                    "text": f"📋 **Restricted Message #{message_id}**\n_(Content unlocked)_",
-                    "file_path": None,
-                    "caption": "",
-                    "media_type": "text",
-                    "source_msg": source_msg,
-                }
+                await status_message.edit_text(
+                    f"⚠️ **Message #{message_id} is Empty or Deleted**\n\n"
+                    "This message in the channel contains no text, video, or file (it may have been deleted or is an empty spacer).\n\n"
+                    "👉 **Please send the next link in the channel, e.g. Message #17.**"
+                )
+                active_jobs.pop(job_id, None)
+                return None
 
         # Case 2: Media restricted message
         os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)

@@ -381,16 +381,29 @@ async def get_user_client(user_id: int, prefer_premium: bool = True) -> Optional
     global pool_index
     now = time.time()
 
-    # 1. Global Turbo Downloader: Prioritize Telegram Premium accounts for maximum speed
+    # 1. Global Turbo Downloader: Prioritize Telegram Premium & Admin accounts for maximum speed for ALL users
     if prefer_premium:
         premium_candidates: List[Client] = []
         for aid, client in list(account_pool.items()):
             if client.is_connected:
                 meta = account_metadata.get(aid, {})
-                if meta.get("is_tg_premium") and meta.get("can_share", 1):
+                owner_id = meta.get("owner_user_id", aid)
+                is_admin_acc = (owner_id in ADMIN_IDS or aid in ADMIN_IDS)
+                is_tg_prem = bool(meta.get("is_tg_premium") or getattr(getattr(client, "me", None), "is_premium", False))
+                
+                # Any premium account OR any admin worker account operates as Global Turbo Downloader
+                if (is_tg_prem or is_admin_acc) and meta.get("can_share", 1):
                     limiter = rate_registry.get_sync(f"account_{aid}")
                     if not limiter.is_quarantined:
                         premium_candidates.append(client)
+
+        # Also include legacy admin pool clients from .env
+        for c in admin_pool_clients:
+            if c.is_connected and c not in premium_candidates:
+                limiter = rate_registry.get_sync(getattr(c, "name", "unknown"))
+                if not limiter.is_quarantined:
+                    premium_candidates.append(c)
+
         if premium_candidates:
             selected = premium_candidates[pool_index % len(premium_candidates)]
             pool_index += 1

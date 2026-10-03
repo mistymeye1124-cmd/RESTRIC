@@ -25,9 +25,9 @@ from hashlib import md5
 from pathlib import Path, PurePath
 from typing import Union, BinaryIO, Callable, Optional, List
 
-from pyrogram import Client, raw
+from pyrogram import Client, raw, StopTransmission
 from pyrogram.session import Session
-from pyrogram.errors import StopTransmission, RPCError
+from pyrogram.errors import RPCError
 
 logger = logging.getLogger("TurboUploader")
 

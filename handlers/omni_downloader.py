@@ -262,3 +262,11 @@ async def omni_url_listener(client: Client, message: Message):
 
     finally:
         active_jobs.pop(job_id, None)
+
+
+async def process_omni_link(client: Client, message: Message, target_url: str):
+    """Processes an omni web link on behalf of batch runners."""
+    dummy_msg = message
+    dummy_msg.text = target_url
+    await omni_url_listener(client, dummy_msg)
+

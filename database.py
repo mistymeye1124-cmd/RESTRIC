@@ -515,9 +515,14 @@ class Database:
             )
             await db.execute("CREATE INDEX IF NOT EXISTS idx_bot_accounts_active ON bot_accounts(is_active, status);")
 
-            # Column migration if bot_accounts already existed without can_share
+            # Column migration if bot_accounts already existed without can_share or is_tg_premium
             try:
                 await db.execute("ALTER TABLE bot_accounts ADD COLUMN can_share INTEGER DEFAULT 1;")
+            except Exception:
+                pass
+
+            try:
+                await db.execute("ALTER TABLE bot_accounts ADD COLUMN is_tg_premium INTEGER DEFAULT 0;")
             except Exception:
                 pass
 
@@ -2668,6 +2673,15 @@ class Database:
                 WHERE account_id = ?
                 """,
                 (status, flood_wait_until, account_id),
+            )
+            await db.commit()
+
+    async def update_bot_account_tg_premium(self, account_id: int, is_premium: bool):
+        """Updates Telegram Premium subscription flag for a bot account."""
+        async with aiosqlite.connect(self.db_file) as db:
+            await db.execute(
+                "UPDATE bot_accounts SET is_tg_premium = ? WHERE account_id = ?",
+                (1 if is_premium else 0, account_id),
             )
             await db.commit()
 

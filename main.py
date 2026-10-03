@@ -8,9 +8,9 @@ import os
 import sys
 import asyncio
 
-# Ensure an asyncio event loop exists before Pyrogram imports for Python 3.12+ / 3.14
+# Ensure clean event loop on Python 3.12+
 try:
-    asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 except RuntimeError:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -25,6 +25,7 @@ from config import API_ID, API_HASH, BOT_TOKEN, USERBOT_SESSIONS, ADMIN_IDS, TEM
 from database import db
 from core.client_manager import stop_all_user_clients, initialize_admin_pool, get_configured_proxy, warmup_all_active_sessions
 from core.queue_manager import job_queue
+from core.idempotency_guard import install_idempotency_guard
 
 # Force UTF-8 for console output on Windows to prevent UnicodeEncodeError
 if sys.platform == "win32":
@@ -232,6 +233,9 @@ async def main():
         sleep_threshold=60,                 # handle FloodWait faster
     )
 
+    # Attach Anti-Duplicate Idempotency Guard to prevent double execution and duplicate messages
+    install_idempotency_guard(bot)
+
     started = False
     for attempt in range(1, 11):
         try:
@@ -294,28 +298,29 @@ async def main():
     except Exception as e:
         print(f"[!] Could not set bot commands: {e}")
 
-    print("[*] Listening for restricted links, web videos, user sessions, and payments...")
+    print("[*] Listening for restricted links, web videos, user sessions, and payments...", flush=True)
 
-    # Pyrogram 24/7 idle with graceful shutdown
+    # Resilient 24/7 idle loop on Windows
+    stop_event = asyncio.Event()
     try:
-        await idle()
+        await stop_event.wait()
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as e:
-        print(f"[!] Idle loop exception: {e}")
+        print(f"[!] Idle loop exception: {e}", flush=True)
 
-    print("\n[*] Stopping bot, priority queue, and user clients...")
+    print("\n[*] Stopping bot, priority queue, and user clients...", flush=True)
     await job_queue.stop()
     await stop_all_user_clients()
     try:
         await bot.stop()
     except Exception:
         pass
-    print("[+] Bot stopped cleanly.")
+    print("[+] Bot stopped cleanly.", flush=True)
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        print("\n[+] Exited.")
+        print("\n[+] Exited.", flush=True)

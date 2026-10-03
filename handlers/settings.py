@@ -265,7 +265,7 @@ async def user_view_settings_callback(client: Client, callback_query: CallbackQu
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
-        await callback_query.message.reply_text(text, reply_markup=markup)
+        pass
 
 
 @Client.on_callback_query(filters.regex(r"^user_view_resolution$"))
@@ -275,7 +275,7 @@ async def user_view_resolution_callback(client: Client, callback_query: Callback
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
-        await callback_query.message.reply_text(text, reply_markup=markup)
+        pass
 
 
 @Client.on_callback_query(filters.regex(r"^set_res:(.+)"))
@@ -294,7 +294,7 @@ async def set_res_callback(client: Client, callback_query: CallbackQuery):
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
-        await callback_query.message.reply_text(text, reply_markup=markup)
+        pass
 
 
 @Client.on_callback_query(filters.regex(r"^toggle_doc_mode$"))
@@ -309,7 +309,7 @@ async def toggle_doc_mode_callback(client: Client, callback_query: CallbackQuery
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
-        await callback_query.message.reply_text(text, reply_markup=markup)
+        pass
 
 
 @Client.on_callback_query(filters.regex(r"^(?:user_view_caption_studio|prompt_caption_help)$"))
@@ -320,7 +320,7 @@ async def user_view_caption_studio_callback(client: Client, callback_query: Call
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
-        await callback_query.message.reply_text(text, reply_markup=markup)
+        pass
 
 
 @Client.on_callback_query(filters.regex(r"^toggle_caption_clean_ads$"))
@@ -899,4 +899,4 @@ async def prompt_prefix_help_callback(client: Client, callback_query: CallbackQu
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
-        await callback_query.message.reply_text(text, reply_markup=markup)
+        pass

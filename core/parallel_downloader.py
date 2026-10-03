@@ -90,15 +90,15 @@ async def turbo_parallel_download(
         raise ValueError("Unknown target file size")
 
     # Dynamic Turbo Stream Allocation:
-    # Telegram Premium / Gigabit VPS unlocks 1MB chunk pipelining across 8-12 parallel MTProto TCP sessions
+    # High-spec VPS (e.g. KVM 4) unlocks 1MB chunk pipelining across 8-16 parallel MTProto TCP sessions
     if total_size < 10 * 1024 * 1024:
-        num_workers = 3
+        num_workers = 4
         chunk_size = 512 * 1024
     elif total_size < 50 * 1024 * 1024:
-        num_workers = 6
+        num_workers = 8
         chunk_size = 1024 * 1024
     else:
-        num_workers = min(max(num_workers, 8), 12)
+        num_workers = min(max(num_workers, 10), 16)
         chunk_size = 1024 * 1024
 
     fid = FileId.decode(target.file_id)
@@ -131,20 +131,18 @@ async def turbo_parallel_download(
     ]
     await asyncio.gather(*[s.start() for s in sessions])
 
-    async def _import_auth(sess: Session):
-        if exported_auth:
-            try:
-                await sess.invoke(
-                    raw.functions.auth.ImportAuthorization(
-                        id=exported_auth.id,
-                        bytes=exported_auth.bytes
-                    )
+    # Import authorization once on the target DC using the shared auth_key
+    if exported_auth and sessions:
+        try:
+            await sessions[0].invoke(
+                raw.functions.auth.ImportAuthorization(
+                    id=exported_auth.id,
+                    bytes=exported_auth.bytes
                 )
-            except Exception as imp_err:
-                logger.debug("ImportAuthorization result on session: %s", imp_err)
-
-    if exported_auth:
-        await asyncio.gather(*[_import_auth(s) for s in sessions])
+            )
+            logger.info("[TurboParallel] Target DC %d authorization imported successfully.", dc_id)
+        except Exception as imp_err:
+            logger.debug("[TurboParallel] ImportAuthorization on DC %d: %s", dc_id, imp_err)
 
     # 3. Build chunk queue
     offsets = list(range(0, total_size, chunk_size))
@@ -178,8 +176,6 @@ async def turbo_parallel_download(
         try:
             logger.info("[TurboWorker %d] Re-establishing dead socket connection...", w_id)
             await sess.restart()
-            if exported_auth:
-                await _import_auth(sess)
             logger.info("[TurboWorker %d] Socket connection successfully restored.", w_id)
         except Exception as r_err:
             logger.debug("[TurboWorker %d] Session restart error: %s", w_id, r_err)

@@ -223,6 +223,7 @@ async def _run_channel_clone_worker(
                 message_id=msg_id,
                 status_message=status_msg,
                 job_id=sub_job_id,
+                user_id=user_id,
             )
 
             if not dl_res:

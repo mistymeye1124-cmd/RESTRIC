@@ -60,9 +60,15 @@ def get_progress_markup(job_id: str, res_pref: str = "original") -> InlineKeyboa
 
 
 class ProgressTracker:
-    def __init__(self, action_name: str = "Downloading Media", block_char: str = "▰"):
+    def __init__(
+        self,
+        action_name: str = "Downloading Media",
+        block_char: str = "▰",
+        engine_tag: str = "TITAN v7.0 Multi-Stream Core",
+    ):
         self.action_name = action_name
         self.block_char = block_char
+        self.engine_tag = engine_tag
         self.start_time = time.time()
         self.last_update_time = 0.0  # 0.0 forces immediate update on first chunk!
         self.last_calc_time = time.time()
@@ -136,7 +142,7 @@ class ProgressTracker:
             f"│ ⏱️ **Estimated:** `{eta_str}`\n"
             f"│ 🛡️ **Shield:** `Active Stealth Protection`\n"
             f"╰────────────────────────────────────────╯\n"
-            f"⚡ _Engine: TITAN v7.0 Multi-Stream Core_"
+            f"⚡ _Engine: {self.engine_tag}_"
         )
 
         elapsed_since_edit = now - self.last_update_time

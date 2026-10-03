@@ -175,17 +175,27 @@ async def load_bot_account_client(account_record: Dict[str, Any]) -> Optional[Cl
     client = Client(**client_kwargs)
     try:
         await client.start()
+        me = await client.get_me()
+        is_tg_prem = bool(getattr(me, "is_premium", False))
+
         # Stash client in dynamic pool
         account_pool[account_id] = client
         active_userbots[account_id] = client
         account_metadata[account_id] = {
             "owner_user_id": account_record.get("owner_user_id", account_id),
             "phone": account_record.get("phone", ""),
-            "username": account_record.get("username", ""),
-            "first_name": account_record.get("first_name", ""),
+            "username": getattr(me, "username", "") or account_record.get("username", ""),
+            "first_name": getattr(me, "first_name", "") or account_record.get("first_name", ""),
             "can_share": account_record.get("can_share", 1),
             "device_model": fingerprint.get("device_model", "Official Telegram"),
+            "is_tg_premium": is_tg_prem,
         }
+        if is_tg_prem:
+            logger.info("[👑 TURBO VIP] Account %s (@%s) is TELEGRAM PREMIUM! Prioritized as Global Turbo Downloader.", account_id, getattr(me, "username", ""))
+            try:
+                asyncio.create_task(db.update_bot_account_tg_premium(account_id, True))
+            except Exception:
+                pass
         # Initialize isolated rate limiter for this account
         rate_registry.get_sync(f"account_{account_id}")
         # Pre-warm dialogs in background non-blocking
@@ -304,17 +314,35 @@ async def toggle_account_active(account_id: int, owner_user_id: Optional[int] = 
     return True, new_state
 
 
-async def get_user_client(user_id: int) -> Optional[Client]:
+async def get_user_client(user_id: int, prefer_premium: bool = True) -> Optional[Client]:
     """
-    Returns an active Pyrogram client for the user:
-    1. If the user owns personal connected accounts, selects a healthy one (round-robin among personal).
-    2. Otherwise selects the next healthy account from the shared multi-account worker pool.
-    3. Seamlessly skips accounts on FloodWait or quarantine.
+    Returns an active Pyrogram client for downloading:
+    1. TOP PRIORITY: If any healthy Telegram Premium account exists in the pool (with can_share=1),
+       use it as the Global Turbo Downloader so all users get 30-50+ MB/s MTProto speeds!
+    2. If no shared Premium account is available, and the user owns personal connected accounts,
+       selects a healthy personal account.
+    3. Otherwise selects the next healthy account from the general multi-account worker pool.
+    4. Seamlessly skips accounts on FloodWait or quarantine.
     """
     global pool_index
     now = time.time()
 
-    # 1. Check personal accounts owned by this user
+    # 1. Global Turbo Downloader: Prioritize Telegram Premium accounts for maximum speed
+    if prefer_premium:
+        premium_candidates: List[Client] = []
+        for aid, client in list(account_pool.items()):
+            if client.is_connected:
+                meta = account_metadata.get(aid, {})
+                if meta.get("is_tg_premium") and meta.get("can_share", 1):
+                    limiter = rate_registry.get_sync(f"account_{aid}")
+                    if not limiter.is_quarantined:
+                        premium_candidates.append(client)
+        if premium_candidates:
+            selected = premium_candidates[pool_index % len(premium_candidates)]
+            pool_index += 1
+            return selected
+
+    # 2. Check personal accounts owned by this user
     personal_healthy: List[Client] = []
     for aid, client in list(account_pool.items()):
         meta = account_metadata.get(aid, {})

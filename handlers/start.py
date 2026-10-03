@@ -514,7 +514,7 @@ async def back_to_main_callback(client: Client, callback_query: CallbackQuery):
     try:
         await callback_query.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
     except Exception:
-        await callback_query.message.reply_text(text, reply_markup=markup, disable_web_page_preview=True)
+        pass
 
 
 @Client.on_callback_query(filters.regex(r"^user_view_guide$"))
@@ -524,7 +524,7 @@ async def user_view_guide_callback(client: Client, callback_query: CallbackQuery
     try:
         await callback_query.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
     except Exception:
-        await callback_query.message.reply_text(text, reply_markup=markup, disable_web_page_preview=True)
+        pass
 
 
 @Client.on_message(filters.command(["guide", "manual"]) & filters.private)
@@ -546,7 +546,7 @@ async def user_view_features_callback(client: Client, callback_query: CallbackQu
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
-        await callback_query.message.reply_text(text, reply_markup=markup)
+        pass
 
 
 @Client.on_callback_query(filters.regex(r"^verify_fsub$"))
@@ -568,7 +568,10 @@ async def verify_fsub_callback(client: Client, callback_query: CallbackQuery):
         except Exception:
             pass
         text, markup = await render_start_card(client, user_id, first_name)
-        await callback_query.message.reply_text(text, reply_markup=markup, disable_web_page_preview=True)
+        try:
+            await callback_query.message.reply_text(text, reply_markup=markup, disable_web_page_preview=True)
+        except Exception:
+            pass
     else:
         await callback_query.answer("❌ You have not joined the channel yet! Please join first.", show_alert=True)
 
@@ -590,7 +593,7 @@ async def verify_human_ref_callback(client: Client, callback_query: CallbackQuer
     try:
         await callback_query.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
     except Exception:
-        await callback_query.message.reply_text(text, reply_markup=markup, disable_web_page_preview=True)
+        pass
 
 
 @Client.on_callback_query(filters.regex(r"^user_view_premium$"))
@@ -601,7 +604,7 @@ async def user_view_premium_callback(client: Client, callback_query: CallbackQue
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
-        await callback_query.message.reply_text(text, reply_markup=markup)
+        pass
 
 
 @Client.on_callback_query(filters.regex(r"^user_view_watermark$"))
@@ -612,4 +615,4 @@ async def user_view_watermark_callback(client: Client, callback_query: CallbackQ
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
-        await callback_query.message.reply_text(text, reply_markup=markup)
+        pass

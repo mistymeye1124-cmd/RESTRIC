@@ -455,6 +455,7 @@ async def run_batch_harvest_pipeline(
             job_id=item_job_id,
             res_pref=res_pref,
             batch_info=batch_label,
+            user_id=user_id,
         )
         if not dl_res:
             skipped += 1

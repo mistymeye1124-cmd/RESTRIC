@@ -185,6 +185,7 @@ async def download_restricted_media(
     job_id: str,
     res_pref: str = "original",
     batch_info: Optional[str] = None,
+    user_id: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Downloads or extracts content from restricted Telegram message with live progress UI.
@@ -195,8 +196,23 @@ async def download_restricted_media(
     - Thread-safe transmission cancellation.
     """
     action_label = f"Downloading {batch_info}" if batch_info else "Downloading from Telegram"
-    tracker = ProgressTracker(action_name=action_label, block_char="🟦")
     current_client = client
+
+    # Check if download client is Telegram Premium
+    from core.client_manager import account_metadata
+    is_tg_prem = False
+    cname = getattr(current_client, "name", "")
+    if cname.startswith("account_"):
+        try:
+            aid = int(cname.split("_")[1])
+            is_tg_prem = bool(account_metadata.get(aid, {}).get("is_tg_premium", False))
+        except Exception:
+            pass
+    if not is_tg_prem and getattr(current_client, "me", None):
+        is_tg_prem = bool(getattr(current_client.me, "is_premium", False))
+
+    engine_tag = "TITAN v7.0 Multi-Stream Core [👑 VIP TURBO]" if is_tg_prem else "TITAN v7.0 Multi-Stream Core"
+    tracker = ProgressTracker(action_name=action_label, block_char="🟦", engine_tag=engine_tag)
     session_key = _session_key_from_client(current_client)
     limiter = rate_registry.get_sync(session_key)
 
@@ -230,6 +246,16 @@ async def download_restricted_media(
 
         # Fetch message through rate-limited, error-handled wrapper
         source_msg = await _safe_get_messages(current_client, chat_id, message_id, session_key)
+
+        if source_msg is None and user_id:
+            # If the primary client (e.g. shared Telegram Premium) is not a member of a private channel,
+            # gracefully fall back to the user's personal client!
+            from core.client_manager import get_user_client
+            personal_c = await get_user_client(user_id, prefer_premium=False)
+            if personal_c and personal_c != current_client:
+                current_client = personal_c
+                session_key = _session_key_from_client(current_client)
+                source_msg = await _safe_get_messages(current_client, chat_id, message_id, session_key)
 
         if source_msg is None:
             alt_client = get_next_available_pool_client(exclude_client=current_client)
@@ -407,7 +433,7 @@ async def download_restricted_media(
                             progress_callback=pyrogram_progress,
                             job_id=job_id,
                             active_jobs=active_jobs,
-                            num_workers=4,
+                            num_workers=12,
                             chunk_size=1024 * 1024,
                         )
                     except Exception as turbo_err:

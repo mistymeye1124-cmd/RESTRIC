@@ -63,13 +63,16 @@ _TELE_DC_IPS = {
 
 def _pyro_session_to_telethon(pyro_b64: str) -> str:
     """
-    Converts a Pyrogram in-memory session string to a Telethon StringSession string.
-    Pyrogram format: base64url( dc_id[1] || padding[1] || auth_key[256] )
-    Telethon format: '1' + base64( dc_id[1] || ip[4 or 16] || port[2] || auth_key[256] )
+    Converts a Pyrogram 2.x in-memory session string to a Telethon StringSession string.
+    Pyrogram 2.x format (271 bytes decoded):
+        dc_id[1] | api_id[4] | test_mode[1] | auth_key[256] | date[4] | user_id[8] | is_bot[1]
+    Telethon StringSession format:
+        '1' + base64( dc_id[1] || ip[4] || port[2] || auth_key[256] )
     """
     raw = base64.urlsafe_b64decode(pyro_b64 + "=" * (-len(pyro_b64) % 4))
     dc_id = raw[0]
-    auth_key = raw[2:258]  # bytes 1 is padding, 2..257 is the 256-byte auth key
+    # Pyrogram 2.x: bytes 1-4 = api_id, byte 5 = test_mode, bytes 6..261 = auth_key
+    auth_key = raw[6:262]  # 256-byte auth key
     ip_packed = ipaddress.ip_address(_TELE_DC_IPS[dc_id]).packed  # 4 bytes for IPv4
     packed = struct.pack(f">B{len(ip_packed)}sH256s", dc_id, ip_packed, 443, auth_key)
     return "1" + base64.urlsafe_b64encode(packed).decode().rstrip("=")

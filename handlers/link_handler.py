@@ -703,12 +703,20 @@ async def run_batch_harvest_pipeline(
                 pass
             try:
                 cur_text = getattr(s_msg, "text", "") or ""
-                if "CONTENT PROTECTED" not in cur_text and "UNAUTHORIZED" not in cur_text and "Could not retrieve" not in cur_text and "Access Denied" not in cur_text:
-                    await s_msg.edit_text(
-                        "⚠️ **Content Unavailable or Non-Media**\n\n"
-                        "The requested message does not contain downloadable media, "
-                        "has been deleted, or requires your account to be joined to that channel (`/login`)."
-                    )
+                if not any(k in cur_text for k in ["CONTENT PROTECTED", "UNAUTHORIZED", "Could not retrieve", "Access Denied", "Empty or Deleted", "empty"]):
+                    has_session = bool(await db.get_session(user_id))
+                    if has_session:
+                        await s_msg.edit_text(
+                            "⚠️ **Non-Media or Deleted Message**\n\n"
+                            "The requested message does not contain any downloadable video or file (it may have been deleted by the channel owner or is an empty post).\n\n"
+                            "👉 **Please send the link of an actual video post in the channel (e.g. Message #17, #18, #19, #20).**"
+                        )
+                    else:
+                        await s_msg.edit_text(
+                            "⚠️ **Content Unavailable or Non-Media**\n\n"
+                            "The requested message does not contain downloadable media, "
+                            "has been deleted, or requires your account to be joined to that channel (`/login`)."
+                        )
             except Exception:
                 pass
     active_jobs.pop(b_job_id, None)

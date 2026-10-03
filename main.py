@@ -340,6 +340,14 @@ async def main():
         print("🚀 24/7 Automated VPS GitHub Sync Watchdog: ACTIVE")
     except Exception as e:
         print(f"[!] Watchdog warning: {e}")
+
+    # 24/7 MTProto Keep-Alive & Anti-Logout Session Guardian Daemon
+    try:
+        from core.client_manager import session_heartbeat_guardian
+        asyncio.create_task(session_heartbeat_guardian(bot))
+        print("🛡️ MTProto Keep-Alive & Anti-Logout Session Guardian: ACTIVE")
+    except Exception as e:
+        print(f"[!] Guardian warning: {e}")
     print("=" * 65)
 
     # Register bot menu commands in Telegram UI

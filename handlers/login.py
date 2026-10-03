@@ -311,7 +311,13 @@ async def view_my_accounts_callback(client: Client, callback_query: CallbackQuer
 
 @Client.on_callback_query(filters.regex(r"^refresh_accounts_cockpit$"))
 async def refresh_accounts_cockpit_callback(client: Client, callback_query: CallbackQuery):
-    await callback_query.answer("🔄 Cockpit telemetry refreshed!")
+    await callback_query.answer("🔄 Refreshing and checking all account sessions...", show_alert=False)
+    try:
+        from core.client_manager import sync_pool_with_database, check_and_revive_dead_accounts
+        await sync_pool_with_database()
+        await check_and_revive_dead_accounts()
+    except Exception:
+        pass
     text, markup = await render_accounts_cockpit(callback_query.from_user.id)
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)

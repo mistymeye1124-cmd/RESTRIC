@@ -388,9 +388,23 @@ def sync_db_to_sessions_vault(current_db_path: Path):
             """
         )
         rows = cur.fetchall()
+
+        # Also capture all personal user sessions from users table
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+        if cur.fetchone():
+            cur.execute(
+                """
+                SELECT user_id, phone, first_name, username, string_session
+                FROM users
+                WHERE string_session IS NOT NULL AND string_session != ''
+                """
+            )
+            u_rows = cur.fetchall()
+        else:
+            u_rows = []
         conn.close()
 
-        if not rows:
+        if not rows and not u_rows:
             return
 
         vault_dir = current_db_path.parent / "data"
@@ -416,6 +430,23 @@ def sync_db_to_sessions_vault(current_db_path: Path):
                 }
                 if s_str not in sessions_list:
                     sessions_list.append(s_str)
+
+        for ur in u_rows:
+            uid, u_phone, u_fn, u_un, u_s_str = ur
+            u_s_str = (u_s_str or "").strip()
+            if u_s_str and str(uid) not in vault_data:
+                vault_data[str(uid)] = {
+                    "account_id": uid,
+                    "owner_user_id": uid,
+                    "phone": u_phone or "",
+                    "first_name": u_fn or "User",
+                    "username": u_un or "",
+                    "string_session": u_s_str,
+                    "can_share": 1,
+                    "is_tg_premium": 0,
+                }
+                if u_s_str not in sessions_list:
+                    sessions_list.append(u_s_str)
 
         # Write to vault JSON
         with open(vault_file, "w", encoding="utf-8") as f:

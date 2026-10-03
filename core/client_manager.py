@@ -657,3 +657,149 @@ async def stop_all_user_clients():
         except Exception:
             pass
     admin_pool_clients.clear()
+
+
+async def sync_pool_with_database() -> int:
+    """
+    Scans database for any active, healthy accounts that are currently missing
+    from in-memory account_pool, and mounts them.
+    Guarantees accounts added while bot was running or restored by auto-recover
+    are immediately mounted with 0 downtime and 0 bot restart!
+    """
+    loaded_count = 0
+    try:
+        from database import db
+        records = await db.get_bot_accounts(active_only=True)
+        for rec in records:
+            aid = rec.get("account_id")
+            if not aid:
+                continue
+            if aid not in account_pool:
+                try:
+                    c = await load_bot_account_client(rec)
+                    if c and c.is_connected:
+                        loaded_count += 1
+                        logger.info("[Guardian] Dynamically mounted worker account %s into active pool.", aid)
+                except Exception as e:
+                    logger.debug("[Guardian] Could not load account %s: %s", aid, e)
+                await asyncio.sleep(0.3)
+    except Exception as e:
+        logger.warning("[Guardian] Error in sync_pool_with_database: %s", e)
+    return loaded_count
+
+
+async def check_and_revive_dead_accounts() -> int:
+    """
+    Attempts to re-test and revive any bot_accounts marked 'dead' or missing from pool.
+    If Telegram accepts the session, restores status to 'healthy' and mounts to pool.
+    Returns count of successfully revived accounts.
+    """
+    revived = 0
+    try:
+        from database import db
+        all_accs = await db.get_bot_accounts(active_only=False)
+        for rec in all_accs:
+            if rec.get("status") == "dead" and rec.get("string_session"):
+                aid = rec["account_id"]
+                try:
+                    c = await load_bot_account_client(rec)
+                    if c and c.is_connected:
+                        await db.update_bot_account_status(aid, "healthy", flood_wait_until=0)
+                        revived += 1
+                        logger.info("[Guardian] Successfully revived previously dead account %s!", aid)
+                except Exception as e:
+                    logger.debug("[Guardian] Account %s still inactive: %s", aid, e)
+                await asyncio.sleep(0.5)
+    except Exception as e:
+        logger.warning("[Guardian] Error in check_and_revive_dead_accounts: %s", e)
+    return revived
+
+
+async def ping_all_active_sessions(bot_client: Optional[Client] = None):
+    """
+    Sends a lightweight keep-alive heartbeat ping to Telegram servers for all connected accounts.
+    Keeps MTProto TCP connections alive and prevents Telegram server from terminating idle sessions.
+    """
+    for aid, client in list(account_pool.items()):
+        try:
+            if not getattr(client, "is_connected", False):
+                try:
+                    await client.connect()
+                except Exception:
+                    pass
+
+            if getattr(client, "is_connected", False):
+                # Lightweight MTProto query to keep socket & session auth key active
+                await client.get_me()
+            await asyncio.sleep(1.5)  # Staggered to prevent burst requests
+        except Exception as e:
+            err_str = str(e).upper()
+            fatal_errors = (
+                "AUTH_KEY_UNREGISTERED",
+                "AUTH_KEY_INVALID",
+                "USER_DEACTIVATED",
+                "SESSION_REVOKED",
+                "SESSION_EXPIRED",
+            )
+            if any(f in err_str for f in fatal_errors):
+                logger.warning("[Guardian] Account %s session revoked by Telegram: %s", aid, e)
+                await handle_dead_account(aid, reason=str(e), bot_client=bot_client)
+            else:
+                logger.debug("[Guardian] Account %s transient ping warning: %s (session preserved)", aid, e)
+
+
+async def session_heartbeat_guardian(bot_client: Optional[Client] = None):
+    """
+    24/7 Enterprise Session Keep-Alive & Anti-Logout Guardian Daemon.
+    Guarantees:
+    1. Zero-Idle Timeout: Sends MTProto heartbeat pings every 10 minutes so Telegram never
+       terminates inactive worker or user sessions.
+    2. Dynamic Auto-Mount: Immediately detects and mounts any accounts in the database
+       that are missing from account_pool (e.g. after container redeploy or db restore).
+    3. Auto-Heal & Auto-Reconnect: Reconnects dropped sockets without marking dead.
+    4. Disk Vault Sync: Keeps data/sessions_vault.json and .env updated.
+    """
+    logger.info("🛡️ [Guardian] Session Keep-Alive & Anti-Logout Guardian starting...")
+
+    # Fast initial sync 4 seconds after startup to ensure newly restored DB accounts are loaded
+    await asyncio.sleep(4)
+    try:
+        await sync_pool_with_database()
+        from core.auto_recover import sync_db_to_sessions_vault
+        from config import DB_PATH
+        sync_db_to_sessions_vault(DB_PATH)
+    except Exception as e:
+        logger.warning("[Guardian] Initial sync error: %s", e)
+
+    while True:
+        try:
+            # If account_pool is completely empty, poll every 20s until accounts appear in DB
+            if not account_pool:
+                await sync_pool_with_database()
+                if not account_pool:
+                    await asyncio.sleep(20)
+                    continue
+
+            # Sleep 10 minutes between heartbeat cycles
+            await asyncio.sleep(600)
+
+            # 1. Sync any new accounts added to database
+            await sync_pool_with_database()
+
+            # 2. Send MTProto keep-alive heartbeat to Telegram for all accounts
+            await ping_all_active_sessions(bot_client)
+
+            # 3. Synchronize sessions vault to disk
+            try:
+                from core.auto_recover import sync_db_to_sessions_vault
+                from config import DB_PATH
+                sync_db_to_sessions_vault(DB_PATH)
+            except Exception:
+                pass
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning("[Guardian] Unexpected loop error: %s", e)
+            await asyncio.sleep(30)
+

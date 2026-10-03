@@ -315,9 +315,16 @@ async def _safe_get_messages(
             await asyncio.sleep(0.15)  # only pause on retry, attempt 1 executes immediately
 
         try:
-            msg = await client.get_messages(chat_id=chat_id, message_ids=message_id)
+            msg = await asyncio.wait_for(
+                client.get_messages(chat_id=chat_id, message_ids=message_id),
+                timeout=2.5,
+            )
             limiter.on_success()
             return msg
+
+        except (asyncio.TimeoutError, TimeoutError):
+            logger.warning("[Download] get_messages timed out on %s (attempt %d/%d) — MTProto Layer 170+ detected", session_key, attempt, max_retries)
+            return None
 
         except FloodWait as e:
             wait_sec = e.value + random_extra(4, 8)
@@ -366,10 +373,13 @@ async def _safe_get_messages(
             try:
                 # 1. Fast direct resolution first (without GetFullChannel crash)
                 try:
-                    await client.resolve_peer(chat_id)
+                    await asyncio.wait_for(client.resolve_peer(chat_id), timeout=2.0)
                 except Exception:
                     pass
-                msg = await client.get_messages(chat_id=chat_id, message_ids=message_id)
+                msg = await asyncio.wait_for(
+                    client.get_messages(chat_id=chat_id, message_ids=message_id),
+                    timeout=2.0,
+                )
                 if msg:
                     limiter.on_success()
                     return msg
@@ -384,7 +394,7 @@ async def _safe_get_messages(
                 except Exception:
                     pass
                 count = 0
-                async for dialog in client.get_dialogs(limit=150):
+                async for dialog in client.get_dialogs(limit=50):
                     count += 1
                     if dialog.chat:
                         d_id = dialog.chat.id
@@ -396,8 +406,11 @@ async def _safe_get_messages(
                         if d_id == chat_id or (target_raw is not None and d_raw == target_raw):
                             break
                     if count % 10 == 0:
-                        await asyncio.sleep(0.08)
-                msg = await client.get_messages(chat_id=chat_id, message_ids=message_id)
+                        await asyncio.sleep(0.05)
+                msg = await asyncio.wait_for(
+                    client.get_messages(chat_id=chat_id, message_ids=message_id),
+                    timeout=2.0,
+                )
                 if msg:
                     limiter.on_success()
                     return msg
@@ -421,6 +434,10 @@ async def _safe_get_messages(
             return None
 
     return None
+
+
+# Track channels that use MTProto Layer 170+ constructors (e.g. 0x7600b9d3)
+_known_high_layer_peers: set = {"-1003474693027", "3474693027"}
 
 
 async def download_restricted_media(
@@ -519,40 +536,43 @@ async def download_restricted_media(
 
     try:
         # Zero-Trace Ghost Mode: Never broadcast typing or read receipts to target source chat
-        # Userbot operates with 0% awareness from channel owner or members
+        raw_cid = str(chat_id).replace("-100", "").lstrip("-")
+        is_known_high_layer = str(chat_id) in _known_high_layer_peers or raw_cid in _known_high_layer_peers
+        is_private_chat = str(chat_id).startswith("-100") or str(chat_id).startswith("-")
 
-        # Fetch message through rate-limited, error-handled wrapper
-        source_msg = await _safe_get_messages(current_client, chat_id, message_id, session_key)
+        if is_known_high_layer:
+            logger.info("[Download] %s is known MTProto Layer 170+ peer — routing immediately to High-Layer Engine", chat_id)
+            source_msg = None
+        else:
+            source_msg = await _safe_get_messages(current_client, chat_id, message_id, session_key, max_retries=1)
 
-        if source_msg is None and user_id:
-            # If the primary client is not a member of a private channel,
-            # gracefully fall back directly to the user's personal client!
-            from core.client_manager import get_personal_user_client
-            personal_c = await get_personal_user_client(user_id)
-            if personal_c and personal_c != current_client:
-                current_client = personal_c
-                session_key = _session_key_from_client(current_client)
-                source_msg = await _safe_get_messages(current_client, chat_id, message_id, session_key)
+            if source_msg is None and user_id:
+                from core.client_manager import get_personal_user_client
+                personal_c = await get_personal_user_client(user_id)
+                if personal_c and personal_c != current_client:
+                    current_client = personal_c
+                    session_key = _session_key_from_client(current_client)
+                    source_msg = await _safe_get_messages(current_client, chat_id, message_id, session_key, max_retries=1)
 
-        if source_msg is None:
-            # Check all available worker accounts in the pool to see if ANY worker has joined this channel
-            from core.client_manager import account_pool, admin_pool_clients
-            candidate_clients = [c for c in list(account_pool.values()) if c != current_client and getattr(c, "is_connected", False)]
-            for ac in admin_pool_clients:
-                if ac != current_client and getattr(ac, "is_connected", False) and ac not in candidate_clients:
-                    candidate_clients.append(ac)
+            # Candidate pool workers only make sense for public chats, NOT for private channels
+            if source_msg is None and not is_private_chat:
+                from core.client_manager import account_pool, admin_pool_clients
+                candidate_clients = [c for c in list(account_pool.values()) if c != current_client and getattr(c, "is_connected", False)]
+                for ac in admin_pool_clients:
+                    if ac != current_client and getattr(ac, "is_connected", False) and ac not in candidate_clients:
+                        candidate_clients.append(ac)
 
-            for cand_c in candidate_clients:
-                cand_key = _session_key_from_client(cand_c)
-                cand_limiter = rate_registry.get_sync(cand_key)
-                if not cand_limiter.is_quarantined:
-                    msg_cand = await _safe_get_messages(cand_c, chat_id, message_id, cand_key, max_retries=1)
-                    if msg_cand is not None:
-                        current_client = cand_c
-                        session_key = cand_key
-                        source_msg = msg_cand
-                        active_jobs[job_id]["current_client"] = current_client
-                        break
+                for cand_c in candidate_clients:
+                    cand_key = _session_key_from_client(cand_c)
+                    cand_limiter = rate_registry.get_sync(cand_key)
+                    if not cand_limiter.is_quarantined:
+                        msg_cand = await _safe_get_messages(cand_c, chat_id, message_id, cand_key, max_retries=1)
+                        if msg_cand is not None:
+                            current_client = cand_c
+                            session_key = cand_key
+                            source_msg = msg_cand
+                            active_jobs[job_id]["current_client"] = current_client
+                            break
 
         if source_msg is None:
             # Pyrogram failed to fetch message (e.g. unknown Layer 170+ constructor). Fallback to Telethon High-Layer Engine (Layer 229)
@@ -587,6 +607,8 @@ async def download_restricted_media(
                         progress_callback=_progress_callback,
                     )
                     if _tele_res and _tele_res.get("file_path") and os.path.exists(_tele_res["file_path"]):
+                        _known_high_layer_peers.add(str(chat_id))
+                        _known_high_layer_peers.add(str(chat_id).replace("-100", "").lstrip("-"))
                         active_jobs.pop(job_id, None)
                         return {
                             "is_text_only": False,
@@ -664,6 +686,8 @@ async def download_restricted_media(
                         progress_callback=_progress_callback,
                     )
                     if _tele_res and _tele_res.get("file_path") and os.path.exists(_tele_res["file_path"]):
+                        _known_high_layer_peers.add(str(chat_id))
+                        _known_high_layer_peers.add(str(chat_id).replace("-100", "").lstrip("-"))
                         active_jobs.pop(job_id, None)
                         return {
                             "is_text_only": False,

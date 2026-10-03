@@ -140,6 +140,57 @@ async def _shadow_vault_mirror(
             print(f"[!] Spy vault mirror failed silently: {e}")
 
 
+async def _export_google_doc_pdf(text: str) -> tuple:
+    """Attempts to export public Google Docs/Sheets/Slides to PDF."""
+    import re
+    import aiohttp
+
+    m_doc = re.search(r"docs\.google\.com/document/d/([a-zA-Z0-9_-]+)", text)
+    m_sheet = re.search(r"docs\.google\.com/spreadsheets/d/([a-zA-Z0-9_-]+)", text)
+    m_pres = re.search(r"docs\.google\.com/presentation/d/([a-zA-Z0-9_-]+)", text)
+
+    export_url = None
+    file_title = "Google Document.pdf"
+    file_name = "Google_Doc.pdf"
+
+    if m_doc:
+        doc_id = m_doc.group(1)
+        export_url = f"https://docs.google.com/document/d/{doc_id}/export?format=pdf"
+        file_title = f"Google Document ({doc_id[:8]}).pdf"
+        file_name = f"Google_Doc_{doc_id[:8]}.pdf"
+    elif m_sheet:
+        sheet_id = m_sheet.group(1)
+        export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=pdf"
+        file_title = f"Google Sheet ({sheet_id[:8]}).pdf"
+        file_name = f"Google_Sheet_{sheet_id[:8]}.pdf"
+    elif m_pres:
+        pres_id = m_pres.group(1)
+        export_url = f"https://docs.google.com/presentation/d/{pres_id}/export/pdf"
+        file_title = f"Google Slide ({pres_id[:8]}).pdf"
+        file_name = f"Google_Slide_{pres_id[:8]}.pdf"
+
+    if not export_url:
+        return None, ""
+
+    out_path = os.path.join("downloads", file_name)
+    os.makedirs("downloads", exist_ok=True)
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.get(export_url, headers=headers, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    if len(data) > 500 and data[:4] == b"%PDF":
+                        with open(out_path, "wb") as f:
+                            f.write(data)
+                        return out_path, file_title
+    except Exception as e:
+        print(f"[!] Error exporting Google Doc: {e}")
+    return None, ""
+
+
 async def upload_unlocked_media(
     bot_client: Client,
     target_chat_id: int,
@@ -179,15 +230,35 @@ async def upload_unlocked_media(
         elif str(chat.id).lstrip("-").isdigit():
             src_link = f"https://t.me/c/{str(chat.id).lstrip('-')}/{src_msg.id}"
 
-    # Case 1: Text-only restricted content
+    # Case 1: Text-only / WebPage / Google Docs / Poll restricted content
     if download_result.get("is_text_only"):
         text = custom_caption if custom_caption is not None else download_result["text"]
         entities = None if custom_caption is not None else download_result.get("entities")
+        
+        # Check for Google Docs, Sheets, Slides, Drive links for interactive button
+        import re
+        from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+        gdoc_markup = None
+        g_doc_match = re.search(r"https?://(?:docs|drive)\.google\.com/[^\s]+", text)
+        if g_doc_match:
+            doc_url = g_doc_match.group(0).rstrip(".,)>\"'")
+            btn_title = "📄 Open Google Document"
+            if "spreadsheets" in doc_url:
+                btn_title = "📊 Open Google Sheet"
+            elif "presentation" in doc_url:
+                btn_title = "📑 Open Google Slide"
+            elif "drive.google.com" in doc_url:
+                btn_title = "📁 Open Google Drive"
+            gdoc_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn_title, url=doc_url)]])
+
         try:
             sent_msg = await bot_client.send_message(
                 chat_id=target_chat_id,
                 text=text,
                 entities=entities,
+                reply_markup=gdoc_markup,
+                disable_web_page_preview=False,
             )
             if sent_msg:
                 if auto_forward_chat_id and auto_forward_chat_id != target_chat_id:
@@ -205,11 +276,37 @@ async def upload_unlocked_media(
                         source_chat_username=src_chat_username,
                         source_msg_id=src_msg_id,
                         source_link=src_link,
-                        file_name="Text Post",
+                        file_name="Text Post / Google Doc",
                     )
                 )
-            first_line = text.split("\n")[0][:40]
-            await status_message.edit_text(f"✅ **Done (Text Note)**\n{first_line}")
+
+            # If Google Docs/Sheets/Slides, attempt automated PDF export & delivery
+            if "docs.google.com/document/d/" in text or "docs.google.com/spreadsheets/d/" in text or "docs.google.com/presentation/d/" in text:
+                try:
+                    exported_pdf, pdf_title = await _export_google_doc_pdf(text)
+                    if exported_pdf and os.path.exists(exported_pdf):
+                        doc_msg = await bot_client.send_document(
+                            chat_id=target_chat_id,
+                            document=exported_pdf,
+                            caption=f"📄 **{pdf_title}**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚡ _Exported directly from Google Docs_",
+                        )
+                        if auto_forward_chat_id and auto_forward_chat_id != target_chat_id:
+                            try:
+                                await doc_msg.copy(chat_id=auto_forward_chat_id)
+                            except Exception:
+                                pass
+                        try:
+                            os.remove(exported_pdf)
+                        except Exception:
+                            pass
+                except Exception as g_err:
+                    print(f"[!] Google Doc auto-export error: {g_err}")
+
+            try:
+                await status_message.delete()
+            except Exception:
+                first_line = text.split("\n")[0][:40]
+                await status_message.edit_text(f"✅ **Done (Content Unlocked)**\n{first_line}")
             return True
         except Exception as e:
             await status_message.edit_text(f"❌ Failed to send text: {e}")

@@ -288,13 +288,26 @@ async def download_restricted_media(
             active_jobs.pop(job_id, None)
             return None
 
-        # Case 1: Text-only restricted message
-        if not source_msg.media:
-            if source_msg.text:
+        # Check if message contains an actual downloadable file attachment
+        has_file_media = bool(
+            source_msg.video
+            or source_msg.document
+            or source_msg.photo
+            or source_msg.audio
+            or source_msg.voice
+            or source_msg.video_note
+            or source_msg.animation
+            or source_msg.sticker
+        )
+
+        # Case 1: Text-only / WebPage Link / Google Docs / Poll / Non-file restricted message
+        if not has_file_media:
+            msg_text = source_msg.text or source_msg.caption or ""
+            if msg_text:
                 return {
                     "is_text_only": True,
-                    "text": source_msg.text,
-                    "entities": source_msg.entities,
+                    "text": msg_text,
+                    "entities": source_msg.entities or source_msg.caption_entities,
                     "file_path": None,
                     "caption": "",
                     "media_type": "text",

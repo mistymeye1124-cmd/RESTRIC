@@ -33,6 +33,7 @@ OMNI_DOMAINS_REGEX = re.compile(
     r"pinterest\.com|pin\.it|"
     r"reddit\.com|"
     r"terabox\.com|1024tera\.com|teraboxapp\.com|"
+    r"docs\.google\.com|drive\.google\.com|"
     r"[^\s/$.?#].[^\s]*\.(?:mp4|mkv|mov|webm|m3u8)"
     r")(?:/[^\s]*)?",
     re.IGNORECASE,
@@ -170,8 +171,32 @@ async def omni_url_listener(client: Client, message: Message):
     )
 
     try:
-        out_tmpl = str(TEMP_DOWNLOAD_DIR / f"{job_id}_%(title).50s.%(ext)s")
-        meta = await asyncio.to_thread(_extract_and_download, target_url, out_tmpl)
+        if "docs.google.com" in target_url:
+            from core.upload_engine import _export_google_doc_pdf
+            pdf_path, pdf_title = await _export_google_doc_pdf(target_url)
+            if pdf_path and os.path.exists(pdf_path):
+                meta = {
+                    "file_path": pdf_path,
+                    "title": pdf_title,
+                    "duration": 0,
+                    "uploader": "Google Docs",
+                    "description": target_url,
+                    "thumbnail": None,
+                    "media_type": "document",
+                }
+            else:
+                from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                await status_msg.edit_text(
+                    "📄 **Google Document**\n\n"
+                    "This document requires Google account login or is restricted.\n"
+                    f"👉 **Direct Link:** {target_url}",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📄 Open Document", url=target_url)]]),
+                    disable_web_page_preview=False,
+                )
+                return
+        else:
+            out_tmpl = str(TEMP_DOWNLOAD_DIR / f"{job_id}_%(title).50s.%(ext)s")
+            meta = await asyncio.to_thread(_extract_and_download, target_url, out_tmpl)
 
         if not meta or not os.path.exists(meta.get("file_path", "")):
             await status_msg.edit_text(
@@ -255,11 +280,12 @@ async def omni_url_listener(client: Client, message: Message):
             replacements=caption_replacements,
         )
 
+        is_doc = meta.get("media_type") == "document" or dl_path.lower().endswith((".pdf", ".doc", ".docx", ".zip"))
         dl_result = {
             "file_path": dl_path,
-            "original_file_name": f"{_safe_filename(v_title)}.mp4",
+            "original_file_name": os.path.basename(dl_path) if is_doc else f"{_safe_filename(v_title)}.mp4",
             "caption": clean_cap,
-            "media_type": "video",
+            "media_type": "document" if is_doc else "video",
             "source_msg": None,
             "chat_id": f"web:{domain}",
             "message_id": 1,

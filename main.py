@@ -26,6 +26,7 @@ from database import db
 from core.client_manager import stop_all_user_clients, initialize_admin_pool, get_configured_proxy, warmup_all_active_sessions
 from core.queue_manager import job_queue
 from core.idempotency_guard import install_idempotency_guard
+from core.parallel_uploader import install_turbo_uploader
 
 # Force UTF-8 for console output on Windows to prevent UnicodeEncodeError
 if sys.platform == "win32":
@@ -167,10 +168,10 @@ def auto_optimize_linux_network():
     tuning_params = [
         ("net.core.default_qdisc", "fq"),
         ("net.ipv4.tcp_congestion_control", "bbr"),
-        ("net.core.rmem_max", "16777216"),
-        ("net.core.wmem_max", "16777216"),
-        ("net.ipv4.tcp_rmem", "4096 87380 16777216"),
-        ("net.ipv4.tcp_wmem", "4096 65536 16777216"),
+        ("net.core.rmem_max", "33554432"),
+        ("net.core.wmem_max", "33554432"),
+        ("net.ipv4.tcp_rmem", "4096 87380 33554432"),
+        ("net.ipv4.tcp_wmem", "4096 65536 33554432"),
         ("net.ipv4.tcp_fastopen", "3"),
     ]
 
@@ -289,6 +290,7 @@ async def main():
 
     # Attach Anti-Duplicate Idempotency Guard to prevent double execution and duplicate messages
     install_idempotency_guard(bot)
+    install_turbo_uploader(bot)
 
     started = False
     for attempt in range(1, 11):

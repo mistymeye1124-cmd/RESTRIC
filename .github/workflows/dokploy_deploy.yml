@@ -1,0 +1,36 @@
+name: Dokploy Auto-Deploy & CI Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  validate-and-deploy:
+    name: Code Validation & Dokploy Trigger
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Syntax & Integrity Validation
+        run: |
+          python -m py_compile main.py database.py config.py core/auto_recover.py core/auto_sync.py core/client_manager.py handlers/admin.py
+          echo "Code integrity check passed."
+
+      - name: Trigger Dokploy Webhook (Auto Deploy)
+        if: env.DOKPLOY_WEBHOOK_URL != ''
+        env:
+          DOKPLOY_WEBHOOK_URL: ${{ secrets.DOKPLOY_WEBHOOK_URL }}
+        run: |
+          echo "Triggering Dokploy Auto-Deploy Webhook..."
+          curl -X POST "$DOKPLOY_WEBHOOK_URL" -H "Content-Type: application/json" -d '{"event":"push","branch":"main"}'
+          echo "Dokploy redeployment triggered successfully!"

@@ -7,15 +7,24 @@ Supports dynamic addition, load balancing, and failover across multiple Telegram
 """
 
 import os
+import sys
 import time
 import asyncio
 import logging
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 from typing import Dict, Optional, List, Any, Tuple
 from pyrogram import Client
 from config import API_ID, API_HASH, SESSIONS_DIR, ADMIN_IDS
 from database import db
 from core.device_spoofer import get_fingerprint_for_user
 from core.rate_limiter import rate_registry
+from core.parallel_uploader import install_turbo_uploader
 
 logger = logging.getLogger(__name__)
 
@@ -110,8 +119,10 @@ async def handle_dead_account(account_id: int, reason: str = "expired", bot_clie
     owner_id = meta.get("owner_user_id", account_id)
 
     await db.update_bot_account_status(account_id, "dead", flood_wait_until=0)
-    await db.remove_session(account_id)
-    print(f"[🚨 AUTO-HEAL] Account {account_id} marked DEAD ({reason}).")
+    try:
+        print(f"[🚨 AUTO-HEAL] Account {account_id} marked DEAD ({reason}).")
+    except Exception:
+        logger.warning("[AUTO-HEAL] Account %s marked DEAD (%s).", account_id, reason)
 
     if bot_client and owner_id:
         try:
@@ -173,6 +184,7 @@ async def load_bot_account_client(account_record: Dict[str, Any]) -> Optional[Cl
         client_kwargs["proxy"] = proxy
 
     client = Client(**client_kwargs)
+    install_turbo_uploader(client)
     try:
         await client.start()
         me = await client.get_me()
@@ -539,6 +551,7 @@ async def initialize_admin_pool(sessions: List[str]):
                 client_kwargs["proxy"] = proxy
 
             client = Client(**client_kwargs)
+            install_turbo_uploader(client)
             await client.start()
             admin_pool_clients.append(client)
             me = await client.get_me()

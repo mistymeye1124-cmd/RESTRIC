@@ -18,13 +18,13 @@ if [ -f "bot_database.db" ]; then
     python3 -c "import sqlite3; con = sqlite3.connect('bot_database.db'); con.execute('PRAGMA wal_checkpoint(TRUNCATE);'); con.close()" 2>/dev/null || true
 fi
 
-# Package database, environment, and userbot sessions
+# Package database, environment, userbot sessions, and persistent vault
 tar -czf "${BACKUP_DIR}/${ARCHIVE_NAME}" \
     --exclude='downloads/*' \
     --exclude='__pycache__' \
     --exclude='venv' \
-    bot_database.db .env sessions/ 2>/dev/null || \
-tar -czf "${BACKUP_DIR}/${ARCHIVE_NAME}" bot_database.db .env 2>/dev/null
+    bot_database.db .env sessions/ data/ 2>/dev/null || \
+tar -czf "${BACKUP_DIR}/${ARCHIVE_NAME}" bot_database.db .env data/ 2>/dev/null
 
 FILE_SIZE=$(du -h "${BACKUP_DIR}/${ARCHIVE_NAME}" | cut -f1)
 

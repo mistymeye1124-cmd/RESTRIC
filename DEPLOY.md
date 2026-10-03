@@ -36,6 +36,22 @@ bash deploy.sh
 
 ---
 
+### 🔐 অ্যাকাউন্ট ও সেশন সুরক্ষা (Accounts Never Lost Guarantee)
+
+বটে লগইন করা টেলিগ্রাম অ্যাকাউন্ট কোনো ডিপ্লয়মেন্ট, রিস্টার্ট, গিট আপডেট বা সার্ভার রিবুটেও **কখনোই হারাবে না**:
+
+1. **পিসি থেকে VPS-এ অ্যাকাউন্ট ট্রান্সফার (১-ক্লিক):**
+   - আপনার উইন্ডোজ পিসিতে থাকা `sync_to_vps.bat` ফাইলটিতে ডাবল ক্লিক করুন।
+   - এটি আপনার লগইন করা সমস্ত অ্যাকাউন্ট ও ডাটাবেজ সরাসরি VPS-এ কপি করে বট স্বয়ংক্রিয়ভাবে রিস্টার্ট করে দেবে।
+2. **টেলিগ্রামেই ব্যাকআপ ও রিস্টোর (টেলিগ্রাম চ্যাট কমান্ড):**
+   - যেকোনো সময় বটের চ্যাটে লিখুন: `/export_sessions`
+   - বট আপনাকে একটি এনক্রিপ্টেড ব্যাকআপ ফাইল দেবে।
+   - নতুন VPS-এ গিয়ে সেই ফাইলটি অথবা `/import_sessions` লিখে পাঠিয়ে দিলেই মুহূর্তের মধ্যে অ্যাকাউন্ট লাইভ হয়ে যাবে!
+3. **অটো সেল্ফ-হিলিং (`/sync_sessions`):**
+   - ডাটাবেজ, `.env` ফাইলে থাকা `USERBOT_SESSIONS` এবং `data/sessions_vault.json` তিনটি স্তরে ব্যাকআপ থাকে। সার্ভার রিস্টার্ট হলে বট নিজ থেকেই সব অ্যাকাউন্ট সুস্থ করে তুলে আনে।
+
+---
+
 ### 🐳 পদ্ধতি ২: Docker & Docker Compose ডিপ্লয়
 
 যদি আপনি ডকার কন্টেইনারে সম্পূর্ণ আইসোলেটেডভাবে চালাতে চান:
@@ -54,7 +70,33 @@ docker compose logs -f
 
 ---
 
-### ☁️ পদ্ধতি ৩: Red Hat OpenShift ডিপ্লয়
+### 🚢 পদ্ধতি ৩: Dokploy VPS-এ GitHub Push অটো-ডিপ্লয় (Zero Session Loss)
+
+আপনার VPS-এ Dokploy প্যানেল ব্যবহার করলে গিট পুশ করার সাথে সাথে স্বয়ংক্রিয়ভাবে রি-ডিপ্লয় হবে এবং কোনো অ্যাকাউন্ট লগআউট হবে না:
+
+1. **Dokploy Dashboard-এ অ্যাপ্লিকেশন তৈরি করুন:**
+   - **Type:** `Compose` (অথবা `Application` -> `Dockerfile`)
+   - **Repository:** আপনার GitHub রিপোজিটরি লিংক (`https://github.com/username/repo`)
+   - **Branch:** `main`
+2. **Environment Variables সেট করুন:**
+   - Dokploy-এর **Environment** ট্যাবে গিয়ে আপনার `.env` ফাইলের সব ভ্যালু পেস্ট করে দিন (বিশেষ করে `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_BOT_TOKEN`, `ADMIN_IDS`, `USERBOT_SESSIONS`)।
+3. **Auto Deploy চালু করুন:**
+   - Dokploy-এর **Deployments** ট্যাবে গিয়ে **Auto Deploy** অপশনটি অন করুন।
+   - Dokploy আপনাকে একটি **Webhook URL** দেবে। সেটি আপনার GitHub রিপোজিটরির `Settings` -> `Webhooks`-এ অ্যাড করে দিন (Content type: `application/json`)।
+4. **প্রি-ডিপ্লয় কমান্ড (ঐচ্ছিক কিন্তু দারুণ কার্যকর):**
+   - Dokploy Build/Pre-deploy Command বক্সে লিখতে পারেন:
+     ```bash
+     bash dokploy.sh
+     ```
+5. **এখন প্রতিবার GitHub-এ পুশ করলেই:**
+   - Dokploy সাথে সাথে নতুন কোড বিল্ড করবে।
+   - [docker-entrypoint.sh](file:///d:/Checker/extension%20and%20tool/restricted%20forward%20bot/docker-entrypoint.sh) স্বয়ংক্রিয়ভাবে [core/auto_recover.py](file:///d:/Checker/extension%20and%20tool/restricted%20forward%20bot/core/auto_recover.py) রান করবে।
+   - ভল্ট ও `.env`-এ থাকা সমস্ত অ্যাকাউন্ট রিকভার ও রি-কানেক্ট হবে।
+   - এক মুহূর্তের জন্যও অ্যাকাউন্ট ডিসকানেক্ট বা লগআউট হবে না!
+
+---
+
+### ☁️ পদ্ধতি ৪: Red Hat OpenShift ডিপ্লয়
 
 OpenShift ক্লাস্টারে ডিপ্লয় করতে:
 

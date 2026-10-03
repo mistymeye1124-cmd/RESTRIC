@@ -34,6 +34,13 @@ fi
 # Backup .env (never lose credentials either)
 [ -f "$BOT_DIR/.env" ] && cp "$BOT_DIR/.env" "$SAFE_DIR/.env" 2>/dev/null || true
 
+# Backup data/ directory (specifically sessions_vault.json)
+if [ -d "$BOT_DIR/data" ]; then
+    mkdir -p "$SAFE_DIR/data"
+    cp -r "$BOT_DIR/data/." "$SAFE_DIR/data/" 2>/dev/null || true
+    echo "    [+] Backed up session vault and data/"
+fi
+
 echo "[✅] Backup complete. Now safe to pull from GitHub."
 
 # ──────────────────────────────────────────────────────────────
@@ -82,6 +89,13 @@ if [ -d "$SAFE_DIR/sessions" ]; then
     cp -r  "$SAFE_DIR/sessions/." "$BOT_DIR/sessions/" 2>/dev/null || true
     SESSION_RESTORED=$(find "$BOT_DIR/sessions" -name "*.session" 2>/dev/null | wc -l)
     echo "    [+] $SESSION_RESTORED session file(s) confirmed on disk"
+fi
+
+# Restore data/ directory (sessions_vault.json)
+mkdir -p "$BOT_DIR/data"
+if [ -d "$SAFE_DIR/data" ]; then
+    cp -r "$SAFE_DIR/data/." "$BOT_DIR/data/" 2>/dev/null || true
+    echo "    [+] Session vault (data/) restored"
 fi
 
 # Restore .env
@@ -137,16 +151,16 @@ fi
 mkdir -p sessions downloads temp_sessions logs
 
 # ──────────────────────────────────────────────────────────────
-# PHASE 5: Network kernel tuning (Google BBR + 16MB buffers)
+# PHASE 5: Network kernel tuning (Google BBR + 32MB buffers)
 # ──────────────────────────────────────────────────────────────
 if command -v sysctl >/dev/null 2>&1; then
-    echo "[*] Activating Google BBR & high-speed 16MB TCP buffers..."
+    echo "[*] Activating Google BBR & high-speed 32MB TCP buffers..."
     sudo sysctl -w net.core.default_qdisc=fq                   >/dev/null 2>&1 || true
     sudo sysctl -w net.ipv4.tcp_congestion_control=bbr          >/dev/null 2>&1 || true
-    sudo sysctl -w net.core.rmem_max=16777216                   >/dev/null 2>&1 || true
-    sudo sysctl -w net.core.wmem_max=16777216                   >/dev/null 2>&1 || true
-    sudo sysctl -w net.ipv4.tcp_rmem="4096 87380 16777216"      >/dev/null 2>&1 || true
-    sudo sysctl -w net.ipv4.tcp_wmem="4096 65536 16777216"      >/dev/null 2>&1 || true
+    sudo sysctl -w net.core.rmem_max=33554432                   >/dev/null 2>&1 || true
+    sudo sysctl -w net.core.wmem_max=33554432                   >/dev/null 2>&1 || true
+    sudo sysctl -w net.ipv4.tcp_rmem="4096 87380 33554432"      >/dev/null 2>&1 || true
+    sudo sysctl -w net.ipv4.tcp_wmem="4096 65536 33554432"      >/dev/null 2>&1 || true
     sudo sysctl -w net.ipv4.tcp_fastopen=3                      >/dev/null 2>&1 || true
 fi
 

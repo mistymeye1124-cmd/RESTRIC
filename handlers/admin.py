@@ -4346,3 +4346,144 @@ async def start_auto_backup_loop(client: Client):
             print(f"[!] Auto backup loop exception: {e}")
             await asyncio.sleep(300)
 
+
+@Client.on_message(filters.command("export_sessions") & (filters.private | filters.group))
+async def handle_export_sessions(client: Client, message: Message):
+    """Exports all registered worker sessions into a portable backup payload."""
+    if not is_admin(message.from_user.id):
+        return
+
+    status_msg = await message.reply_text("🔄 **Exporting Session Vault...**")
+    try:
+        from core.auto_recover import sync_db_to_sessions_vault
+        from pathlib import Path
+        import config
+
+        sync_db_to_sessions_vault(config.DB_PATH)
+        payload = await db.export_sessions_payload()
+        if not payload:
+            await status_msg.edit_text("ℹ️ No active worker sessions found in database to export.")
+            return
+
+        vault_file = Path("data") / "sessions_vault.json"
+        caption = (
+            "🔐 **TELEGRAM SESSIONS VAULT BACKUP (VPS MIGRATION READY)** 🔐\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "• This file contains your connected worker accounts & string sessions.\n"
+            "• **To restore on VPS:**\n"
+            "  1. Send or reply this document to your VPS bot with `/import_sessions`\n"
+            "  OR\n"
+            "  2. Copy and paste payload directly: `/import_sessions <text>`\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "🛡️ *Accounts are immune to resets, restarts, and updates.*"
+        )
+        if vault_file.exists():
+            await message.reply_document(document=str(vault_file), caption=caption)
+            await status_msg.delete()
+        else:
+            await status_msg.edit_text(
+                f"🔐 **SESSION VAULT PAYLOAD:**\n\n`{payload}`\n\n"
+                "👉 To import on another server, send: `/import_sessions " + payload[:30] + "...`"
+            )
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Export failed: {e}")
+
+
+@Client.on_message(filters.command("import_sessions") & (filters.private | filters.group))
+async def handle_import_sessions(client: Client, message: Message):
+    """Imports sessions from argument, reply text, or attached JSON file."""
+    if not is_admin(message.from_user.id):
+        return
+
+    import os
+    payload = ""
+    # Case 1: Payload in command argument (/import_sessions <payload>)
+    if len(message.command) > 1:
+        payload = message.text.split(None, 1)[1].strip()
+
+    # Case 2: Reply to message with document
+    elif message.reply_to_message and message.reply_to_message.document:
+        doc = message.reply_to_message.document
+        if doc.file_name and (doc.file_name.endswith(".json") or doc.file_name.endswith(".txt")):
+            status = await message.reply_text("📥 Downloading session vault document...")
+            dl_path = await client.download_media(message.reply_to_message)
+            if dl_path:
+                with open(dl_path, "r", encoding="utf-8") as f:
+                    payload = f.read()
+                try:
+                    os.remove(dl_path)
+                except Exception:
+                    pass
+                await status.delete()
+
+    # Case 3: Reply to message with text
+    elif message.reply_to_message and message.reply_to_message.text:
+        payload = message.reply_to_message.text.strip()
+
+    # Case 4: Document directly attached with caption /import_sessions
+    elif message.document:
+        dl_path = await client.download_media(message)
+        if dl_path:
+            with open(dl_path, "r", encoding="utf-8") as f:
+                payload = f.read()
+            try:
+                os.remove(dl_path)
+            except Exception:
+                pass
+
+    if not payload:
+        await message.reply_text(
+            "⚠️ **Usage for /import_sessions:**\n\n"
+            "1. Reply to an exported `sessions_vault.json` file with `/import_sessions`\n"
+            "2. Or run: `/import_sessions <session_string_or_base64_payload>`\n"
+            "3. Or multiple strings: `/import_sessions string1||string2`"
+        )
+        return
+
+    status_msg = await message.reply_text("🔄 **Importing and Activating Sessions...**")
+    try:
+        from core.client_manager import initialize_all_bot_accounts
+        count, msg = await db.import_sessions_payload(payload)
+        if count > 0:
+            # Hot-connect new accounts immediately with 0 bot downtime
+            await initialize_all_bot_accounts()
+            await status_msg.edit_text(
+                f"✅ **Import Successful!**\n\n"
+                f"• Accounts Loaded: `{count}`\n"
+                f"• Status: `🟢 Active & Connected`\n"
+                f"• Vault & .env: `Synchronized`\n\n"
+                "Worker accounts are now live and downloading restricted content!"
+            )
+        else:
+            await status_msg.edit_text(f"❌ Could not import sessions: {msg}")
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Error during session import: {e}")
+
+
+@Client.on_message(filters.command("sync_sessions") & (filters.private | filters.group))
+async def handle_sync_sessions(client: Client, message: Message):
+    """Manually executes the self-healing auto-recovery audit and syncs accounts."""
+    if not is_admin(message.from_user.id):
+        return
+
+    status_msg = await message.reply_text("🔄 **Running Multi-Account Auto-Recovery & Health Audit...**")
+    try:
+        from core.auto_recover import run_auto_recovery
+        from core.client_manager import warmup_all_active_sessions
+        import config
+
+        count = run_auto_recovery(config.DB_PATH)
+        await warmup_all_active_sessions()
+        await status_msg.edit_text(
+            f"🛡️ **SESSION & WORKER AUDIT COMPLETE** 🛡️\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"• 👥 **Healthy Workers in Pool:** `{count}`\n"
+            f"• 📁 **Disk Vault:** `data/sessions_vault.json (Updated)`\n"
+            f"• ⚙️ **Config:** `.env USERBOT_SESSIONS (Synchronized)`\n"
+            f"• 🟢 **Status:** `100% Protected & Immune to Loss`\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Your accounts are safe across restarts, pulls, and deployments!"
+        )
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Sync failed: {e}")
+

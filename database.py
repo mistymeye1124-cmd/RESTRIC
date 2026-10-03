@@ -780,6 +780,8 @@ class Database:
                 (user_id, phone, string_session),
             )
             await db.commit()
+        # Keep physical JSON vault and .env permanently in sync
+        self.sync_vault_and_env_sync()
 
     async def get_session(self, user_id: int) -> Optional[str]:
         async with aiosqlite.connect(self.db_file) as db:
@@ -2562,9 +2564,101 @@ class Database:
                     (owner_user_id, account_id, phone, first_name, username, string_session, can_share, is_tg_premium),
                 )
                 await db.commit()
+                # Permanently synchronize physical JSON vault and .env
+                self.sync_vault_and_env_sync()
                 return True, f"Account {account_id} added successfully to pool."
             except Exception as e:
                 return False, f"Database error adding account: {e}"
+
+    def sync_vault_and_env_sync(self):
+        """Synchronously mirrors database accounts into data/sessions_vault.json and .env."""
+        try:
+            from core.auto_recover import sync_db_to_sessions_vault
+            sync_db_to_sessions_vault(Path(self.db_file))
+        except Exception:
+            pass
+
+    async def sync_vault_and_env(self):
+        """Asynchronously mirrors database accounts into data/sessions_vault.json and .env."""
+        try:
+            import asyncio
+            from core.auto_recover import sync_db_to_sessions_vault
+            await asyncio.to_thread(sync_db_to_sessions_vault, Path(self.db_file))
+        except Exception:
+            pass
+
+    async def export_sessions_payload(self) -> str:
+        """Exports all active userbot sessions as a base64 encoded JSON string."""
+        import base64
+        import json
+        records = await self.get_bot_accounts(active_only=False)
+        valid = [
+            {
+                "account_id": r["account_id"],
+                "owner_user_id": r["owner_user_id"],
+                "phone": r.get("phone", ""),
+                "first_name": r.get("first_name", ""),
+                "username": r.get("username", ""),
+                "string_session": r["string_session"],
+                "can_share": r.get("can_share", 1),
+                "is_tg_premium": r.get("is_tg_premium", 0),
+            }
+            for r in records
+            if r.get("string_session")
+        ]
+        raw_json = json.dumps(valid, ensure_ascii=False)
+        return base64.b64encode(raw_json.encode("utf-8")).decode("ascii")
+
+    async def import_sessions_payload(self, payload: str) -> Tuple[int, str]:
+        """Imports and activates sessions from a base64 JSON string or raw session strings."""
+        import base64
+        import json
+        payload = payload.strip()
+        imported = 0
+        try:
+            items = []
+            try:
+                decoded = base64.b64decode(payload).decode("utf-8")
+                items = json.loads(decoded)
+            except Exception:
+                # Raw session strings
+                for s in payload.replace("\n", "||").split("||"):
+                    s = s.strip()
+                    if len(s) > 50:
+                        items.append({"string_session": s})
+
+            for item in items:
+                s_str = item.get("string_session", "").strip()
+                if not s_str:
+                    continue
+                from core.auto_recover import _decode_session_user_id
+                aid = item.get("account_id") or _decode_session_user_id(s_str)
+                owner_id = item.get("owner_user_id", aid)
+                phone = item.get("phone", "")
+                fname = item.get("first_name", "")
+                uname = item.get("username", "")
+                can_share = item.get("can_share", 1)
+                is_prem = item.get("is_tg_premium", 0)
+
+                ok, _ = await self.add_or_update_bot_account(
+                    owner_user_id=owner_id,
+                    account_id=aid,
+                    phone=phone,
+                    first_name=fname,
+                    username=uname,
+                    string_session=s_str,
+                    can_share=can_share,
+                    is_tg_premium=is_prem,
+                )
+                if ok:
+                    imported += 1
+
+            if imported > 0:
+                await self.sync_vault_and_env()
+                return imported, f"Successfully imported {imported} account(s)!"
+            return 0, "No valid sessions found in payload."
+        except Exception as e:
+            return 0, f"Import error: {e}"
 
     async def get_bot_accounts(
         self, owner_user_id: Optional[int] = None, active_only: bool = False

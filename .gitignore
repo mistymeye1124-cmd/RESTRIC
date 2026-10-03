@@ -16,6 +16,8 @@
 *.auth
 sessions/*
 !sessions/.gitkeep
+data/sessions_vault.json
+!data/.gitkeep
 
 # 3. Databases (User accounts, logs, payment records)
 *.db

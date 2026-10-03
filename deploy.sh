@@ -20,6 +20,18 @@ echo -e "${CYAN}================================================================
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR"
 
+# 0. Safety Backup (Guarantees accounts, database & sessions are never lost during redeploy)
+SAFE_BACKUP="/tmp/tgbot_deploy_safe_$$"
+PERSIST_BACKUP="/var/backups/tgbot_deploy_safe"
+mkdir -p "$SAFE_BACKUP" "$PERSIST_BACKUP" 2>/dev/null || true
+
+for db_file in "$PROJECT_DIR"/*.db; do
+    [ -f "$db_file" ] && cp "$db_file" "$SAFE_BACKUP/" 2>/dev/null && cp "$db_file" "$PERSIST_BACKUP/" 2>/dev/null || true
+done
+[ -d "$PROJECT_DIR/sessions" ] && cp -r "$PROJECT_DIR/sessions" "$SAFE_BACKUP/" 2>/dev/null && cp -r "$PROJECT_DIR/sessions" "$PERSIST_BACKUP/" 2>/dev/null || true
+[ -d "$PROJECT_DIR/data" ] && cp -r "$PROJECT_DIR/data" "$SAFE_BACKUP/" 2>/dev/null && cp -r "$PROJECT_DIR/data" "$PERSIST_BACKUP/" 2>/dev/null || true
+[ -f "$PROJECT_DIR/.env" ] && cp "$PROJECT_DIR/.env" "$SAFE_BACKUP/" 2>/dev/null && cp "$PROJECT_DIR/.env" "$PERSIST_BACKUP/" 2>/dev/null || true
+
 # 1. Detect Operating System & Package Manager
 echo -e "\n${YELLOW}[Step 1/6] Detecting System Environment...${NC}"
 if [ -f /etc/os-release ]; then
@@ -46,7 +58,11 @@ fi
 # 2. Check and Setup Configuration (.env)
 echo -e "\n${YELLOW}[Step 2/6] Verifying Configuration (.env)...${NC}"
 if [ ! -f ".env" ]; then
-    if [ -f ".env.example" ]; then
+    if [ -f "$SAFE_BACKUP/.env" ]; then
+        cp "$SAFE_BACKUP/.env" .env
+    elif [ -f "$PERSIST_BACKUP/.env" ]; then
+        cp "$PERSIST_BACKUP/.env" .env
+    elif [ -f ".env.example" ]; then
         echo -e "Creating .env from .env.example..."
         cp .env.example .env
     else
@@ -73,10 +89,18 @@ if [ -t 0 ]; then
     fi
 fi
 
-# 3. Create Runtime Directories
-echo -e "\n${YELLOW}[Step 3/6] Initializing Storage Directories...${NC}"
+# 3. Create Runtime Directories & Prevent Docker File-as-Directory Trap
+echo -e "\n${YELLOW}[Step 3/6] Initializing Storage Directories & Databases...${NC}"
 mkdir -p downloads sessions data/branding scratch
+touch bot_database.db restricted_v2.db
 chmod 755 downloads sessions data scratch 2>/dev/null || true
+
+# Restore database and sessions if available in safe backup
+for db_file in "$SAFE_BACKUP"/*.db; do
+    [ -f "$db_file" ] && cp -n "$db_file" "$PROJECT_DIR/" 2>/dev/null || true
+done
+[ -d "$SAFE_BACKUP/sessions" ] && cp -rn "$SAFE_BACKUP/sessions/." "$PROJECT_DIR/sessions/" 2>/dev/null || true
+[ -d "$SAFE_BACKUP/data" ] && cp -rn "$SAFE_BACKUP/data/." "$PROJECT_DIR/data/" 2>/dev/null || true
 
 # 4. Choose Deployment Method (Docker or Native Systemd)
 DEPLOY_MODE="native"
@@ -99,6 +123,9 @@ if [ "$DEPLOY_MODE" == "docker" ]; then
         curl -fsSL https://get.docker.com | $SUDO sh
         $SUDO systemctl enable --now docker
     fi
+
+    # Crucial: touch database files before mounting volume in Docker
+    touch bot_database.db restricted_v2.db
 
     echo -e "[*] Building and starting Docker containers..."
     $SUDO docker compose up -d --build
@@ -169,6 +196,19 @@ LimitNOFILE=65535
 [Install]
 WantedBy=multi-user.target
 EOF
+
+    # Run auto-recovery audit to ensure all sessions from vault, env, and backups are healthy
+    echo -e "\n${YELLOW}[*] Running Session Vault & Multi-Account Auto-Recovery...${NC}"
+    $PROJECT_DIR/venv/bin/python -c "
+import sys; sys.path.insert(0, '.')
+try:
+    from core.auto_recover import run_auto_recovery
+    import config
+    count = run_auto_recovery(config.DB_PATH)
+    print(f'[AutoRecover] {count} worker account(s) confirmed healthy in database.')
+except Exception as e:
+    print(f'[AutoRecover] skipped: {e}')
+" 2>/dev/null || true
 
     $SUDO systemctl daemon-reload
     $SUDO systemctl enable --now bot

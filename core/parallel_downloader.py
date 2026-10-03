@@ -107,6 +107,7 @@ async def turbo_parallel_download(
             except Exception:
                 pass
 
+    cpu_count = os.cpu_count() or 2
     if total_size < 5 * 1024 * 1024:
         num_workers = 2
         chunk_size = 512 * 1024
@@ -114,11 +115,14 @@ async def turbo_parallel_download(
         num_workers = 4
         chunk_size = 1024 * 1024
     elif total_size < 75 * 1024 * 1024:
-        num_workers = 6 if is_prem else 4
+        num_workers = 8 if (is_prem and cpu_count >= 4) else (6 if is_prem else 4)
         chunk_size = 1024 * 1024
     else:
-        # Large files (75MB - 4GB): 8 parallel streams sustain 50-70+ MB/s wire speed
-        num_workers = 8 if is_prem else 5
+        # Large files (75MB - 4GB): On 4+ vCPU, 10-12 parallel streams push DC wire speed to 70-85+ MB/s
+        if is_prem:
+            num_workers = 10 if cpu_count >= 4 else 8
+        else:
+            num_workers = 6 if cpu_count >= 4 else 5
         chunk_size = 1024 * 1024
 
     fid = FileId.decode(target.file_id)

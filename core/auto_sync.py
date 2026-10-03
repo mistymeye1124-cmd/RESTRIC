@@ -12,6 +12,7 @@ When a new update is pushed:
 
 import asyncio
 import os
+import sys
 import shutil
 import subprocess
 import logging
@@ -68,13 +69,21 @@ def _backup_user_data(safe_dir: Path) -> dict:
         except Exception:
             pass
 
+    # Backup data/ directory (specifically sessions_vault.json)
+    data_src = _BOT_DIR / "data"
+    if data_src.exists():
+        try:
+            shutil.copytree(data_src, safe_dir / "data", dirs_exist_ok=True)
+        except Exception as e:
+            logger.warning(f"Data directory backup error: {e}")
+
     logger.info(f"[Backup] {len(backed_dbs)} DB(s), {session_count} session(s) backed up → {safe_dir}")
     return {"dbs": backed_dbs, "sessions": session_count}
 
 
 def _restore_user_data(safe_dir: Path) -> dict:
     """
-    Restores backed-up database files and session files from safe_dir back
+    Restores backed-up database files, session files, and session vault from safe_dir back
     into the project directory.  Runs UNCONDITIONALLY after git operations.
     """
     restored_dbs = []
@@ -100,6 +109,14 @@ def _restore_user_data(safe_dir: Path) -> dict:
                         session_count += 1
         except Exception as e:
             logger.warning(f"Session restore error: {e}")
+
+    # Restore data/ directory (sessions_vault.json)
+    safe_data = safe_dir / "data"
+    if safe_data.exists():
+        try:
+            shutil.copytree(safe_data, _BOT_DIR / "data", dirs_exist_ok=True)
+        except Exception as e:
+            logger.warning(f"Data directory restore error: {e}")
 
     env_bak = safe_dir / ".env"
     if env_bak.exists():
@@ -224,11 +241,22 @@ async def execute_vps_update_and_restart(
         # ── PHASE 5: Delayed service restart ─────────────────────────────
         async def _delayed_restart():
             await asyncio.sleep(3.0)
-            subprocess.run(
-                ["sudo", "systemctl", "restart", "bot"],
-                capture_output=True,
-                check=False,
-            )
+            if os.path.exists("/.dockerenv") or os.environ.get("DOKPLOY_DEPLOY"):
+                # Clean exit inside Docker/Dokploy triggers restart: unless-stopped
+                logger.info("[AutoSync] Container environment detected. Triggering graceful container restart...")
+                sys.exit(0)
+            elif sys.platform == "linux":
+                import shutil
+                if shutil.which("systemctl"):
+                    subprocess.run(
+                        ["sudo", "systemctl", "restart", "bot"],
+                        capture_output=True,
+                        check=False,
+                    )
+                elif os.path.exists(_BOT_DIR / "docker-compose.yml") and shutil.which("docker"):
+                    subprocess.run(["docker", "compose", "restart"], check=False, cwd=str(_BOT_DIR))
+            else:
+                sys.exit(0)
 
         asyncio.create_task(_delayed_restart())
         return True, "Update applied. Sessions preserved. Service restarting."
@@ -271,6 +299,10 @@ async def vps_git_watchdog(bot_client: Client):
     Silently checks if remote GitHub main branch has new commits.
     If new commit detected → auto-pulls (with session backup/restore) and restarts.
     """
+    if sys.platform != "linux":
+        logger.info("[AutoSync] Watchdog disabled on non-Linux environment (Windows development).")
+        return
+
     await asyncio.sleep(30.0)  # Wait for initial boot to settle
     while True:
         try:

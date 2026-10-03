@@ -20,6 +20,7 @@ if sys.platform == "win32":
         pass
 from typing import Dict, Optional, List, Any, Tuple
 from pyrogram import Client
+from pyrogram.errors import ChannelInvalid, PeerIdInvalid, RPCError
 from config import API_ID, API_HASH, SESSIONS_DIR, ADMIN_IDS
 from database import db
 from core.device_spoofer import get_fingerprint_for_user
@@ -383,6 +384,132 @@ async def toggle_account_premium(account_id: int) -> Tuple[bool, int]:
     return True, new_state
 
 
+async def get_personal_user_client(user_id: int) -> Optional[Client]:
+    """
+    Returns strictly the personal Pyrogram client for user_id (where client Telegram ID matches user_id).
+    Excludes third-party worker accounts merely configured/added by an admin.
+    """
+    if not user_id:
+        return None
+
+    # 1. First check if personal client is already loaded in account_pool
+    if user_id in account_pool:
+        client = account_pool[user_id]
+        if not getattr(client, "is_connected", False):
+            try:
+                await client.connect()
+            except Exception:
+                pass
+        if getattr(client, "is_connected", False):
+            me = getattr(client, "me", None)
+            if me and me.id == user_id:
+                return client
+            elif not me:
+                try:
+                    me = await client.get_me()
+                    if me and me.id == user_id:
+                        return client
+                except Exception:
+                    pass
+
+    # 2. Check if user has personal session in DB
+    async with _get_load_lock(user_id):
+        session_string = await db.get_session(user_id)
+        if session_string:
+            # Check if this session is already loaded under another key or invalid
+            rec = {
+                "account_id": user_id,
+                "owner_user_id": user_id,
+                "string_session": session_string,
+                "can_share": 0,
+            }
+            client = await load_bot_account_client(rec)
+            if client and getattr(client, "is_connected", False):
+                me = getattr(client, "me", None)
+                if me and me.id == user_id:
+                    return client
+                elif not me:
+                    try:
+                        me = await client.get_me()
+                        if me and me.id == user_id:
+                            return client
+                    except Exception:
+                        pass
+    return None
+
+
+async def resolve_chat_access(client: Client, chat_id: Any) -> bool:
+    """
+    Tests if client has access to chat_id.
+    Handles Pyrogram MTProto peer resolution and dialog syncing if not yet in peer cache.
+    """
+    if not client or not getattr(client, "is_connected", False):
+        return False
+
+    try:
+        await client.get_chat(chat_id)
+        return True
+    except (ChannelInvalid, PeerIdInvalid, KeyError):
+        # Peer cache miss — MTProto needs get_dialogs to learn access_hash
+        try:
+            count = 0
+            async for dialog in client.get_dialogs(limit=150):
+                count += 1
+                if dialog.chat and dialog.chat.id == chat_id:
+                    return True
+                if count % 10 == 0:
+                    await asyncio.sleep(0.05)
+        except Exception:
+            pass
+
+        try:
+            await client.get_chat(chat_id)
+            return True
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
+async def get_client_for_channel(chat_id: Any, user_id: Optional[int] = None) -> Tuple[Optional[Client], str]:
+    """
+    Resolves the best client that has access to chat_id:
+    1. Checks user's personal client (highest priority for private channels).
+    2. If personal client doesn't have access or user isn't logged in, checks all healthy worker accounts in the pool.
+    Returns: (client, reason)
+    reason can be: "personal", "worker", "no_session", or "not_in_channel".
+    """
+    personal_client = None
+    if user_id:
+        personal_client = await get_personal_user_client(user_id)
+        if personal_client:
+            has_access = await resolve_chat_access(personal_client, chat_id)
+            if has_access:
+                return personal_client, "personal"
+
+    # Check worker accounts in pool
+    candidate_workers: List[Client] = []
+    for aid, client in list(account_pool.items()):
+        if client.is_connected and client != personal_client:
+            meta = account_metadata.get(aid, {})
+            if meta.get("can_share", 1):
+                candidate_workers.append(client)
+
+    for ac in admin_pool_clients:
+        if ac.is_connected and ac != personal_client and ac not in candidate_workers:
+            candidate_workers.append(ac)
+
+    for worker in candidate_workers:
+        has_access = await resolve_chat_access(worker, chat_id)
+        if has_access:
+            return worker, "worker"
+
+    if not personal_client:
+        return None, "no_session"
+    else:
+        return None, "not_in_channel"
+
+
 async def get_user_client(user_id: int, prefer_premium: bool = True) -> Optional[Client]:
     """
     Returns an active Pyrogram client for downloading:
@@ -424,52 +551,12 @@ async def get_user_client(user_id: int, prefer_premium: bool = True) -> Optional
             pool_index += 1
             return selected
 
-    # 2. Check personal accounts owned by this user
-    personal_healthy: List[Client] = []
-    for aid, client in list(account_pool.items()):
-        meta = account_metadata.get(aid, {})
-        if meta.get("owner_user_id") == user_id or aid == user_id:
-            if not client.is_connected:
-                try:
-                    await client.connect()
-                except Exception:
-                    pass
-            if client.is_connected:
-                limiter = rate_registry.get_sync(f"account_{aid}")
-                if not limiter.is_quarantined:
-                    personal_healthy.append(client)
-
-    if personal_healthy:
-        client = personal_healthy[pool_index % len(personal_healthy)]
-        pool_index += 1
-        return client
-
-    # 2. Check if user has session in DB not yet loaded or if account in pool needs re-initialization
-    async with _get_load_lock(user_id):
-        # Re-check personal after acquiring lock
-        for aid, client in list(account_pool.items()):
-            meta = account_metadata.get(aid, {})
-            if (meta.get("owner_user_id") == user_id or aid == user_id) and client.is_connected:
-                return client
-
-        session_string = await db.get_session(user_id)
-        if session_string:
-            if user_id in account_pool:
-                old_c = account_pool.pop(user_id, None)
-                try:
-                    if old_c and old_c.is_connected:
-                        await old_c.stop()
-                except Exception:
-                    pass
-            rec = {
-                "account_id": user_id,
-                "owner_user_id": user_id,
-                "string_session": session_string,
-                "can_share": 1,
-            }
-            client = await load_bot_account_client(rec)
-            if client and client.is_connected:
-                return client
+    # 2. Check personal account belonging directly to this user
+    personal_c = await get_personal_user_client(user_id)
+    if personal_c:
+        limiter = rate_registry.get_sync(f"account_{user_id}")
+        if not limiter.is_quarantined:
+            return personal_c
 
     # 3. Round-robin through all healthy accounts in the general multi-account worker pool
     all_healthy_pool: List[Client] = []

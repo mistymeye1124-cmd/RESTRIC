@@ -13,7 +13,7 @@ import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from core.link_parser import parse_telegram_link
-from core.client_manager import get_user_client
+from core.client_manager import get_user_client, get_client_for_channel, get_personal_user_client
 from core.download_engine import download_restricted_media, active_jobs
 from core.upload_engine import upload_unlocked_media
 from core.watermark_engine import apply_video_watermark, apply_dual_video_watermark, apply_video_delogo
@@ -156,24 +156,44 @@ async def telegram_link_listener(bot_client: Client, message: Message):
             )
         telegram_links = telegram_links[:max_batch]
 
-    # 4. Check Userbot Session for Private Links
+    # 4. Check Client Resolution for Private Links
     has_private = any(l.is_private for l in telegram_links)
-    user_client = await get_user_client(user_id)
-
-    if has_private and not user_client:
-        await message.reply_text(
-            "🔐 **Account Connection Required**\n\n"
-            "This link points to a private/restricted channel.\n"
-            "Your Telegram account needs to be linked so the bot can access and download your course content.\n\n"
-            "👉 **Click below to scan QR code and connect in 5 seconds:**",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📱 Scan QR Code (/login)", callback_data="start_qr_login")],
-                [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
-            ])
-        )
-        return
-
-    download_client = user_client if user_client else bot_client
+    if has_private:
+        target_chat = telegram_links[0].chat_identifier
+        chosen_client, status_reason = await get_client_for_channel(target_chat, user_id)
+        if not chosen_client:
+            if status_reason == "no_session":
+                await message.reply_text(
+                    "🔐 **Account Connection Required**\n\n"
+                    f"This link points to a private/restricted channel (`{target_chat}`).\n"
+                    "The bot's background workers are not members of this channel.\n\n"
+                    "👉 **Since you are joined to this channel in Telegram**, please connect your account via QR code so the bot can access and download your files:\n\n"
+                    "_(It takes 5 seconds, no password or phone number needed)_",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📱 Connect Account via QR Code (/login)", callback_data="start_qr_login")],
+                        [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]
+                    ])
+                )
+                return
+            elif status_reason == "not_in_channel":
+                p_c = await get_personal_user_client(user_id)
+                uname = getattr(getattr(p_c, "me", None), "username", "")
+                tag = f"(@{uname})" if uname else ""
+                await message.reply_text(
+                    "⚠️ **Account Not In Channel**\n\n"
+                    f"Your connected Telegram account {tag} is **not a member** of this private channel (`{target_chat}`).\n\n"
+                    "👉 Please ensure you connect the specific Telegram account where you have joined this channel:\n"
+                    "1. Use `/login` to link that account.\n"
+                    "2. Or ask the channel owner for an invite link (`/join <invite_link>`).",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📱 Switch Account (/login)", callback_data="start_qr_login")]
+                    ])
+                )
+                return
+        download_client = chosen_client
+    else:
+        user_client = await get_user_client(user_id)
+        download_client = user_client if user_client else bot_client
 
     # Check if user invoked the interactive wizard
     if user_id in wizard_users:
@@ -683,7 +703,7 @@ async def run_batch_harvest_pipeline(
                 pass
             try:
                 cur_text = getattr(s_msg, "text", "") or ""
-                if "CONTENT PROTECTED" not in cur_text and "UNAUTHORIZED" not in cur_text:
+                if "CONTENT PROTECTED" not in cur_text and "UNAUTHORIZED" not in cur_text and "Could not retrieve" not in cur_text and "Access Denied" not in cur_text:
                     await s_msg.edit_text(
                         "⚠️ **Content Unavailable or Non-Media**\n\n"
                         "The requested message does not contain downloadable media, "

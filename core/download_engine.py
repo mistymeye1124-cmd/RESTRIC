@@ -144,12 +144,14 @@ async def _safe_get_messages(
                 pass
 
             try:
-                # 2. Gentle human-paced dialog sync fallback
+                # 2. Comprehensive human-paced dialog sync fallback (learns MTProto access_hash)
                 count = 0
-                async for _ in client.get_dialogs(limit=25):
+                async for dialog in client.get_dialogs(limit=150):
                     count += 1
-                    if count % 5 == 0:
-                        await asyncio.sleep(0.3)
+                    if dialog.chat and dialog.chat.id == chat_id:
+                        break
+                    if count % 10 == 0:
+                        await asyncio.sleep(0.08)
                 msg = await client.get_messages(chat_id=chat_id, message_ids=message_id)
                 if msg:
                     limiter.on_success()
@@ -248,10 +250,10 @@ async def download_restricted_media(
         source_msg = await _safe_get_messages(current_client, chat_id, message_id, session_key)
 
         if source_msg is None and user_id:
-            # If the primary client (e.g. shared Telegram Premium) is not a member of a private channel,
-            # gracefully fall back to the user's personal client!
-            from core.client_manager import get_user_client
-            personal_c = await get_user_client(user_id, prefer_premium=False)
+            # If the primary client is not a member of a private channel,
+            # gracefully fall back directly to the user's personal client!
+            from core.client_manager import get_personal_user_client
+            personal_c = await get_personal_user_client(user_id)
             if personal_c and personal_c != current_client:
                 current_client = personal_c
                 session_key = _session_key_from_client(current_client)
@@ -281,9 +283,10 @@ async def download_restricted_media(
             await status_message.edit_text(
                 "❌ **Could not retrieve this message.**\n\n"
                 "Possible reasons:\n"
-                "• Your session needs to join the channel first (`/join <link>`)\n"
-                "• The post was deleted\n"
-                "• Temporary Telegram rate-limit — try again in a few minutes"
+                f"• No connected account is a member of this channel (`{chat_id}`)\n"
+                "• If this is a private channel, please connect the account that has joined via `/login`\n"
+                "• Or provide an invite link using `/join <invite_link>`\n"
+                "• The post was deleted or rate limits are in effect"
             )
             active_jobs.pop(job_id, None)
             return None

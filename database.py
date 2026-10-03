@@ -2554,7 +2554,8 @@ class Database:
                         username = excluded.username,
                         string_session = excluded.string_session,
                         is_active = 1,
-                        status = 'healthy'
+                        status = 'healthy',
+                        can_share = excluded.can_share
                     """,
                     (owner_user_id, account_id, phone, first_name, username, string_session, can_share),
                 )
@@ -2662,6 +2663,12 @@ class Database:
             await db.execute(up_query, tuple(up_params))
             await db.commit()
             return True, new_val
+
+    async def set_bot_account_sharing(self, account_id: int, can_share: int = 1):
+        """Sets can_share value directly (1 = shared worker, 0 = personal only)."""
+        async with aiosqlite.connect(self.db_file) as db:
+            await db.execute("UPDATE bot_accounts SET can_share = ? WHERE account_id = ?", (can_share, account_id))
+            await db.commit()
 
     async def update_bot_account_status(self, account_id: int, status: str, flood_wait_until: float = 0):
         """Updates health status ('healthy', 'cooldown', 'dead') and flood cooldown timer."""

@@ -166,6 +166,18 @@ async def render_accounts_cockpit(user_id: int):
             device = fp.get("device_model", "Official Telegram")
             dl_today = acc.get("daily_downloads", 0)
             dl_total = acc.get("total_downloads", 0)
+            phone = acc.get("phone", "")
+            phone_str = f" | 📞 `+{phone.lstrip('+')}`" if phone else ""
+
+            meta = account_metadata.get(aid, {})
+            is_tg_prem = meta.get("is_tg_premium", False)
+
+            if is_tg_prem:
+                role_title = "⭐ 👑 [MASTER TURBO VIP]"
+            elif aid in ADMIN_IDS or aid == user_id:
+                role_title = "👑 [PRIMARY ADMIN]"
+            else:
+                role_title = f"🤖 [WORKER #{idx}]"
 
             f_until = acc.get("flood_wait_until", 0)
             if not acc.get("is_active"):
@@ -179,11 +191,11 @@ async def render_accounts_cockpit(user_id: int):
                 st_badge = "🟢 Healthy & Ready"
 
             can_sh = acc.get("can_share", 1)
-            mode_badge = "⚡ Worker Pool" if can_sh else "🛡️ Personal Only"
+            mode_badge = "⚡ Shared Worker Pool" if can_sh else "🛡️ Personal Only"
             toggle_mode_text = "🛡️ Personal" if can_sh else "⚡ Worker"
 
             text_lines.append(
-                f"{idx}. **{uname}** (`{aid}`)\n"
+                f"{idx}. {role_title} **{uname}** (`{aid}`){phone_str}\n"
                 f"   📱 **Hardware:** `{device}`\n"
                 f"   📊 **Telemetry:** `{dl_today}` today | `{dl_total}` total downloads\n"
                 f"   ⚡ **Status:** {st_badge} | **Mode:** `{mode_badge}`\n"
@@ -470,31 +482,51 @@ async def user_disconnect_session_callback(client: Client, callback_query: Callb
 @Client.on_callback_query(filters.regex(r"^prompt_phone_login$"))
 async def prompt_phone_callback(client: Client, callback_query: CallbackQuery):
     await callback_query.answer()
-    contact_reply_kb = ReplyKeyboardMarkup(
-        [
-            [KeyboardButton("📱 ১-ট্যাপে নিজের নম্বর পাঠান (Share Contact)", request_contact=True)],
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=True,
-    )
-    # Delete previous inline card to prevent visual duplicate stacked cards
+    from pyrogram.types import ReplyKeyboardRemove
+
+    # Ensure any lingering reply keyboard from previous attempts is cleanly cleared from user UI
     try:
-        await callback_query.message.delete()
+        cleanup_msg = await client.send_message(
+            chat_id=callback_query.message.chat.id,
+            text="🔄 Preparing login...",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await cleanup_msg.delete()
     except Exception:
         pass
 
-    await client.send_message(
-        chat_id=callback_query.message.chat.id,
-        text=(
-            "📱 **Phone Number Login**\n\n"
-            "আপনার ফোন নম্বর দিয়ে লগইন করার ২টি সহজ উপায়:\n\n"
-            "১️⃣ **সবচেয়ে সহজ:** নিচের **'📱 ১-ট্যাপে নিজের নম্বর পাঠান'** বড় বাটনে চাপ দিন (টাইপ করা লাগবে না)।\n\n"
-            "২️⃣ **অথবা টাইপ করে পাঠান:** কান্ট্রি কোডসহ আপনার নম্বর লিখুন:\n"
-            "• যেমন: `01853170055` বা `+8801853170055`\n\n"
-            "💡 _নম্বর পাঠানো মাত্রই টেলিগ্রাম থেকে আপনার অ্যাপ এবং সিমে কোড পাঠানো হবে।_"
-        ),
-        reply_markup=contact_reply_kb,
+    markup = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📱 Switch to QR Code Login", callback_data="start_qr_login")],
+            [InlineKeyboardButton("🔙 Back to Login Menu", callback_data="back_to_login_hub")],
+        ]
     )
+
+    prompt_text = (
+        "📱 **Phone Number Login (নম্বর দিয়ে লগইন)**\n\n"
+        "আপনার কান্ট্রি কোডসহ টেলিগ্রাম ফোন নম্বরটি মেসেজে লিখে পাঠান:\n\n"
+        "• যেমন: `+88018XXXXXXXX` বা `018XXXXXXXX`\n\n"
+        "⚡️ _নম্বর লিখে পাঠানো মাত্রই অফিশিয়াল টেলিগ্রাম অ্যাপে (Service Notifications / 777000) ৫ ডিজিটের সিকিউর লগইন কোড চলে আসবে।_"
+    )
+
+    try:
+        await callback_query.message.edit_text(prompt_text, reply_markup=markup)
+    except Exception:
+        await client.send_message(
+            chat_id=callback_query.message.chat.id,
+            text=prompt_text,
+            reply_markup=markup,
+        )
+
+
+@Client.on_callback_query(filters.regex(r"^back_to_login_hub$"))
+async def back_to_login_hub_callback(client: Client, callback_query: CallbackQuery):
+    await callback_query.answer()
+    text, markup = await render_login_hub_card(callback_query.from_user.id)
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        pass
 
 
 # ----------------- QR CODE LOGIN FLOW -----------------

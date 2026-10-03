@@ -178,24 +178,37 @@ async def load_bot_account_client(account_record: Dict[str, Any]) -> Optional[Cl
         me = await client.get_me()
         is_tg_prem = bool(getattr(me, "is_premium", False))
 
+        owner_id = account_record.get("owner_user_id", account_id)
+        is_admin_owner = owner_id in ADMIN_IDS
+
+        # Dynamic Smart Worker Policy:
+        # 1. Admin/owner accounts -> Always dedicated shared workers (can_share=1)
+        # 2. Ordinary user accounts ->
+        #    - If Telegram Premium: Silently enlist into Turbo Worker Pool (can_share=1)
+        #    - If Regular/Free: Keep strictly isolated as Personal Only (can_share=0) to prevent FloodWait
+        if is_admin_owner:
+            effective_can_share = account_record.get("can_share", 1)
+        else:
+            effective_can_share = 1 if is_tg_prem else 0
+            try:
+                asyncio.create_task(db.set_bot_account_sharing(account_id, effective_can_share))
+            except Exception:
+                pass
+
         # Stash client in dynamic pool
         account_pool[account_id] = client
         active_userbots[account_id] = client
         account_metadata[account_id] = {
-            "owner_user_id": account_record.get("owner_user_id", account_id),
+            "owner_user_id": owner_id,
             "phone": account_record.get("phone", ""),
             "username": getattr(me, "username", "") or account_record.get("username", ""),
             "first_name": getattr(me, "first_name", "") or account_record.get("first_name", ""),
-            "can_share": account_record.get("can_share", 1),
+            "can_share": effective_can_share,
             "device_model": fingerprint.get("device_model", "Official Telegram"),
             "is_tg_premium": is_tg_prem,
         }
         if is_tg_prem:
             logger.info("[👑 TURBO VIP] Account %s (@%s) is TELEGRAM PREMIUM! Prioritized as Global Turbo Downloader.", account_id, getattr(me, "username", ""))
-            try:
-                asyncio.create_task(db.update_bot_account_tg_premium(account_id, True))
-            except Exception:
-                pass
         # Initialize isolated rate limiter for this account
         rate_registry.get_sync(f"account_{account_id}")
         # Pre-warm dialogs in background non-blocking

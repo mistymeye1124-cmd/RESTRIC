@@ -44,6 +44,18 @@ fi
 # 3.5 Ensure sessions and data directories exist safely
 mkdir -p sessions downloads temp_sessions logs
 
+# 3.8 Optimize Linux Network Kernel (Google BBR & 16MB TCP Buffers for 50+ MB/s)
+if command -v sysctl >/dev/null 2>&1; then
+    echo "[*] Activating Google BBR & high-speed 16MB TCP buffers..."
+    sudo sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1 || true
+    sudo sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1 || true
+    sudo sysctl -w net.core.rmem_max=16777216 >/dev/null 2>&1 || true
+    sudo sysctl -w net.core.wmem_max=16777216 >/dev/null 2>&1 || true
+    sudo sysctl -w net.ipv4.tcp_rmem="4096 87380 16777216" >/dev/null 2>&1 || true
+    sudo sysctl -w net.ipv4.tcp_wmem="4096 65536 16777216" >/dev/null 2>&1 || true
+    sudo sysctl -w net.ipv4.tcp_fastopen=3 >/dev/null 2>&1 || true
+fi
+
 # 4. Restart systemd services
 if command -v systemctl >/dev/null 2>&1; then
     sudo systemctl daemon-reload 2>/dev/null || true

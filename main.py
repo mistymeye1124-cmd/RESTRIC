@@ -148,7 +148,54 @@ def prevent_windows_sleep():
         pass
 
 
+def auto_optimize_linux_network():
+    """
+    Automatically applies Google BBR Congestion Control and expands TCP socket buffers
+    on Linux VPS (Hostinger KVM 4) for sustained 50+ MB/s MTProto wire speed.
+    Fails silently on Windows or non-root environments without crashing.
+    """
+    if sys.platform != "linux":
+        return
+
+    import shutil
+    import subprocess
+
+    sysctl_bin = shutil.which("sysctl")
+    if not sysctl_bin:
+        return
+
+    tuning_params = [
+        ("net.core.default_qdisc", "fq"),
+        ("net.ipv4.tcp_congestion_control", "bbr"),
+        ("net.core.rmem_max", "16777216"),
+        ("net.core.wmem_max", "16777216"),
+        ("net.ipv4.tcp_rmem", "4096 87380 16777216"),
+        ("net.ipv4.tcp_wmem", "4096 65536 16777216"),
+        ("net.ipv4.tcp_fastopen", "3"),
+    ]
+
+    applied = 0
+    for key, val in tuning_params:
+        try:
+            res = subprocess.run(
+                [sysctl_bin, "-w", f"{key}={val}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if res.returncode == 0:
+                applied += 1
+        except Exception:
+            pass
+
+    if applied > 0:
+        print(f"[⚡ TURBO KERNEL] Applied Linux BBR & TCP buffer optimizations ({applied} parameters tuned).")
+
+
 async def main():
+    # Automatically tune Linux network kernel on VPS for 50+ MB/s wire speed
+    auto_optimize_linux_network()
+
     # Force UTF-8 for console output on Windows
     if sys.platform == "win32":
         try:

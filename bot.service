@@ -6,6 +6,13 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/root/bot
+ExecStartPre=-/sbin/sysctl -w net.core.default_qdisc=fq
+ExecStartPre=-/sbin/sysctl -w net.ipv4.tcp_congestion_control=bbr
+ExecStartPre=-/sbin/sysctl -w net.core.rmem_max=16777216
+ExecStartPre=-/sbin/sysctl -w net.core.wmem_max=16777216
+ExecStartPre=-/sbin/sysctl -w net.ipv4.tcp_rmem=4096 87380 16777216
+ExecStartPre=-/sbin/sysctl -w net.ipv4.tcp_wmem=4096 65536 16777216
+ExecStartPre=-/sbin/sysctl -w net.ipv4.tcp_fastopen=3
 ExecStart=/root/bot/venv/bin/python main.py
 Restart=always
 RestartSec=5

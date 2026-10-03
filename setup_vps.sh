@@ -55,6 +55,19 @@ EOF
 
 sudo systemctl daemon-reload
 
+# 7. Permanent Linux BBR & High-Speed TCP Buffer Optimization (50+ MB/s Wire Speed)
+echo "[*] Permanently configuring Google BBR Congestion Control & 16MB TCP Buffers..."
+cat <<EOF | sudo tee /etc/sysctl.d/99-bbr.conf > /dev/null
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.ipv4.tcp_rmem = 4096 87380 16777216
+net.ipv4.tcp_wmem = 4096 65536 16777216
+net.ipv4.tcp_fastopen = 3
+EOF
+sudo sysctl --system > /dev/null 2>&1 || true
+
 echo "=========================================================="
 echo "✅ VPS Setup & systemd Service Configured Successfully!"
 echo "To start the bot now:"

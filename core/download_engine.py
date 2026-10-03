@@ -15,6 +15,9 @@ import time
 import asyncio
 import logging
 import random
+import struct
+import base64
+import ipaddress
 from pathlib import Path
 from typing import Optional, Dict, Any
 from pyrogram import Client
@@ -43,6 +46,125 @@ from core.rate_limiter import rate_registry
 from core.client_manager import get_next_available_pool_client, handle_dead_session, mark_account_flood_wait
 
 logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Telethon high-layer (Layer 180+) fallback — handles Pyrogram's
+# MessageMediaUnsupported for edited/new-format posts.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_TELE_DC_IPS = {
+    1: "149.154.175.53",
+    2: "149.154.167.51",
+    3: "149.154.175.100",
+    4: "149.154.167.92",
+    5: "91.108.56.130",
+}
+
+
+def _pyro_session_to_telethon(pyro_b64: str) -> str:
+    """
+    Converts a Pyrogram in-memory session string to a Telethon StringSession string.
+    Pyrogram format: base64url( dc_id[1] || padding[1] || auth_key[256] )
+    Telethon format: '1' + base64( dc_id[1] || ip[4 or 16] || port[2] || auth_key[256] )
+    """
+    raw = base64.urlsafe_b64decode(pyro_b64 + "=" * (-len(pyro_b64) % 4))
+    dc_id = raw[0]
+    auth_key = raw[2:258]  # bytes 1 is padding, 2..257 is the 256-byte auth key
+    ip_packed = ipaddress.ip_address(_TELE_DC_IPS[dc_id]).packed  # 4 bytes for IPv4
+    packed = struct.pack(f">B{len(ip_packed)}sH256s", dc_id, ip_packed, 443, auth_key)
+    return "1" + base64.urlsafe_b64encode(packed).decode().rstrip("=")
+
+
+async def _telethon_fallback_download(
+    pyro_session_str: str,
+    chat_id: int,
+    message_id: int,
+    out_path: str,
+    status_message,
+    job_id: str,
+    active_jobs: dict,
+    progress_callback=None,
+) -> Optional[str]:
+    """
+    Uses Telethon (Layer 180+) to download a message that Pyrogram marks as
+    MessageMediaUnsupported.  Works for edited posts, new expandable-blockquote
+    videos, and any media format newer than MTProto Layer 158.
+    Returns the local file path on success, None on failure.
+    """
+    try:
+        from telethon import TelegramClient
+        from telethon.sessions import StringSession
+        from config import API_ID, API_HASH
+    except ImportError:
+        logger.error("[TelethonFallback] Telethon is not installed — cannot handle MessageMediaUnsupported")
+        return None
+
+    try:
+        tele_session = _pyro_session_to_telethon(pyro_session_str)
+        client = TelegramClient(
+            StringSession(tele_session),
+            int(API_ID),
+            API_HASH,
+            receive_updates=False,
+        )
+        await client.connect()
+        if not await client.is_user_authorized():
+            logger.error("[TelethonFallback] Session not authorized after conversion")
+            await client.disconnect()
+            return None
+
+        msg = await client.get_messages(chat_id, ids=message_id)
+        if msg is None or msg.media is None:
+            logger.warning("[TelethonFallback] Message %d has no media even in Telethon", message_id)
+            await client.disconnect()
+            return None
+
+        # Determine a safe file extension from Telethon attributes
+        ext = ".mp4"  # default for video
+        if hasattr(msg, "document") and msg.document:
+            from telethon.tl.types import DocumentAttributeFilename, DocumentAttributeVideo, DocumentAttributeAudio
+            for attr in getattr(msg.document, "attributes", []):
+                if isinstance(attr, DocumentAttributeFilename) and attr.file_name:
+                    _, e = os.path.splitext(attr.file_name)
+                    if e:
+                        ext = e.lower()
+                        break
+
+        # Ensure extension on out_path
+        if not os.path.splitext(out_path)[1]:
+            out_path = out_path + ext
+
+        total_size = getattr(getattr(msg, "document", None) or getattr(msg, "media", None), "size", None) or 0
+        downloaded_bytes = [0]
+        _last_cb_time = [0.0]
+
+        def _tele_progress(received, total):
+            downloaded_bytes[0] = received
+            now = time.time()
+            if now - _last_cb_time[0] > 0.5 and progress_callback:
+                asyncio.get_event_loop().call_soon_threadsafe(
+                    lambda r=received, t=total: asyncio.ensure_future(progress_callback(r, t or total_size))
+                )
+                _last_cb_time[0] = now
+
+        logger.info("[TelethonFallback] Starting download of msg %d via Telethon", message_id)
+        os.makedirs(os.path.dirname(out_path) if os.path.dirname(out_path) else ".", exist_ok=True)
+        result_path = await client.download_media(
+            msg,
+            file=out_path,
+            progress_callback=_tele_progress,
+        )
+        await client.disconnect()
+
+        if result_path and os.path.exists(str(result_path)) and os.path.getsize(str(result_path)) > 0:
+            logger.info("[TelethonFallback] ✅ Downloaded %s (%d bytes)", result_path, os.path.getsize(str(result_path)))
+            return str(result_path)
+        logger.error("[TelethonFallback] File missing or empty after download")
+        return None
+
+    except Exception as e:
+        logger.error("[TelethonFallback] Exception: %s", e)
+        return None
 
 # Active job tracker for handling cancellation and alert popups
 active_jobs: Dict[str, Dict[str, Any]] = {}
@@ -302,6 +424,67 @@ async def download_restricted_media(
             or source_msg.animation
             or source_msg.sticker
         )
+
+        # ── Telethon Fallback for MessageMediaUnsupported ──────────────────────
+        # Pyrogram (Layer 158) cannot parse media created with Telegram's newer
+        # MTProto layers (170+), e.g. edited posts with expandable-blockquote or
+        # adaptive video transcoder formats.  Telethon (Layer 180+) can handle
+        # these natively.  We detect the raw type and route accordingly.
+        from pyrogram.raw.types import MessageMediaUnsupported as _PyroUnsupported
+        _raw_media = getattr(source_msg, "_raw", None)
+        # Pyrogram also exposes it via source_msg.media == MessageTypes enum when parsed, but
+        # the raw MTProto object is accessible through the internal _raw attribute only in newer builds.
+        # More reliable: check source_msg.media enum value or check isinstance of raw payload.
+        _is_unsupported = (
+            not has_file_media
+            and source_msg.media is not None  # media attribute is set (not None/empty)
+            and source_msg.text is None        # not a text message
+            and source_msg.caption is None     # not a captioned text
+        )
+        # Additionally detect via Pyrogram's internal raw message if available
+        try:
+            from pyrogram import raw as _pyro_raw
+            _raw_msg_obj = getattr(source_msg, "_raw", source_msg)
+            if hasattr(_raw_msg_obj, "media") and isinstance(getattr(_raw_msg_obj, "media", None), _pyro_raw.types.MessageMediaUnsupported):
+                _is_unsupported = True
+        except Exception:
+            pass
+
+        if _is_unsupported and not has_file_media and user_id:
+            # Attempt Telethon high-layer download
+            await status_message.edit_text(
+                "🔄 **Switching to High-Layer Engine** (Layer 180+)\n\n"
+                "This post uses a newer Telegram format — routing through the compatibility engine..."
+            )
+            from database import db as _db
+            _session_row = await _db.get_session(user_id)
+            if _session_row:
+                _pyro_sess_str = _session_row if isinstance(_session_row, str) else getattr(_session_row, "session_string", None)
+                if _pyro_sess_str:
+                    os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
+                    _tele_out_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{job_id}_msg{message_id}.mp4")
+                    _tele_file = await _telethon_fallback_download(
+                        pyro_session_str=_pyro_sess_str,
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        out_path=_tele_out_path,
+                        status_message=status_message,
+                        job_id=job_id,
+                        active_jobs=active_jobs,
+                        progress_callback=None,
+                    )
+                    if _tele_file and os.path.exists(_tele_file) and os.path.getsize(_tele_file) > 0:
+                        active_jobs.pop(job_id, None)
+                        return {
+                            "is_text_only": False,
+                            "file_path": _tele_file,
+                            "original_file_name": f"video_{message_id}.mp4",
+                            "caption": source_msg.caption or "",
+                            "media_type": "video",
+                            "source_msg": source_msg,
+                        }
+            # If telethon also failed, fall through to the empty-message handler below
+            has_file_media = False
 
         # Case 1: Text-only / WebPage Link / Google Docs / Poll / Contact / Location / Non-file message
         if not has_file_media:

@@ -22,6 +22,19 @@ git pull origin main || {
     git reset --hard origin/main
 }
 
+# 1.5 Auto-restore any stashed database or session records immediately
+if git stash list 2>/dev/null | grep -q "stash@{0}"; then
+    echo "[*] Restoring stashed local database and session records..."
+    git stash pop || true
+fi
+
+# Run automated worker recovery pipeline
+if [ -d "venv" ]; then
+    source venv/bin/activate
+fi
+python3 -c "from core.auto_recover import run_auto_recovery; import config; run_auto_recovery(config.DB_PATH)" 2>/dev/null || true
+
+
 # 2. Check if Docker is running
 if [ -f "docker-compose.yml" ] && command -v docker >/dev/null 2>&1 && docker compose ps --services --filter "status=running" 2>/dev/null | grep -q "telegram-bot"; then
     echo "[*] Rebuilding and restarting Docker containers..."

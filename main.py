@@ -211,6 +211,13 @@ async def main():
     await db.init()
     print("[+] Database initialized with monetization schema.")
 
+    # Automated session & worker recovery from git stash, sibling databases, and backups
+    try:
+        from core.auto_recover import run_auto_recovery
+        run_auto_recovery(config.DB_PATH)
+    except Exception as e:
+        print(f"[!] Auto-recovery warning: {e}")
+
     # Pre-warm the asyncio thread pool so first OpenCV/PIL call has zero cold-start delay
     import concurrent.futures
     loop = asyncio.get_running_loop()

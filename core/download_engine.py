@@ -300,7 +300,7 @@ async def download_restricted_media(
             or source_msg.sticker
         )
 
-        # Case 1: Text-only / WebPage Link / Google Docs / Poll / Non-file restricted message
+        # Case 1: Text-only / WebPage Link / Google Docs / Poll / Contact / Location / Non-file message
         if not has_file_media:
             msg_text = source_msg.text or source_msg.caption or ""
             if msg_text:
@@ -314,18 +314,73 @@ async def download_restricted_media(
                     "source_msg": source_msg,
                 }
             elif source_msg.poll:
+                poll_text = f"📊 **Restricted Poll:** {source_msg.poll.question}\n\n"
+                for idx, opt in enumerate(source_msg.poll.options, 1):
+                    poll_text += f"{idx}. {opt.text} ({opt.voter_count} votes)\n"
                 return {
                     "is_text_only": True,
-                    "text": f"📊 **Restricted Poll:** {source_msg.poll.question}",
+                    "text": poll_text,
+                    "file_path": None,
+                    "caption": "",
+                    "media_type": "text",
+                    "source_msg": source_msg,
+                }
+            elif source_msg.contact:
+                c = source_msg.contact
+                c_text = (
+                    f"👤 **Shared Contact Card**\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"• **Name:** {c.first_name} {c.last_name or ''}\n"
+                    f"• **Phone:** `{c.phone_number}`\n"
+                    f"• **User ID:** `{c.user_id or 'None'}`"
+                )
+                return {
+                    "is_text_only": True,
+                    "text": c_text,
+                    "file_path": None,
+                    "caption": "",
+                    "media_type": "text",
+                    "source_msg": source_msg,
+                }
+            elif source_msg.location or source_msg.venue:
+                loc = source_msg.location
+                venue = getattr(source_msg, "venue", None)
+                v_title = getattr(venue, "title", "Pinned Location") if venue else "Pinned Location"
+                v_addr = f"\n• **Address:** {venue.address}" if venue and getattr(venue, "address", None) else ""
+                loc_text = (
+                    f"📍 **{v_title}**{v_addr}\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"• **Latitude:** `{loc.latitude}`\n"
+                    f"• **Longitude:** `{loc.longitude}`\n"
+                    f"• **Google Maps:** https://maps.google.com/?q={loc.latitude},{loc.longitude}"
+                )
+                return {
+                    "is_text_only": True,
+                    "text": loc_text,
+                    "file_path": None,
+                    "caption": "",
+                    "media_type": "text",
+                    "source_msg": source_msg,
+                }
+            elif source_msg.dice:
+                d_text = f"🎲 **Telegram Dice / Game:** `{source_msg.dice.emoji}` ➔ Value: **{source_msg.dice.value}**"
+                return {
+                    "is_text_only": True,
+                    "text": d_text,
                     "file_path": None,
                     "caption": "",
                     "media_type": "text",
                     "source_msg": source_msg,
                 }
             else:
-                await status_message.edit_text("❌ No supported content found in this message.")
-                active_jobs.pop(job_id, None)
-                return None
+                return {
+                    "is_text_only": True,
+                    "text": f"📋 **Restricted Message #{message_id}**\n_(Content unlocked)_",
+                    "file_path": None,
+                    "caption": "",
+                    "media_type": "text",
+                    "source_msg": source_msg,
+                }
 
         # Case 2: Media restricted message
         os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
@@ -359,6 +414,18 @@ async def download_restricted_media(
             ext = ".mp4"
             media_type = "video_note"
             original_file_name = f"video_note_{message_id}.mp4"
+        elif source_msg.animation:
+            ext = ".mp4"
+            media_type = "animation"
+            original_file_name = getattr(source_msg.animation, "file_name", None) or f"animation_{message_id}.mp4"
+        elif source_msg.sticker:
+            ext = ".webp"
+            if getattr(source_msg.sticker, "is_animated", False):
+                ext = ".tgs"
+            elif getattr(source_msg.sticker, "is_video", False):
+                ext = ".webm"
+            media_type = "sticker"
+            original_file_name = f"sticker_{message_id}{ext}"
         elif source_msg.document:
             doc_name = getattr(source_msg.document, "file_name", "") or ""
             doc_ext = os.path.splitext(doc_name)[1].lower() if doc_name else ""

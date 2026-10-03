@@ -555,6 +555,36 @@ async def upload_unlocked_media(
                             video_note=part_file,
                             progress=upload_progress,
                         )
+                    elif media_type == "animation":
+                        try:
+                            sent_msg = await bot_client.send_animation(
+                                chat_id=target_chat_id,
+                                animation=part_file,
+                                caption=part_caption,
+                                progress=upload_progress,
+                            )
+                        except Exception:
+                            sent_msg = await bot_client.send_document(
+                                chat_id=target_chat_id,
+                                document=part_file,
+                                caption=part_caption,
+                                file_name=orig_file_name,
+                                progress=upload_progress,
+                            )
+                    elif media_type == "sticker":
+                        try:
+                            sent_msg = await bot_client.send_sticker(
+                                chat_id=target_chat_id,
+                                sticker=part_file,
+                                progress=upload_progress,
+                            )
+                        except Exception:
+                            sent_msg = await bot_client.send_document(
+                                chat_id=target_chat_id,
+                                document=part_file,
+                                file_name=orig_file_name,
+                                progress=upload_progress,
+                            )
                     else:
                         custom_thumb = None
                         try:

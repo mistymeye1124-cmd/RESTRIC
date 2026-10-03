@@ -493,21 +493,22 @@ async def run_batch_harvest_pipeline(
                 delivered += 1
                 continue
 
-            # Batch Content Filter Gate
+            # Batch Content Filter Gate (Only filters during bulk batch downloads)
             media_filt = user_settings.get("media_filter", "all")
-            is_vid_check = dl_res.get("media_type") == "video" or (
-                original_path and original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts"))
-            )
-            is_doc_check = dl_res.get("media_type") == "document" or (
-                original_path and original_path.lower().endswith((".pdf", ".doc", ".docx", ".zip", ".rar", ".txt"))
-            )
+            if total > 1 and media_filt != "all":
+                is_vid_check = dl_res.get("media_type") == "video" or (
+                    original_path and original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts"))
+                )
+                is_doc_check = dl_res.get("media_type") == "document" or (
+                    original_path and original_path.lower().endswith((".pdf", ".doc", ".docx", ".zip", ".rar", ".txt"))
+                )
 
-            if media_filt == "video" and not is_vid_check:
-                skipped += 1
-                continue
-            elif media_filt == "document" and not is_doc_check:
-                skipped += 1
-                continue
+                if media_filt == "video" and not is_vid_check:
+                    skipped += 1
+                    continue
+                elif media_filt == "document" and not is_doc_check:
+                    skipped += 1
+                    continue
 
             # Step B: Audio Extractor (Convert video to pristine 192k MP3 podcast)
             if delivery_fmt == "audio" and is_vid_check and original_path:

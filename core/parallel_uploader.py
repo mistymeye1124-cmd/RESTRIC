@@ -94,18 +94,16 @@ async def _turbo_save_file_impl(
     elif file_size < 50 * 1024 * 1024:
         part_size = 512 * 1024
         workers_count = 4
-    elif file_size < 200 * 1024 * 1024:
+    elif file_size < 100 * 1024 * 1024:
         part_size = 512 * 1024
         workers_count = 8 if cpu_count >= 4 else 6
     else:
-        if file_size > 2000 * 1024 * 1024:
-            part_size = 1024 * 1024
-        else:
-            part_size = 512 * 1024
+        # Files >= 100MB: 1MB chunks with up to 12 concurrent MTProto upload streams
+        part_size = 1024 * 1024
         if is_prem:
-            workers_count = 10 if cpu_count >= 4 else 8
+            workers_count = 12 if cpu_count >= 4 else 8
         else:
-            workers_count = 8 if cpu_count >= 4 else 6
+            workers_count = 10 if cpu_count >= 4 else 8
 
     file_total_parts = int(math.ceil(file_size / part_size))
     is_missing_part = file_id is not None

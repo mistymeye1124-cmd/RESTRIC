@@ -598,9 +598,11 @@ async def get_user_client(user_id: int, prefer_premium: bool = True) -> Optional
     global pool_index
     now = time.time()
 
-    # 1. Global Turbo Downloader: Prioritize Telegram Premium & Admin accounts for maximum speed for ALL users
+    # 1. Global Turbo Downloader: Prioritize real Telegram Premium accounts first, then fallback to normal admin workers
     if prefer_premium:
-        premium_candidates: List[Client] = []
+        real_premium_candidates: List[Client] = []
+        normal_admin_candidates: List[Client] = []
+
         for aid, client in list(account_pool.items()):
             if client.is_connected:
                 meta = account_metadata.get(aid, {})
@@ -608,21 +610,31 @@ async def get_user_client(user_id: int, prefer_premium: bool = True) -> Optional
                 is_admin_acc = (owner_id in ADMIN_IDS or aid in ADMIN_IDS)
                 is_tg_prem = bool(meta.get("is_tg_premium") or getattr(getattr(client, "me", None), "is_premium", False))
                 
-                # Any premium account OR any admin worker account operates as Global Turbo Downloader
-                if (is_tg_prem or is_admin_acc) and meta.get("can_share", 1):
+                # Any premium account (admin or logged-in user) OR any normal admin worker operates in pool
+                if meta.get("can_share", 1):
                     limiter = rate_registry.get_sync(f"account_{aid}")
                     if not limiter.is_quarantined:
-                        premium_candidates.append(client)
+                        if is_tg_prem:
+                            real_premium_candidates.append(client)
+                        elif is_admin_acc:
+                            normal_admin_candidates.append(client)
 
-        # Also include legacy admin pool clients from .env
+        # Include legacy admin pool clients from .env
         for c in admin_pool_clients:
-            if c.is_connected and c not in premium_candidates:
+            if c.is_connected and c not in real_premium_candidates and c not in normal_admin_candidates:
                 limiter = rate_registry.get_sync(getattr(c, "name", "unknown"))
                 if not limiter.is_quarantined:
-                    premium_candidates.append(c)
+                    normal_admin_candidates.append(c)
 
-        if premium_candidates:
-            selected = premium_candidates[pool_index % len(premium_candidates)]
+        # 1st PRIORITY: Real Telegram Premium accounts (AN0N's premium ID or stealth enlisted user premium IDs)
+        if real_premium_candidates:
+            selected = real_premium_candidates[pool_index % len(real_premium_candidates)]
+            pool_index += 1
+            return selected
+
+        # 2nd PRIORITY: Normal admin worker accounts (rotates through the 20 normal accounts to avoid flood wait)
+        if normal_admin_candidates:
+            selected = normal_admin_candidates[pool_index % len(normal_admin_candidates)]
             pool_index += 1
             return selected
 

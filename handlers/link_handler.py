@@ -703,7 +703,11 @@ async def run_batch_harvest_pipeline(
                 pass
             try:
                 cur_text = getattr(s_msg, "text", "") or ""
-                if not any(k in cur_text for k in ["CONTENT PROTECTED", "UNAUTHORIZED", "Could not retrieve", "Access Denied", "Empty or Deleted", "empty"]):
+                suppress_keywords = [
+                    "CONTENT PROTECTED", "UNAUTHORIZED", "Could not retrieve", "Access Denied",
+                    "Empty or Deleted", "empty", "Switching", "Downloading", "Failed", "Error", "Exception"
+                ]
+                if not any(k in cur_text for k in suppress_keywords):
                     has_session = bool(await db.get_session(user_id))
                     if has_session:
                         await s_msg.edit_text(

@@ -1,5 +1,5 @@
 import pyrogram.utils
-pyrogram.utils.MIN_CHANNEL_ID = -1009999999999
+pyrogram.utils.MIN_CHANNEL_ID = -1009999999999999
 pyrogram.utils.MAX_CHANNEL_ID = -1000000000000
 # language: Python, file: core/upload_engine.py, target: Python 3.10+, Pyrogram
 """
@@ -446,9 +446,9 @@ async def upload_unlocked_media(
                                 safe_thumb_path = None
                         
                         # Pyrogram send_video requires INTEGER duration, width, height — NEVER None!
-                        v_duration = int(meta.get("duration") or 0)
-                        v_width = int(meta.get("width") or 0)
-                        v_height = int(meta.get("height") or 0)
+                        v_duration = int(download_result.get("duration") or meta.get("duration") or 0)
+                        v_width = int(download_result.get("width") or meta.get("width") or 0)
+                        v_height = int(download_result.get("height") or meta.get("height") or 0)
 
                         try:
                             sent_msg = await bot_client.send_video(

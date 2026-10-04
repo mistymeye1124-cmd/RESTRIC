@@ -59,7 +59,16 @@ async def render_settings_card(user_id: int):
     sfx = settings.get("file_suffix", "") or ""
     branding_display = f"`{pfx}`...`{sfx}`" if (pfx or sfx) else "⚪ Default Original"
 
+    is_raw_mode = await db.get_raw_mode()
+    raw_notice = (
+        "⚡ **NOTICE: Ultra-Fast Pure Raw Mode is ACTIVE by Admin** ⚡\n"
+        "All media is delivered directly in pure 1:1 original format with 0 delay.\n"
+        "Heavy filters and overrides are paused, but your settings remain safely saved.\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    ) if is_raw_mode else ""
+
     text = (
+        raw_notice +
         "⚙️ **USER PREFERENCES & CLOUD COCKPIT** ⚙️\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "⚡ **GLOBAL HARVESTER CONFIGURATION**\n\n"

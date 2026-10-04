@@ -205,6 +205,7 @@ async def upload_unlocked_media(
     auto_forward_chat_id: Optional[int] = None,
     user_id: Optional[int] = None,
     batch_info: Optional[str] = None,
+    is_raw_mode: bool = False,
 ) -> bool:
     """
     Delivers unlocked restricted content to target chat with progress tracking.
@@ -423,14 +424,15 @@ async def upload_unlocked_media(
                             thumb_target = f"{part_file}_thumb.jpg"
                             thumb_path = await extract_thumbnail_async(part_file, thumb_target, seek_seconds=5)
                             
-                            # Prioritize user's Custom Studio Thumbnail if configured and active
+                            # Prioritize user's Custom Studio Thumbnail if configured, active, and not in Raw Mode
                             custom_thumb = None
-                            try:
-                                from database import db
-                                if thumb_user_id:
-                                    custom_thumb = await db.get_custom_thumbnail(thumb_user_id, check_enabled=True)
-                            except Exception as th_fetch_err:
-                                print(f"[!] Error fetching custom thumbnail: {th_fetch_err}")
+                            if not is_raw_mode:
+                                try:
+                                    from database import db
+                                    if thumb_user_id:
+                                        custom_thumb = await db.get_custom_thumbnail(thumb_user_id, check_enabled=True)
+                                except Exception as th_fetch_err:
+                                    print(f"[!] Error fetching custom thumbnail: {th_fetch_err}")
     
                             valid_thumb = (
                                 custom_thumb

@@ -1379,6 +1379,15 @@ class Database:
     async def set_maintenance_mode(self, enabled: bool):
         await self.set_global_setting("maintenance_mode", "1" if enabled else "0")
 
+    async def get_raw_mode(self) -> bool:
+        """Returns True if Ultra-Fast Pure Raw Video Mode is active."""
+        val = await self.get_global_setting("raw_mode", "0")
+        return val == "1"
+
+    async def set_raw_mode(self, enabled: bool):
+        """Toggles Ultra-Fast Pure Raw Video Mode (1 = Raw Mode ON, 0 = Normal)."""
+        await self.set_global_setting("raw_mode", "1" if enabled else "0")
+
     async def get_force_sub_channel(self) -> str:
         from config import FORCE_SUB_CHANNEL
         val = await self.get_global_setting("force_sub_channel", str(FORCE_SUB_CHANNEL or ""))

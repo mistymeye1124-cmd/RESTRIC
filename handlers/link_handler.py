@@ -389,10 +389,14 @@ async def run_batch_harvest_pipeline(
                 m_type = cached_item.get("media_type", "video")
                 raw_cap = cached_item.get("caption", "")
 
-                clean_ads = bool(user_settings.get("clean_caption", 1))
-                user_custom_cap = user_settings.get("custom_caption")
-                caption_replacements = await db.get_caption_replacements(user_id)
-                deliv_cap = format_custom_caption(user_custom_cap, raw_cap, c_name, clean_ads=clean_ads, replacements=caption_replacements)
+                is_raw_mode_cached = await db.get_raw_mode()
+                if is_raw_mode_cached:
+                    deliv_cap = raw_cap or None
+                else:
+                    clean_ads = bool(user_settings.get("clean_caption", 1))
+                    user_custom_cap = user_settings.get("custom_caption")
+                    caption_replacements = await db.get_caption_replacements(user_id)
+                    deliv_cap = format_custom_caption(user_custom_cap, raw_cap, c_name, clean_ads=clean_ads, replacements=caption_replacements)
 
                 sent_cached = None
                 try:
@@ -551,168 +555,178 @@ async def run_batch_harvest_pipeline(
                     skipped += 1
                     continue
 
-            # Step B: Audio Extractor (Convert video to pristine 192k MP3 podcast)
-            if delivery_fmt == "audio" and is_vid_check and original_path:
-                try:
-                    await s_msg.edit_text(f"🎵 **{prefix_label}Extracting Audio Stream to 192k MP3...**")
-                except Exception:
-                    pass
-                base_no_ext = os.path.splitext(original_path)[0]
-                mp3_target = f"{base_no_ext}.mp3"
-                orig_title = os.path.basename(base_no_ext)
-                audio_path = await extract_audio_mp3(original_path, mp3_target, title=orig_title, artist="Audio Harvester")
-                if audio_path and os.path.exists(audio_path):
+            # Ultra-Fast Pure Raw Video Mode Gate (Admin Toggle):
+            # When enabled by Admin, bypasses 100% of CPU-intensive FFmpeg transcoding, watermarking,
+            # delogo, audio conversion, metadata scrubbing, and ad-filtering. Delivers pure untouched raw media.
+            is_raw_mode = await db.get_raw_mode()
+
+            if is_raw_mode:
+                logger.info("[Pipeline] Ultra-Fast Pure Raw Mode ACTIVE: Bypassing all video processing for instant 1:1 delivery.")
+                caption_to_send = (dl_res.get("caption") or "") or None
+                file_title = os.path.basename(original_path) if original_path else ""
+            else:
+                # Step B: Audio Extractor (Convert video to pristine 192k MP3 podcast)
+                if delivery_fmt == "audio" and is_vid_check and original_path:
                     try:
-                        if os.path.exists(original_path):
-                            os.remove(original_path)
+                        await s_msg.edit_text(f"🎵 **{prefix_label}Extracting Audio Stream to 192k MP3...**")
                     except Exception:
                         pass
-                    original_path = audio_path
-                    dl_res["file_path"] = audio_path
-                    dl_res["media_type"] = "audio"
-
-            # Step B.1: Rescale / Compression (if < 1080p requested and not audio)
-            current_settings = await db.get_settings(user_id)
-            effective_res = current_settings.get("resolution", res_pref)
-            if delivery_fmt != "audio" and effective_res.isdigit() and int(effective_res) < 1080 and original_path and original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm")):
-                f_size_mb_pre = (os.path.getsize(original_path) / (1024 * 1024)) if os.path.exists(original_path) else 0
-                if f_size_mb_pre <= 250:
-                    scaled_path = f"{original_path}_scaled.mp4"
-                    _est_rescale = min(45, max(15, int(f_size_mb_pre * 0.20)))
-                    async with live_pulse(
-                        s_msg,
-                        f"🎬 {prefix_label}Optimizing Video Quality",
-                        f"Re-encoding to {effective_res}p — FFmpeg ultra-fast preset",
-                        start_pct=45.0, end_pct=75.0,
-                        estimated_seconds=_est_rescale,
-                    ):
-                        original_path = await compress_or_rescale_video(original_path, scaled_path, int(effective_res))
-                    dl_res["file_path"] = original_path
-
-            # Step C: 100% Watermark Removal & Dual-Layer Branding Engine
-            is_video_candidate = original_path and (original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".flv")) or dl_res.get("media_type") == "video")
-            if is_video_candidate and original_path and os.path.exists(original_path):
-                f_size_mb = os.path.getsize(original_path) / (1024 * 1024)
-                if f_size_mb > 250:
-                    logger.info("[Pipeline] Video is %.1fMB (>250MB) — bypassing CPU transcode for zero-stall instant delivery", f_size_mb)
-                else:
-                    global_wm = await db.get_global_watermark_config()
-                    user_wm = await db.get_watermark_settings(user_id) if is_prem else None
-
-                    can_clean, _ = await db.can_user_access_feature(user_id, "clean_video")
-                    if not is_prem and can_clean:
-                        global_wm = None
-
-                    # Sub-step C.1: 100% Video Delogo (Erase burned-in logos/watermarks)
-                    if is_prem and user_wm and user_wm.get("delogo_enabled"):
-                        ext = os.path.splitext(original_path)[1] or ".mp4"
-                        delogo_out = f"{original_path}_delogo{ext}"
-                        _est_delogo = min(40, max(15, int(f_size_mb * 0.15)))
-                        async with live_pulse(
-                            s_msg,
-                            f"🧹 {prefix_label}Erasing Original Watermark & Logo",
-                            "Neural pixel interpolation — delogo engine active",
-                            start_pct=50.0, end_pct=78.0,
-                            estimated_seconds=_est_delogo,
-                        ):
-                            delogo_res = await apply_video_delogo(original_path, delogo_out, user_wm, timeout=_est_delogo + 5)
-                        if delogo_res and delogo_res != original_path and os.path.exists(delogo_res):
-                            try:
-                                if os.path.exists(original_path):
-                                    os.remove(original_path)
-                            except Exception:
-                                pass
-                            original_path = delogo_res
-                            dl_res["file_path"] = delogo_res
-
-                    # Sub-step C.2: Dual-Layer Watermarking & Branding Engine
-                    ext = os.path.splitext(original_path)[1] or ".mp4"
-                    wm_path = f"{original_path}_brand{ext}"
-
-                    # Determine subtitle for the pulse card
-                    has_actual_wm = False
-                    _wm_subtitle = "Brand watermark encoding — ultra-fast preset"
-                    if is_prem and user_wm and user_wm.get("enabled"):
-                        if any([
-                            str(user_wm.get("watermark_text") or "").strip(),
-                            str(user_wm.get("headline_text") or "").strip(),
-                            str(user_wm.get("logo_path") or "").strip(),
-                            str(user_wm.get("intro_clip_path") or "").strip(),
-                            str(user_wm.get("outro_clip_path") or "").strip(),
-                        ]):
-                            has_actual_wm = True
-                            _wm_subtitle = "Applying VIP custom brand — encoding zero-loss stream"
-                    elif global_wm and global_wm.get("enabled") and not is_prem:
-                        has_actual_wm = True
-
-                    if has_actual_wm:
-                        _est_wm = min(45, max(15, int(f_size_mb * 0.18)))
-                        async with live_pulse(
-                            s_msg,
-                            f"🎬 {prefix_label}Applying Watermark & Branding",
-                            _wm_subtitle,
-                            start_pct=65.0, end_pct=93.0,
-                            estimated_seconds=_est_wm,
-                        ):
-                            final_path = await apply_dual_video_watermark(
-                                input_path=original_path,
-                                output_path=wm_path,
-                                global_config=global_wm,
-                                user_config=user_wm,
-                                is_vip=is_prem,
-                                timeout=_est_wm + 5,
-                            )
-                        if final_path and final_path != original_path and os.path.exists(final_path):
-                            try:
-                                if os.path.exists(original_path):
-                                    os.remove(original_path)
-                            except Exception:
-                                pass
-                            dl_res["file_path"] = final_path
-                            original_path = final_path
-
-            # Step D.1: Stealth Metadata Anonymizer (Fast Zero-Delay Mode)
-            ghost_mode_active = bool(user_settings.get("ghost_mode", 0))
-            if ghost_mode_active and original_path and os.path.exists(original_path):
-                ext = os.path.splitext(original_path)[1].lower() or ".mp4"
-                clean_meta_path = f"{os.path.splitext(original_path)[0]}_ghost{ext}"
-                try:
-                    anonymized = await asyncio.wait_for(
-                        strip_video_metadata(original_path, clean_meta_path),
-                        timeout=5.0,
-                    )
-                    if anonymized and anonymized != original_path and os.path.exists(anonymized):
+                    base_no_ext = os.path.splitext(original_path)[0]
+                    mp3_target = f"{base_no_ext}.mp3"
+                    orig_title = os.path.basename(base_no_ext)
+                    audio_path = await extract_audio_mp3(original_path, mp3_target, title=orig_title, artist="Audio Harvester")
+                    if audio_path and os.path.exists(audio_path):
                         try:
                             if os.path.exists(original_path):
                                 os.remove(original_path)
                         except Exception:
                             pass
-                        original_path = anonymized
-                        dl_res["file_path"] = anonymized
-                except Exception:
-                    pass
+                        original_path = audio_path
+                        dl_res["file_path"] = audio_path
+                        dl_res["media_type"] = "audio"
 
-            # Step E: Format Caption with Smart Ad-Stripper & Custom Template
-            raw_caption = dl_res.get("caption") or ""
-            file_title = os.path.basename(original_path) if original_path else ""
-            clean_ads = bool(user_settings.get("clean_caption", 1))
-            user_caption_tmpl = user_settings.get("custom_caption")
-            caption_replacements = await db.get_caption_replacements(user_id)
+                # Step B.1: Rescale / Compression (if < 1080p requested and not audio)
+                current_settings = await db.get_settings(user_id)
+                effective_res = current_settings.get("resolution", res_pref)
+                if delivery_fmt != "audio" and effective_res.isdigit() and int(effective_res) < 1080 and original_path and original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm")):
+                    f_size_mb_pre = (os.path.getsize(original_path) / (1024 * 1024)) if os.path.exists(original_path) else 0
+                    if f_size_mb_pre <= 250:
+                        scaled_path = f"{original_path}_scaled.mp4"
+                        _est_rescale = min(45, max(15, int(f_size_mb_pre * 0.20)))
+                        async with live_pulse(
+                            s_msg,
+                            f"🎬 {prefix_label}Optimizing Video Quality",
+                            f"Re-encoding to {effective_res}p — FFmpeg ultra-fast preset",
+                            start_pct=45.0, end_pct=75.0,
+                            estimated_seconds=_est_rescale,
+                        ):
+                            original_path = await compress_or_rescale_video(original_path, scaled_path, int(effective_res))
+                        dl_res["file_path"] = original_path
 
-            caption_to_send = format_custom_caption(
-                template=user_caption_tmpl,
-                original_caption=raw_caption,
-                file_name=file_title,
-                clean_ads=clean_ads,
-                replacements=caption_replacements,
-            )
+                # Step C: 100% Watermark Removal & Dual-Layer Branding Engine
+                is_video_candidate = original_path and (original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".flv")) or dl_res.get("media_type") == "video")
+                if is_video_candidate and original_path and os.path.exists(original_path):
+                    f_size_mb = os.path.getsize(original_path) / (1024 * 1024)
+                    if f_size_mb > 250:
+                        logger.info("[Pipeline] Video is %.1fMB (>250MB) — bypassing CPU transcode for zero-stall instant delivery", f_size_mb)
+                    else:
+                        global_wm = await db.get_global_watermark_config()
+                        user_wm = await db.get_watermark_settings(user_id) if is_prem else None
 
-            global_wm = await db.get_global_watermark_config()
-            can_clean_caption, _ = await db.can_user_access_feature(user_id, "clean_video")
-            if not is_prem and not can_clean_caption:
-                branding_text = global_wm.get("watermark_text") or "@TgPremiumDownloader_bot"
-                viral_footer = f"\n\n⚡ **Unlocked via {branding_text}**\n💎 _Upgrade to /premium for watermark-free videos!_"
-                caption_to_send = (caption_to_send + viral_footer).strip()
+                        can_clean, _ = await db.can_user_access_feature(user_id, "clean_video")
+                        if not is_prem and can_clean:
+                            global_wm = None
+
+                        # Sub-step C.1: 100% Video Delogo (Erase burned-in logos/watermarks)
+                        if is_prem and user_wm and user_wm.get("delogo_enabled"):
+                            ext = os.path.splitext(original_path)[1] or ".mp4"
+                            delogo_out = f"{original_path}_delogo{ext}"
+                            _est_delogo = min(40, max(15, int(f_size_mb * 0.15)))
+                            async with live_pulse(
+                                s_msg,
+                                f"🧹 {prefix_label}Erasing Original Watermark & Logo",
+                                "Neural pixel interpolation — delogo engine active",
+                                start_pct=50.0, end_pct=78.0,
+                                estimated_seconds=_est_delogo,
+                            ):
+                                delogo_res = await apply_video_delogo(original_path, delogo_out, user_wm, timeout=_est_delogo + 5)
+                            if delogo_res and delogo_res != original_path and os.path.exists(delogo_res):
+                                try:
+                                    if os.path.exists(original_path):
+                                        os.remove(original_path)
+                                except Exception:
+                                    pass
+                                original_path = delogo_res
+                                dl_res["file_path"] = delogo_res
+
+                        # Sub-step C.2: Dual-Layer Watermarking & Branding Engine
+                        ext = os.path.splitext(original_path)[1] or ".mp4"
+                        wm_path = f"{original_path}_brand{ext}"
+
+                        # Determine subtitle for the pulse card
+                        has_actual_wm = False
+                        _wm_subtitle = "Brand watermark encoding — ultra-fast preset"
+                        if is_prem and user_wm and user_wm.get("enabled"):
+                            if any([
+                                str(user_wm.get("watermark_text") or "").strip(),
+                                str(user_wm.get("headline_text") or "").strip(),
+                                str(user_wm.get("logo_path") or "").strip(),
+                                str(user_wm.get("intro_clip_path") or "").strip(),
+                                str(user_wm.get("outro_clip_path") or "").strip(),
+                            ]):
+                                has_actual_wm = True
+                                _wm_subtitle = "Applying VIP custom brand — encoding zero-loss stream"
+                        elif global_wm and global_wm.get("enabled") and not is_prem:
+                            has_actual_wm = True
+
+                        if has_actual_wm:
+                            _est_wm = min(45, max(15, int(f_size_mb * 0.18)))
+                            async with live_pulse(
+                                s_msg,
+                                f"🎬 {prefix_label}Applying Watermark & Branding",
+                                _wm_subtitle,
+                                start_pct=65.0, end_pct=93.0,
+                                estimated_seconds=_est_wm,
+                            ):
+                                final_path = await apply_dual_video_watermark(
+                                    input_path=original_path,
+                                    output_path=wm_path,
+                                    global_config=global_wm,
+                                    user_config=user_wm,
+                                    is_vip=is_prem,
+                                    timeout=_est_wm + 5,
+                                    )
+                            if final_path and final_path != original_path and os.path.exists(final_path):
+                                try:
+                                    if os.path.exists(original_path):
+                                        os.remove(original_path)
+                                except Exception:
+                                    pass
+                                dl_res["file_path"] = final_path
+                                original_path = final_path
+
+                # Step D.1: Stealth Metadata Anonymizer (Fast Zero-Delay Mode)
+                ghost_mode_active = bool(user_settings.get("ghost_mode", 0))
+                if ghost_mode_active and original_path and os.path.exists(original_path):
+                    ext = os.path.splitext(original_path)[1].lower() or ".mp4"
+                    clean_meta_path = f"{os.path.splitext(original_path)[0]}_ghost{ext}"
+                    try:
+                        anonymized = await asyncio.wait_for(
+                            strip_video_metadata(original_path, clean_meta_path),
+                            timeout=5.0,
+                        )
+                        if anonymized and anonymized != original_path and os.path.exists(anonymized):
+                            try:
+                                if os.path.exists(original_path):
+                                    os.remove(original_path)
+                            except Exception:
+                                pass
+                            original_path = anonymized
+                            dl_res["file_path"] = anonymized
+                    except Exception:
+                        pass
+
+                # Step E: Format Caption with Smart Ad-Stripper & Custom Template
+                raw_caption = dl_res.get("caption") or ""
+                file_title = os.path.basename(original_path) if original_path else ""
+                clean_ads = bool(user_settings.get("clean_caption", 1))
+                user_caption_tmpl = user_settings.get("custom_caption")
+                caption_replacements = await db.get_caption_replacements(user_id)
+
+                caption_to_send = format_custom_caption(
+                    template=user_caption_tmpl,
+                    original_caption=raw_caption,
+                    file_name=file_title,
+                    clean_ads=clean_ads,
+                    replacements=caption_replacements,
+                )
+
+                global_wm = await db.get_global_watermark_config()
+                can_clean_caption, _ = await db.can_user_access_feature(user_id, "clean_video")
+                if not is_prem and not can_clean_caption:
+                    branding_text = global_wm.get("watermark_text") or "@TgPremiumDownloader_bot"
+                    viral_footer = f"\n\n⚡ **Unlocked via {branding_text}**\n💎 _Upgrade to /premium for watermark-free videos!_"
+                    caption_to_send = (caption_to_send + viral_footer).strip()
 
             try:
                 up_bar = format_progress_line(85.0, show_remaining=True, anim_frame="🚀")
@@ -738,6 +752,7 @@ async def run_batch_harvest_pipeline(
                 auto_forward_chat_id=auto_forward_id,
                 user_id=user_id,
                 batch_info=batch_label,
+                is_raw_mode=is_raw_mode,
             )
             if uploaded:
                 delivered += 1

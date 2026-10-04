@@ -54,6 +54,8 @@ async def build_admin_panel_data():
     prot_str = f"🟢 `{len(prot_list)}` Channels Locked" if prot_list else "⚪ None (Open)"
     pool_accs = await db.get_bot_accounts()
     pool_str = f"🟢 `{len(pool_accs)}` Workers Online" if pool_accs else "⚪ None (Add via /accounts)"
+    raw_mode = await db.get_raw_mode()
+    raw_str = "🟢 ACTIVE (Pure 1:1 Raw / Zero Lag)" if raw_mode else "🔴 OFF (Custom Processing)"
 
     text = (
         "👑 **ENTERPRISE ADMIN MASTER CONTROL COCKPIT** 👑\n"
@@ -69,6 +71,7 @@ async def build_admin_panel_data():
         "└──────────────────────────────────────┘\n\n"
         "┌── ⚙️ **INFRASTRUCTURE & ENGINE CORE** ─┐\n"
         f"│ • 👥 Worker Pool: {pool_str}\n"
+        f"│ • ⚡ Pure Raw Video Mode: {raw_str}\n"
         f"│ • 🛠️ Maintenance Status: {maint_status}\n"
         f"│ • 🏷️ Free User Branding: {wm_status}\n"
         f"│ • 📢 Force-Subscribe Gate: {fsub_str}\n"
@@ -82,6 +85,9 @@ async def build_admin_panel_data():
 
     markup = InlineKeyboardMarkup(
         [
+            [
+                InlineKeyboardButton(f"⚡ Pure Raw Mode: {'🟢 ACTIVE (Tap to OFF)' if raw_mode else '🔴 OFF (Tap to Turn ON)'}", callback_data="adm_toggle_raw_mode"),
+            ],
             [
                 InlineKeyboardButton("👥 User Management", callback_data="adm_view_users"),
                 InlineKeyboardButton("👑 Admin IDs Management", callback_data="adm_view_admins"),
@@ -1770,10 +1776,13 @@ async def render_system_settings_menu():
     web_url = await db.get_web_studio_url()
     banner = await db.get_custom_start_banner()
     banner_label = f"`{banner[:30]}...`" if banner else "_None (No banner active)_"
+    raw_mode = await db.get_raw_mode()
+    raw_label = "🟢 ACTIVE (Pure 1:1 Raw Mode, No Watermark/Transcode)" if raw_mode else "🔴 OFF (Custom User Processing)"
 
     text = (
         "⚙️ **SYSTEM OPERATIONS & CONFIGURATION**\n\n"
         "Dynamic controls that take effect immediately across all users without restarting the bot.\n\n"
+        f"• **Pure Raw Video Mode:** {raw_label}\n"
         f"• **Maintenance Mode:** {maint_label}\n"
         f"• **Force-Subscribe Channel:** {fsub_label}\n"
         f"• **Official Channel URL:** `{off_chan}`\n"
@@ -1784,6 +1793,7 @@ async def render_system_settings_menu():
         f"• **VIP Premium Daily Limit:** `{prem_limit} downloads per 24 hours`\n"
         f"• **Silent Shadow Archive:** {archive_label}\n\n"
         "**Quick Commands:**\n"
+        "• `/rawmode on` / `/rawmode off` (Ultra-Fast 1:1 Pure Forwarding)\n"
         "• `/maintenance on` / `/maintenance off`\n"
         "• `/setfsub @YourChannel` or `/clearfsub`\n"
         "• `/setfreelimit <number>`\n"
@@ -1793,6 +1803,10 @@ async def render_system_settings_menu():
     markup = InlineKeyboardMarkup(
         [
             [
+                InlineKeyboardButton(
+                    f"⚡ Pure Raw Mode: {'🟢 ACTIVE (Tap to OFF)' if raw_mode else '🔴 OFF (Tap to Turn ON)'}",
+                    callback_data="adm_toggle_raw_mode"
+                ),
                 InlineKeyboardButton(
                     "🛑 Toggle Maintenance Mode",
                     callback_data="adm_toggle_maintenance"
@@ -2002,6 +2016,76 @@ async def adm_toggle_maintenance_callback(client: Client, callback_query: Callba
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
         pass
+
+
+@Client.on_callback_query(filters.regex(r"^adm_toggle_raw_mode$"))
+async def adm_toggle_raw_mode_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("⛔ Admin access only.", show_alert=True)
+        return
+    current = await db.get_raw_mode()
+    new_state = not current
+    await db.set_raw_mode(new_state)
+    if new_state:
+        msg = (
+            "⚡ Pure Raw Video Mode ACTIVATED!\n\n"
+            "All users will now receive pure 1:1 original videos directly.\n"
+            "All watermark encoding, delogo, compression & transcoding are BYPASSED for maximum speed."
+        )
+    else:
+        msg = (
+            "⚡ Pure Raw Video Mode DEACTIVATED!\n\n"
+            "Normal user custom watermarks, delogo, and video processing restored."
+        )
+    await callback_query.answer(msg, show_alert=True)
+
+    try:
+        msg_text = callback_query.message.text or callback_query.message.caption or ""
+        if "SYSTEM OPERATIONS" in msg_text:
+            text, markup = await render_system_settings_menu()
+        else:
+            text, markup = await build_admin_panel_data()
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        pass
+
+
+@Client.on_message(filters.command(["rawmode", "raw_mode", "pureraw"]) & filters.private)
+async def admin_rawmode_command(client: Client, message: Message):
+    user_id = message.from_user.id
+    await refresh_admin_cache()
+    if not is_admin(user_id):
+        return
+
+    parts = message.text.strip().split()
+    current = await db.get_raw_mode()
+
+    if len(parts) > 1:
+        arg = parts[1].lower()
+        if arg in ["on", "1", "true", "enable"]:
+            new_state = True
+        elif arg in ["off", "0", "false", "disable"]:
+            new_state = False
+        else:
+            new_state = not current
+    else:
+        new_state = not current
+
+    await db.set_raw_mode(new_state)
+    state_str = (
+        "🟢 **ACTIVATED (Ultra-Fast 1:1 Pure Raw Mode)**\n"
+        "• All FFmpeg watermark, delogo, and transcode processing are BYPASSED.\n"
+        "• All users will receive exact raw untouched videos directly as posted in source channels."
+        if new_state
+        else
+        "🔴 **DEACTIVATED (Normal Custom Mode)**\n"
+        "• User custom watermarks, delogo, and video processing are restored."
+    )
+
+    await message.reply_text(
+        f"⚡ **Pure Raw Video Mode:** {state_str}\n\n"
+        f"👉 _Toggle anytime with `/rawmode on` or `/rawmode off`._"
+    )
 
 
 @Client.on_callback_query(filters.regex(r"^adm_clear_fsub$"))

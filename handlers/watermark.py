@@ -146,7 +146,16 @@ async def render_watermark_dashboard(user_id: int):
         active_modes.append("🧹 Watermark Remover")
     mode_str = " + ".join(active_modes) if active_modes else "Standard"
 
+    is_raw_mode = await db.get_raw_mode()
+    raw_notice = (
+        "⚡ **NOTICE: Ultra-Fast Pure Raw Mode is ACTIVE by Admin** ⚡\n"
+        "All media is delivered directly in pure 1:1 original format with 0 delay.\n"
+        "Custom watermarks are temporarily bypassed, but your settings remain safely saved.\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    ) if is_raw_mode else ""
+
     text = (
+        raw_notice +
         "🎬 **ENTERPRISE VIDEO BRANDING STUDIO PRO** 🎬\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "⚡ **DYNAMIC WATERMARK & BRANDING ENGINE**\n\n"

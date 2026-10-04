@@ -7,7 +7,9 @@ Engineered for ultra-smooth UI feedback, low flood-wait footprint, and world-cla
 
 import time
 import math
+import asyncio
 from typing import Tuple, Optional
+from contextlib import asynccontextmanager
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import PROGRESS_UPDATE_INTERVAL as _PROG_INTERVAL
 
@@ -35,12 +37,31 @@ def format_duration(seconds: float) -> str:
     return f"{minutes:02d}:{sec:02d}"
 
 
-def generate_blocks(percentage: float, total_blocks: int = 10, filled_char: str = "▰", empty_char: str = "▱") -> str:
-    """Generates sleek visual progress bar: e.g. ▰▰▰▰▰▰▱▱▱▱"""
+def generate_blocks(percentage: float, total_blocks: int = 10, filled_char: str = "🟧", empty_char: str = "⬜") -> str:
+    """Generates visual square progress bar: e.g. 🟧🟧🟧🟧🟧🟧🟧🟧🟧⬜"""
     filled = int(round((percentage / 100.0) * total_blocks))
     filled = max(0, min(total_blocks, filled))
     empty = total_blocks - filled
     return (filled_char * filled) + (empty_char * empty)
+
+
+def format_progress_line(percentage: float, show_remaining: bool = True, anim_frame: str = "") -> str:
+    """
+    Renders user-requested format:
+    🟧🟧🟧🟧🟧🟧🟧🟧🟧⬜  91%  (Remaining: 9%) ⚡
+    When 100%:
+    🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧  100% Complete ✅
+    """
+    pct = max(0.0, min(100.0, percentage))
+    bar = generate_blocks(pct, total_blocks=10, filled_char="🟧", empty_char="⬜")
+    if pct >= 100.0:
+        return f"{bar}  100% Complete ✅"
+
+    rem_pct = max(0.0, 100.0 - pct)
+    spin = f" {anim_frame}" if anim_frame else ""
+    if show_remaining:
+        return f"{bar}  {pct:.0f}%  (Remaining: {rem_pct:.0f}%){spin}"
+    return f"{bar}  {pct:.0f}%{spin}"
 
 
 def get_progress_markup(job_id: str, res_pref: str = "original") -> InlineKeyboardMarkup:
@@ -60,14 +81,17 @@ def get_progress_markup(job_id: str, res_pref: str = "original") -> InlineKeyboa
 
 
 class ProgressTracker:
+    ANIM_FRAMES = ["⚡", "🚀", "🔄", "✨", "💫", "🔥"]
+
     def __init__(
         self,
         action_name: str = "Downloading Media",
-        block_char: str = "▰",
+        block_char: str = "🟧",
         engine_tag: str = "TITAN v7.0 Multi-Stream Core",
     ):
         self.action_name = action_name
-        self.block_char = block_char
+        self.block_char = "🟧"
+        self.empty_char = "⬜"
         self.engine_tag = engine_tag
         self.start_time = time.time()
         self.last_update_time = 0.0  # 0.0 forces immediate update on first chunk!
@@ -79,9 +103,64 @@ class ProgressTracker:
         self.percentage = 0.0
         self.is_cancelled = False
         self.finished = False
+        self._update_ticks = 0
 
     def mark_finished(self):
         self.finished = True
+
+    def render_card(self, current: int, total: int) -> str:
+        """Renders high-aesthetic animated telemetry card."""
+        now = time.time()
+        self.current_bytes = current
+        self.total_bytes = total if total > 0 else 1
+        self.percentage = min(100.0, (self.current_bytes / self.total_bytes) * 100.0)
+
+        spin = self.ANIM_FRAMES[self._update_ticks % len(self.ANIM_FRAMES)]
+        bar = generate_blocks(self.percentage, total_blocks=10, filled_char=self.block_char, empty_char=self.empty_char)
+        rem_pct = max(0.0, 100.0 - self.percentage)
+
+        is_done = (self.percentage >= 100.0 or self.current_bytes >= self.total_bytes or self.finished)
+
+        if is_done:
+            progress_line = f"{bar}  **100% Complete ✅**"
+            status_line = "│ ✅ **Status:** `Complete & Finalizing Delivery...`"
+        else:
+            progress_line = f"{bar}  **{self.percentage:.0f}%** {spin}\n⏳ **Remaining:** `{rem_pct:.0f}% Left`"
+            rem_bytes = max(0, self.total_bytes - self.current_bytes)
+            effective_speed = self.current_speed
+            if effective_speed <= 0 and current > 0:
+                total_elapsed = max(now - self.start_time, 0.1)
+                effective_speed = current / total_elapsed
+            eta_seconds = (rem_bytes / effective_speed) if effective_speed > 0 else 0
+            eta_str = f"{format_duration(eta_seconds)} remaining"
+            status_line = f"│ ⏱️ **Estimated:** `{eta_str}`"
+
+        readable_cur = human_readable_size(self.current_bytes)
+        readable_tot = human_readable_size(self.total_bytes)
+        speed_str = f"{human_readable_size(self.current_speed)}/s"
+
+        is_dl = "Download" in self.action_name or "HARVEST" in self.action_name.upper()
+        action_title = "PRO HARVESTER TURBO" if is_dl else "PRO DISPATCHER TURBO"
+
+        text = (
+            f"⚡ **{action_title}** ⚡\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 **Operation:** `{self.action_name}`\n"
+            f"📊 **Progress:**\n"
+            f"{progress_line}\n\n"
+            f"╭── 📡 **LIVE TELEMETRY** ───────────────\n"
+            f"│ 📦 **Transferred:** `{readable_cur}` / `{readable_tot}`\n"
+            f"│ 🚀 **Throughput:** `{speed_str}` (Live)\n"
+            f"{status_line}\n"
+            f"│ 🛡️ **Shield:** `Active Anti-Ban Stealth (Zero Trace)`\n"
+            f"╰────────────────────────────────────────╯\n"
+            f"⚡ _Engine: {self.engine_tag}_"
+        )
+        return text
+
+    def card(self, current: int = 0, total: int = 1) -> str:
+        """Renders the telemetry card on demand."""
+        return self.render_card(current, total)
 
     def update(self, current: int, total: int) -> Tuple[bool, str]:
         """
@@ -90,6 +169,7 @@ class ProgressTracker:
         Guarantees immediate update on first chunk (0.0 init).
         """
         now = time.time()
+        self._update_ticks += 1
         self.current_bytes = current
         self.total_bytes = total if total > 0 else 1
         self.percentage = min(100.0, (self.current_bytes / self.total_bytes) * 100.0)
@@ -106,51 +186,24 @@ class ProgressTracker:
                     # 70% historical smoothed speed + 30% instant delta = rock-stable live telemetry
                     self.current_speed = (0.70 * self.current_speed) + (0.30 * instant_speed)
             elif self.current_speed > 0:
-                # Gradual decay while waiting for next 1MB chunk to arrive
+                # Gradual decay while waiting for next chunk to arrive
                 overall_avg = current / max(now - self.start_time, 0.1)
                 self.current_speed = max(self.current_speed * 0.92, overall_avg)
             self.last_bytes = current
             self.last_calc_time = now
 
         # Fallback to total elapsed average if current_speed is 0
-        effective_speed = self.current_speed
-        if effective_speed <= 0 and current > 0:
+        if self.current_speed <= 0 and current > 0:
             total_elapsed = max(now - self.start_time, 0.1)
-            effective_speed = current / total_elapsed
+            self.current_speed = current / total_elapsed
 
-        # Render high-aesthetic card
-        bar = generate_blocks(self.percentage, total_blocks=10, filled_char="▰", empty_char="▱")
-        readable_cur = human_readable_size(self.current_bytes)
-        readable_tot = human_readable_size(self.total_bytes)
-        speed_str = f"{human_readable_size(effective_speed)}/s"
-
-        rem_bytes = max(0, self.total_bytes - self.current_bytes)
-        eta_seconds = (rem_bytes / effective_speed) if effective_speed > 0 else 0
-        eta_str = f"{format_duration(eta_seconds)} remaining"
-
-        is_dl = "Download" in self.action_name
-        action_title = "PRO HARVESTER TURBO" if is_dl else "PRO DISPATCHER TURBO"
-
-        text = (
-            f"⚡ **{action_title}** ⚡\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 **Operation:** `{self.action_name}`\n"
-            f"📊 **Progress:** `[{bar}] {self.percentage:.1f}%`\n\n"
-            f"╭── 📡 **LIVE TELEMETRY** ───────────────\n"
-            f"│ 📦 **Transferred:** `{readable_cur}` / `{readable_tot}`\n"
-            f"│ 🚀 **Throughput:** `{speed_str}` (Live)\n"
-            f"│ ⏱️ **Estimated:** `{eta_str}`\n"
-            f"│ 🛡️ **Shield:** `Active Anti-Ban Stealth (Zero Trace)`\n"
-            f"╰────────────────────────────────────────╯\n"
-            f"⚡ _Engine: {self.engine_tag}_"
-        )
+        text = self.render_card(self.current_bytes, self.total_bytes)
 
         elapsed_since_edit = now - self.last_update_time
         is_first_chunk = (self.last_update_time == 0.0)
         is_done = (self.current_bytes >= self.total_bytes)
 
         # Anti-Flood Protection: Enforce strict 2.0s floor between edits
-        # Prevents Telegram Bot API 429 FLOOD_WAIT and transmission stalling
         should_update = (
             is_first_chunk
             or is_done
@@ -172,9 +225,98 @@ class ProgressTracker:
         readable_cur = human_readable_size(self.current_bytes)
         readable_tot = human_readable_size(self.total_bytes) if self.total_bytes > 1 else "..."
         speed_str = f"{human_readable_size(self.current_speed)}/s"
+        bar = generate_blocks(self.percentage, total_blocks=10, filled_char=self.block_char, empty_char=self.empty_char)
+        rem_pct = max(0.0, 100.0 - self.percentage)
 
+        if self.percentage >= 100.0 or self.finished:
+            return (
+                f"✅ {self.action_name}: 100% Complete!\n"
+                f"{bar}\n"
+                f"⏱️ Time: {running_str} | 🚀 {speed_str}"
+            )
         return (
-            f"⚡ {self.action_name}: {self.percentage:.1f}%\n"
-            f"⏱️ Time: {running_str} | 🚀 {speed_str}\n"
-            f"📦 Transferred: {readable_cur} / {readable_tot}"
+            f"⚡ {self.action_name}\n"
+            f"{bar}  {self.percentage:.0f}%\n"
+            f"⏳ Remaining: {rem_pct:.0f}% | ⏱️ {running_str} | 🚀 {speed_str}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Live Pulse - keeps UI animated during silent CPU-bound phases (FFmpeg, etc.)
+# ---------------------------------------------------------------------------
+
+_PULSE_ANIM = ["⚡", "🔥", "🚀", "✨", "💫", "🔄", "⚡", "🎬"]
+_PULSE_DOTS = [".", "..", "...", "....", "...", "..", "."]
+
+
+@asynccontextmanager
+async def live_pulse(
+    status_message,
+    title: str,
+    subtitle: str = "",
+    start_pct: float = 60.0,
+    end_pct: float = 95.0,
+    interval: float = 3.0,
+):
+    """
+    Async context manager — runs an animated heartbeat task while a
+    blocking FFmpeg / CPU operation awaits in the event loop.
+
+    Usage::
+
+        async with live_pulse(s_msg, "Applying Watermark", "Encoding..."):
+            result = await apply_dual_video_watermark(...)
+
+    Updates the message every `interval` seconds so users never see a stall.
+    Bar advances from start_pct -> end_pct smoothly over 120 s max.
+    """
+    _stopped = asyncio.Event()
+    _tick = [0]
+    _start = time.time()
+
+    async def _pulse_loop():
+        while not _stopped.is_set():
+            try:
+                elapsed = time.time() - _start
+                progress_range = end_pct - start_pct
+                pct = min(end_pct, start_pct + (progress_range * elapsed / 120.0))
+                spin = _PULSE_ANIM[_tick[0] % len(_PULSE_ANIM)]
+                dots = _PULSE_DOTS[_tick[0] % len(_PULSE_DOTS)]
+                bar = generate_blocks(pct, total_blocks=10, filled_char="🟧", empty_char="⬜")
+                rem = max(0.0, 100.0 - pct)
+                elapsed_str = format_duration(elapsed)
+                sub = subtitle or "Processing - please wait..."
+
+                text = (
+                    f"{spin} **{title}**\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📊 **Progress:**\n"
+                    f"{bar}  **{pct:.0f}%** {spin}\n"
+                    f"⏳ **Remaining:** `{rem:.0f}% Left`\n\n"
+                    f"╭── 🎛️ **ENGINE STATUS** ────────────────\n"
+                    f"│ ⏱️ **Elapsed:** `{elapsed_str}` | 🔄 `Active{dots}`\n"
+                    f"│ 🛡️ **Core:** `FFmpeg Ultra-Fast Encoder`\n"
+                    f"╰────────────────────────────────────────╯\n"
+                    f"⚡ _{sub}_"
+                )
+                try:
+                    await status_message.edit_text(text)
+                except Exception:
+                    pass
+                _tick[0] += 1
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                break
+
+    task = asyncio.create_task(_pulse_loop())
+    try:
+        yield
+    finally:
+        _stopped.set()
+        task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=0.5)
+        except Exception:
+            pass

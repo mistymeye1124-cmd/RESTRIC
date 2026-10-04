@@ -19,7 +19,7 @@ from core.upload_engine import upload_unlocked_media
 from core.watermark_engine import apply_video_watermark, apply_dual_video_watermark, apply_video_delogo
 from core.media_processor import compress_or_rescale_video, extract_audio_mp3, strip_video_metadata
 from core.caption_cleaner import format_custom_caption, strip_competitor_ads
-from core.progress import ProgressTracker, get_progress_markup
+from core.progress import ProgressTracker, get_progress_markup, generate_blocks, format_progress_line, live_pulse
 from core.queue_manager import job_queue
 from handlers.start import check_force_sub
 from database import db
@@ -455,10 +455,13 @@ async def run_batch_harvest_pipeline(
         ghost_mode_active = bool(user_settings.get("ghost_mode", 1))
         ghost_line = "• 🛡️ Anti-Ban Shield: `Active (Zero-Trace Stealth)`\n" if ghost_mode_active else ""
         try:
+            init_bar = format_progress_line(5.0, show_remaining=True, anim_frame="⚡")
             await s_msg.edit_text(
                 f"⬇️ **Connecting to Secure MTProto Stream {prefix_label}**\n"
                 f"• Target Message: `#{l_link.message_id}`\n"
                 f"{ghost_line}"
+                f"📊 **Progress:**\n"
+                f"{init_bar}\n\n"
                 f"• Status: ⚡ _Handshaking high-speed data stream..._",
                 reply_markup=get_progress_markup(b_job_id, res_pref),
             )
@@ -554,12 +557,14 @@ async def run_batch_harvest_pipeline(
             current_settings = await db.get_settings(user_id)
             effective_res = current_settings.get("resolution", res_pref)
             if delivery_fmt != "audio" and effective_res.isdigit() and int(effective_res) < 1080 and original_path and original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm")):
-                try:
-                    await s_msg.edit_text(f"🎬 **{prefix_label}Optimizing video to {effective_res}p...**\n_Please wait..._")
-                except Exception:
-                    pass
                 scaled_path = f"{original_path}_scaled.mp4"
-                original_path = await compress_or_rescale_video(original_path, scaled_path, int(effective_res))
+                async with live_pulse(
+                    s_msg,
+                    f"🎬 {prefix_label}Optimizing Video Quality",
+                    f"Re-encoding to {effective_res}p — FFmpeg ultra-fast preset",
+                    start_pct=45.0, end_pct=75.0,
+                ):
+                    original_path = await compress_or_rescale_video(original_path, scaled_path, int(effective_res))
                 dl_res["file_path"] = original_path
 
             # Step C: 100% Watermark Removal & Dual-Layer Branding Engine
@@ -574,13 +579,15 @@ async def run_batch_harvest_pipeline(
 
                 # Sub-step C.1: 100% Video Delogo (Erase burned-in logos/watermarks)
                 if is_prem and user_wm and user_wm.get("delogo_enabled"):
-                    try:
-                        await s_msg.edit_text(f"🧹 **{prefix_label}Erasing Original Watermark & Logo...**")
-                    except Exception:
-                        pass
                     ext = os.path.splitext(original_path)[1] or ".mp4"
                     delogo_out = f"{original_path}_delogo{ext}"
-                    delogo_res = await apply_video_delogo(original_path, delogo_out, user_wm)
+                    async with live_pulse(
+                        s_msg,
+                        f"🧹 {prefix_label}Erasing Original Watermark & Logo",
+                        "Neural pixel interpolation — delogo engine active",
+                        start_pct=50.0, end_pct=78.0,
+                    ):
+                        delogo_res = await apply_video_delogo(original_path, delogo_out, user_wm)
                     if delogo_res and delogo_res != original_path and os.path.exists(delogo_res):
                         try:
                             if os.path.exists(original_path):
@@ -594,21 +601,35 @@ async def run_batch_harvest_pipeline(
                 ext = os.path.splitext(original_path)[1] or ".mp4"
                 wm_path = f"{original_path}_brand{ext}"
 
-                try:
-                    if is_prem and user_wm and user_wm.get("enabled"):
-                        await s_msg.edit_text(f"🎬 **{prefix_label}Applying Custom VIP Watermark & Brand...**")
-                    elif global_wm and global_wm.get("enabled") and not is_prem:
-                        await s_msg.edit_text(f"🎬 **{prefix_label}Applying Brand Watermark...**\n_Upgrade to VIP with /premium for clean videos._")
-                except Exception:
-                    pass
+                # Determine subtitle for the pulse card
+                has_actual_wm = False
+                _wm_subtitle = "Brand watermark encoding — ultra-fast preset"
+                if is_prem and user_wm and user_wm.get("enabled"):
+                    if any([
+                        str(user_wm.get("watermark_text") or "").strip(),
+                        str(user_wm.get("headline_text") or "").strip(),
+                        str(user_wm.get("logo_path") or "").strip(),
+                        str(user_wm.get("intro_clip_path") or "").strip(),
+                        str(user_wm.get("outro_clip_path") or "").strip(),
+                    ]):
+                        has_actual_wm = True
+                        _wm_subtitle = "Applying VIP custom brand — encoding zero-loss stream"
+                elif global_wm and global_wm.get("enabled") and not is_prem:
+                    has_actual_wm = True
 
-                final_path = await apply_dual_video_watermark(
-                    input_path=original_path,
-                    output_path=wm_path,
-                    global_config=global_wm,
-                    user_config=user_wm,
-                    is_vip=is_prem,
-                )
+                async with live_pulse(
+                    s_msg,
+                    f"🎬 {prefix_label}Applying Watermark & Branding",
+                    _wm_subtitle,
+                    start_pct=65.0, end_pct=93.0,
+                ):
+                    final_path = await apply_dual_video_watermark(
+                        input_path=original_path,
+                        output_path=wm_path,
+                        global_config=global_wm,
+                        user_config=user_wm,
+                        is_vip=is_prem,
+                    )
                 if final_path and final_path != original_path and os.path.exists(final_path):
                     try:
                         if os.path.exists(original_path):
@@ -623,7 +644,14 @@ async def run_batch_harvest_pipeline(
             if ghost_mode_active and original_path and os.path.exists(original_path):
                 ext = os.path.splitext(original_path)[1].lower() or ".mp4"
                 clean_meta_path = f"{os.path.splitext(original_path)[0]}_ghost{ext}"
-                anonymized = await strip_video_metadata(original_path, clean_meta_path)
+                async with live_pulse(
+                    s_msg,
+                    "🕵️ Ghost Mode — Anonymizing File",
+                    "Stripping all metadata traces — zero digital footprint",
+                    start_pct=93.0, end_pct=98.0,
+                    interval=2.5,
+                ):
+                    anonymized = await strip_video_metadata(original_path, clean_meta_path)
                 if anonymized and anonymized != original_path and os.path.exists(anonymized):
                     try:
                         if os.path.exists(original_path):
@@ -654,6 +682,18 @@ async def run_batch_harvest_pipeline(
                 branding_text = global_wm.get("watermark_text") or "@TgPremiumDownloader_bot"
                 viral_footer = f"\n\n⚡ **Unlocked via {branding_text}**\n💎 _Upgrade to /premium for watermark-free videos!_"
                 caption_to_send = (caption_to_send + viral_footer).strip()
+
+            try:
+                up_bar = format_progress_line(85.0, show_remaining=True, anim_frame="🚀")
+                await s_msg.edit_text(
+                    f"📤 **{prefix_label}Uploading Video to Telegram...**\n"
+                    f"📁 **File:** `{file_title}`\n\n"
+                    f"📊 **Progress:**\n"
+                    f"{up_bar}\n\n"
+                    f"⚡ _Pipelining fast delivery..._"
+                )
+            except Exception:
+                pass
 
             auto_forward_id = user_settings.get("auto_forward_chat_id")
             uploaded = await upload_unlocked_media(

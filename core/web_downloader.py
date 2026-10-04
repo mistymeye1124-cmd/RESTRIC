@@ -78,19 +78,39 @@ async def download_web_video(
         "http_chunk_size": 10485760,
         "retries": 10,
         "fragment_retries": 10,
+        "remote_components": ["ejs:github"],
+        "extractor_args": {
+            "youtubepot-bgutilhttp": {
+                "base_url": ["http://bgutil-provider:4416"]
+            }
+        },
         "progress_hooks": [
             YtDlpProgressHook(tracker, status_message, get_markup_fn, job_id, is_cancelled_fn, loop=loop)
         ],
     }
 
     if not cookie_file or not os.path.exists(cookie_file):
-        for c_cand in ["cookies/youtube_cookies.txt", "cookies/cookies.txt", "cookies.txt"]:
+        for c_cand in [
+            "/app/cookies/cookies.txt",
+            "/app/data/cookies/cookies.txt",
+            "data/cookies/cookies.txt",
+            "cookies/cookies.txt",
+            "/app/cookies/youtube_cookies.txt",
+            "/app/data/cookies/youtube_cookies.txt",
+            "cookies.txt",
+        ]:
             if os.path.exists(c_cand) and os.path.getsize(c_cand) > 10:
                 cookie_file = os.path.abspath(c_cand)
                 break
 
+    temp_cookie = None
     if cookie_file and os.path.exists(cookie_file):
-        ydl_opts["cookiefile"] = cookie_file
+        import tempfile
+        import shutil
+        fd, temp_cookie = tempfile.mkstemp(suffix=".txt", prefix="yt_web_cookie_")
+        os.close(fd)
+        shutil.copyfile(cookie_file, temp_cookie)
+        ydl_opts["cookiefile"] = temp_cookie
 
     def _sync_download():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -116,3 +136,9 @@ async def download_web_video(
     except Exception as e:
         print(f"[!] yt-dlp error: {e}")
         return {"error": str(e)}
+    finally:
+        if temp_cookie and os.path.exists(temp_cookie):
+            try:
+                os.remove(temp_cookie)
+            except Exception:
+                pass

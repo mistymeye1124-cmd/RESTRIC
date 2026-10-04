@@ -592,6 +592,10 @@ async def cookie_document_receiver(client: Client, message: Message):
         try:
             shutil.copy(target_path, os.path.join(COOKIES_DIR, "youtube_cookies.txt"))
             shutil.copy(target_path, os.path.join(COOKIES_DIR, "cookies.txt"))
+            persistent_cookies = os.path.join("data", "cookies")
+            os.makedirs(persistent_cookies, exist_ok=True)
+            shutil.copy(target_path, os.path.join(persistent_cookies, "youtube_cookies.txt"))
+            shutil.copy(target_path, os.path.join(persistent_cookies, "cookies.txt"))
         except Exception:
             pass
         await message.reply_text(

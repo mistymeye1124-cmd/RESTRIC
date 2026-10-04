@@ -408,7 +408,16 @@ async def apply_video_watermark(
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                stdout, stderr = await process.communicate()
+                try:
+                    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=180.0)
+                except asyncio.TimeoutError:
+                    print(f"[!] Watermark burn timed out after 180s for {input_path}. Terminating FFmpeg...")
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
+                    return input_path
+
                 if process.returncode != 0 or not os.path.exists(intermediate_output):
                     err_msg = stderr.decode('utf-8', errors='ignore')[-300:]
                     print(f"[!] Watermark burn error: {err_msg}")
@@ -675,8 +684,9 @@ async def apply_video_delogo(
             "-y",
             "-i", input_path,
             "-vf", delogo_filter,
+            "-threads", "0",
             "-c:v", "libx264",
-            "-preset", "veryfast",
+            "-preset", "ultrafast",
             "-crf", "22",
             "-c:a", "copy",
             "-movflags", "+faststart",
@@ -688,7 +698,16 @@ async def apply_video_delogo(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await proc.communicate()
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=180.0)
+        except asyncio.TimeoutError:
+            print(f"[!] Delogo timed out after 180s for {input_path}. Terminating FFmpeg...")
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return input_path
+
         if proc.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
             return output_path
         else:

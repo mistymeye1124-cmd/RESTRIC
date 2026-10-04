@@ -41,15 +41,15 @@ async def render_referral_card(client: Client, user_id: int):
         target_inv = next_plan["invites"]
         rew_d = next_plan["days"]
         pct = (total_invites / float(target_inv)) * 100.0
-        bar = generate_blocks(pct, total_blocks=6, filled_char="▰", empty_char="▱")
-        milestone_text = f"• Next VIP Milestone: **[{bar}] {total_invites}/{target_inv}** (Reward: **+{rew_d} Days VIP**)"
+        bar = generate_blocks(pct, total_blocks=6, filled_char="🟧", empty_char="⬜")
+        milestone_text = f"• Next VIP Milestone: **{bar} {total_invites}/{target_inv}** (Reward: **+{rew_d} Days VIP**)"
     elif plans:
         max_p = max(plans, key=lambda x: x["invites"])
         max_inv = max_p["invites"]
         cur_prog = total_invites % max_inv
         pct = (cur_prog / float(max_inv)) * 100.0 if max_inv else 100.0
-        bar = generate_blocks(pct, total_blocks=6, filled_char="▰", empty_char="▱")
-        milestone_text = f"• Next VIP Milestone: **[{bar}] {cur_prog}/{max_inv}** (All Tiers Completed! Total: **{total_invites}**)"
+        bar = generate_blocks(pct, total_blocks=6, filled_char="🟧", empty_char="⬜")
+        milestone_text = f"• Next VIP Milestone: **{bar} {cur_prog}/{max_inv}** (All Tiers Completed! Total: **{total_invites}**)"
     else:
         milestone_text = f"• Total Friends Invited: **{total_invites} Members**"
 

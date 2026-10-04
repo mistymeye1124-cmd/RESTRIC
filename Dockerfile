@@ -16,10 +16,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu-core \
     git \
     curl \
+    unzip \
     build-essential \
     libssl-dev \
     libffi-dev \
     ca-certificates \
+    && curl -fsSL https://deno.land/install.sh | sh \
+    && cp /root/.deno/bin/deno /usr/local/bin/ \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

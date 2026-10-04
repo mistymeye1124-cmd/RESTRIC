@@ -16,3 +16,7 @@ python-dotenv>=1.0.0
 pypdf>=4.0.0
 qrcode>=7.4.2
 telethon>=1.36.0
+bgutil-ytdlp-pot-provider>=2.0.1
+yt-dlp-get-pot>=0.3.0
+curl_cffi>=0.7.0
+websockets>=12.0

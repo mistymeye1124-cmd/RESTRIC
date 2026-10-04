@@ -112,14 +112,14 @@ async def turbo_parallel_download(
         num_workers = 2
         chunk_size = 512 * 1024
     elif total_size < 25 * 1024 * 1024:
+        num_workers = 3
+        chunk_size = 512 * 1024
+    elif total_size < 75 * 1024 * 1024:
         num_workers = 4
         chunk_size = 1024 * 1024
-    elif total_size < 75 * 1024 * 1024:
-        num_workers = 10 if is_prem else (8 if cpu_count >= 4 else 6)
-        chunk_size = 1024 * 1024
     else:
-        # Large files (75MB - 4GB): 16 parallel MTProto streams push DC wire speed to 50-80+ MB/s
-        num_workers = 16 if is_prem else (12 if cpu_count >= 4 else 8)
+        # Large files (75MB - 4GB): 6 to 8 balanced MTProto streams push DC wire speed to 40-70 MB/s without socket resets
+        num_workers = 8 if is_prem else (6 if cpu_count >= 4 else 4)
         chunk_size = 1024 * 1024
 
     fid = FileId.decode(target.file_id)

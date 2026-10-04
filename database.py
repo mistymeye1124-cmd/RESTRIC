@@ -2732,7 +2732,7 @@ class Database:
             params.append(owner_user_id)
 
         if active_only:
-            conditions.append("is_active = 1")
+            conditions.append("is_active = 1 AND status != 'dead'")
 
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
@@ -2830,13 +2830,14 @@ class Database:
     async def update_bot_account_status(self, account_id: int, status: str, flood_wait_until: float = 0):
         """Updates health status ('healthy', 'cooldown', 'dead') and flood cooldown timer."""
         async with aiosqlite.connect(self.db_file) as db:
+            is_active_val = 0 if status == "dead" else 1
             await db.execute(
                 """
                 UPDATE bot_accounts
-                SET status = ?, flood_wait_until = ?
+                SET status = ?, flood_wait_until = ?, is_active = ?
                 WHERE account_id = ?
                 """,
-                (status, flood_wait_until, account_id),
+                (status, flood_wait_until, is_active_val, account_id),
             )
             await db.commit()
 

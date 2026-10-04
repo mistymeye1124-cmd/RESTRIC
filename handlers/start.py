@@ -213,11 +213,11 @@ async def render_start_card(client: Client, user_id: int, first_name: str):
         used = user_info.get("daily_downloads_used", 0) if user_info else 0
         remaining = max(0, free_limit - used)
         pct = (remaining / free_limit * 100) if free_limit > 0 else 0
-        q_bar = generate_blocks(pct, total_blocks=8, filled_char="▰", empty_char="▱")
+        q_bar = generate_blocks(pct, total_blocks=8, filled_char="🟧", empty_char="⬜")
         status_banner = (
             "╭── 🧪 **[ARM SQUAD] TEST SIMULATION** ─────╮\n"
             f"│ • Squad Clearance : `Standard Operative (Sim)`\n"
-            f"│ • Daily Energy    : `[{q_bar}] {remaining}/{free_limit} Left`\n"
+            f"│ • Daily Energy    : `{q_bar} {remaining}/{free_limit} Left`\n"
             f"│ • Cloud Uplink    : `{login_status}`\n"
             f"│ • Stream Engine   : `Direct Zero-Loss Stream`\n"
             "╰── _(Testing Free user limits. Revert: `/mode admin`)_ ──╯"
@@ -227,7 +227,7 @@ async def render_start_card(client: Client, user_id: int, first_name: str):
         status_banner = (
             "╭── 🧪 **[ARM SQUAD] VIP SIMULATION** ──────╮\n"
             "│ • Squad Clearance : `VIP Elite Commander (Sim)`\n"
-            "│ • Daily Energy    : `[▰▰▰▰▰▰▰▰] 100% Unlimited ⚡`\n"
+            "│ • Daily Energy    : `🟧🟧🟧🟧🟧🟧🟧🟧 100% Unlimited ⚡`\n"
             f"│ • Engine Speed    : `⚡ Turbo VIP (0 Queue Latency)`\n"
             f"│ • Cloud Uplink    : `{login_status}`\n"
             "╰── _(Testing VIP user perks. Revert: `/mode admin`)_ ──╯"
@@ -237,7 +237,7 @@ async def render_start_card(client: Client, user_id: int, first_name: str):
         status_banner = (
             "╭── 👑 **[ARM SQUAD] SUPREME COMMANDER** ───╮\n"
             "│ • Clearance Level : `Master Architect (God Mode)`\n"
-            "│ • Daily Quota     : `[▰▰▰▰▰▰▰▰] Unrestricted ⚡`\n"
+            "│ • Daily Quota     : `🟧🟧🟧🟧🟧🟧🟧🟧 Unrestricted ⚡`\n"
             f"│ • Cloud Uplink    : `{login_status}`\n"
             "│ • Engine Core     : `🟢 36 Assault Workers Online`\n"
             "╰───────────────────────────────────────────╯"
@@ -250,7 +250,7 @@ async def render_start_card(client: Client, user_id: int, first_name: str):
             "╭── 💎 **[ARM SQUAD] VIP ELITE SQUADRON** ──╮\n"
             "│ • Squad Clearance : `VIP Elite Commander`\n"
             f"│ • Access Pass     : `{expiry}`\n"
-            "│ • Daily Energy    : `[▰▰▰▰▰▰▰▰] 100% Unlimited ⚡`\n"
+            "│ • Daily Energy    : `🟧🟧🟧🟧🟧🟧🟧🟧 100% Unlimited ⚡`\n"
             f"│ • Engine Priority : `⚡ Turbo VIP (0 Queue Latency)`\n"
             f"│ • Cloud Uplink    : `{login_status}`\n"
             "╰───────────────────────────────────────────╯"
@@ -261,11 +261,11 @@ async def render_start_card(client: Client, user_id: int, first_name: str):
         used = user_info.get("daily_downloads_used", 0) if user_info else 0
         remaining = max(0, free_limit - used)
         pct = (remaining / free_limit * 100) if free_limit > 0 else 0
-        q_bar = generate_blocks(pct, total_blocks=8, filled_char="▰", empty_char="▱")
+        q_bar = generate_blocks(pct, total_blocks=8, filled_char="🟧", empty_char="⬜")
         status_banner = (
             "╭── ⚔️ **[ARM SQUAD] OPERATIVE STATUS** ────╮\n"
             f"│ • Squad Clearance : `Standard Operative`\n"
-            f"│ • Daily Energy    : `[{q_bar}] {remaining}/{free_limit} Left Today`\n"
+            f"│ • Daily Energy    : `{q_bar} {remaining}/{free_limit} Left Today`\n"
             f"│ • Cloud Uplink    : `{login_status}`\n"
             f"│ • Stream Engine   : `⚡ Direct Zero-Loss Stream`\n"
             "│ • Tactical Perk   : `Unlock 30x Batch with /premium`\n"

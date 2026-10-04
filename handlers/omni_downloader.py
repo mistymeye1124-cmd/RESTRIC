@@ -19,7 +19,7 @@ from core.upload_engine import upload_unlocked_media
 from core.media_processor import strip_video_metadata
 from core.caption_cleaner import format_custom_caption
 from core.download_engine import active_jobs
-from core.progress import ProgressTracker, get_progress_markup
+from core.progress import ProgressTracker, get_progress_markup, format_progress_line
 from database import db
 from config import TEMP_DOWNLOAD_DIR
 
@@ -49,7 +49,15 @@ def _extract_and_download(url: str, output_template: str) -> Optional[Dict[str, 
     """Synchronous worker invoked in asyncio.to_thread."""
     from core.watermark_engine import get_ffmpeg_binary
     cookie_file = None
-    for c_cand in ["cookies/youtube_cookies.txt", "cookies/cookies.txt", "cookies.txt"]:
+    for c_cand in [
+        "/app/cookies/cookies.txt",
+        "/app/data/cookies/cookies.txt",
+        "data/cookies/cookies.txt",
+        "cookies/cookies.txt",
+        "/app/cookies/youtube_cookies.txt",
+        "/app/data/cookies/youtube_cookies.txt",
+        "cookies.txt",
+    ]:
         if os.path.exists(c_cand) and os.path.getsize(c_cand) > 10:
             cookie_file = os.path.abspath(c_cand)
             break
@@ -57,7 +65,7 @@ def _extract_and_download(url: str, output_template: str) -> Optional[Dict[str, 
     opts = {
         "ffmpeg_location": get_ffmpeg_binary(),
         "outtmpl": output_template,
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "format": "bestvideo+bestaudio/best",
         "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,
@@ -66,48 +74,59 @@ def _extract_and_download(url: str, output_template: str) -> Optional[Dict[str, 
         "buffersize": 1048576,
         "http_chunk_size": 10485760,
         "socket_timeout": 30,
-        "retries": 3,
+        "retries": 5,
+        "remote_components": ["ejs:github"],
         "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "ios", "web"],
-                "player_skip": ["webpage", "configs"],
+            "youtubepot-bgutilhttp": {
+                "base_url": ["http://bgutil-provider:4416"]
             }
-        },
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         },
     }
-    if cookie_file:
-        opts["cookiefile"] = cookie_file
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        if not info:
-            return None
-        # Locate downloaded file path
-        expected = ydl.prepare_filename(info)
-        base, _ = os.path.splitext(expected)
-        candidates = [
-            f"{base}.mp4",
-            expected,
-            f"{base}.webm",
-            f"{base}.mkv",
-        ]
-        final_file = None
-        for cand in candidates:
-            if os.path.exists(cand) and os.path.getsize(cand) > 100:
-                final_file = cand
-                break
 
-        if final_file and os.path.exists(final_file) and os.path.getsize(final_file) > 100:
-            return {
-                "file_path": final_file,
-                "title": info.get("title") or "Web Video",
-                "duration": int(info.get("duration") or 0),
-                "uploader": info.get("uploader") or info.get("channel") or "",
-                "description": info.get("description") or "",
-                "thumbnail": info.get("thumbnail"),
-            }
-        return None
+    temp_cookie = None
+    if cookie_file:
+        import tempfile
+        import shutil
+        fd, temp_cookie = tempfile.mkstemp(suffix=".txt", prefix="yt_cookie_")
+        os.close(fd)
+        shutil.copyfile(cookie_file, temp_cookie)
+        opts["cookiefile"] = temp_cookie
+
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            if not info:
+                return None
+            expected = ydl.prepare_filename(info)
+            base, _ = os.path.splitext(expected)
+            candidates = [
+                f"{base}.mp4",
+                expected,
+                f"{base}.webm",
+                f"{base}.mkv",
+            ]
+            final_file = None
+            for cand in candidates:
+                if os.path.exists(cand) and os.path.getsize(cand) > 100:
+                    final_file = cand
+                    break
+
+            if final_file and os.path.exists(final_file) and os.path.getsize(final_file) > 100:
+                return {
+                    "file_path": final_file,
+                    "title": info.get("title") or "Web Video",
+                    "duration": int(info.get("duration") or 0),
+                    "uploader": info.get("uploader") or info.get("channel") or "",
+                    "description": info.get("description") or "",
+                    "thumbnail": info.get("thumbnail"),
+                }
+            return None
+    finally:
+        if temp_cookie and os.path.exists(temp_cookie):
+            try:
+                os.remove(temp_cookie)
+            except Exception:
+                pass
 
 
 @Client.on_message(filters.private & filters.text & filters.regex(OMNI_DOMAINS_REGEX))
@@ -158,13 +177,16 @@ async def omni_url_listener(client: Client, message: Message):
         "cancelled": False,
     }
 
+    init_prog = format_progress_line(10.0, show_remaining=True, anim_frame="🌐")
     status_msg = await message.reply_text(
         f"🌐 **Omni Web Harvester** ⚡\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🔗 **Platform:** `{domain}`\n"
+        f"📊 **Progress:**\n"
+        f"{init_prog}\n\n"
         f"⚙️ **Status:** _Connecting to high-speed stream parser..._\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⏳ _Please wait while video is processed..._",
+        f"⏳ _Please wait while video is extracted..._",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔴 Cancel Operation", callback_data=f"cancel:{job_id}")]
         ]),
@@ -185,7 +207,6 @@ async def omni_url_listener(client: Client, message: Message):
                     "media_type": "document",
                 }
             else:
-                from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
                 await status_msg.edit_text(
                     "📄 **Google Document**\n\n"
                     "This document requires Google account login or is restricted.\n"
@@ -316,7 +337,9 @@ async def omni_url_listener(client: Client, message: Message):
                 pass
 
     except Exception as err:
+        import traceback
         print(f"[!] Omni-downloader error: {err}")
+        traceback.print_exc()
         try:
             await status_msg.edit_text(f"❌ **Download Error:** `{str(err)[:100]}`")
         except Exception:

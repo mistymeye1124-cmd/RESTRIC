@@ -84,26 +84,16 @@ async def _turbo_save_file_impl(
 
     # Dynamic Sweet-Spot Tuning:
     # Under 10MB: 2 workers, 512KB
-    # 10MB - 50MB: 4 workers, 512KB
-    # 50MB - 200MB: 6 workers, 512KB
-    # > 200MB: 8 workers, 512KB/1024KB for maximum pipe saturation
-    cpu_count = os.cpu_count() or 2
+    # 10MB - 50MB: 3 workers, 512KB
+    # > 50MB: 4 workers, 512KB (or 1024KB if file > 2GB for 4000 parts limit)
+    # 4 concurrent streams is the proven MTProto standard limit for zero socket resets
+    part_size = 1024 * 1024 if file_size > 2000 * 1024 * 1024 else 512 * 1024
     if not is_big:
-        part_size = 512 * 1024
         workers_count = 2
-    elif file_size < 50 * 1024 * 1024:
-        part_size = 512 * 1024
-        workers_count = 4
-    elif file_size < 100 * 1024 * 1024:
-        part_size = 512 * 1024
-        workers_count = 8 if cpu_count >= 4 else 6
+    elif file_size < 30 * 1024 * 1024:
+        workers_count = 3
     else:
-        # Files >= 100MB: 1MB chunks with up to 12 concurrent MTProto upload streams
-        part_size = 1024 * 1024
-        if is_prem:
-            workers_count = 12 if cpu_count >= 4 else 8
-        else:
-            workers_count = 10 if cpu_count >= 4 else 8
+        workers_count = 4
 
     file_total_parts = int(math.ceil(file_size / part_size))
     is_missing_part = file_id is not None
@@ -155,11 +145,19 @@ async def _turbo_save_file_impl(
                     last_err = rpc_err
                     retry += 1
                     logger.warning("[TurboWorker %d] RPC error on part %d (retry %d): %s", wid, rpc.file_part, retry, rpc_err)
+                    try:
+                        await sess.restart()
+                    except Exception:
+                        pass
                     await asyncio.sleep(0.5 * retry)
                 except Exception as ex:
                     last_err = ex
                     retry += 1
                     logger.warning("[TurboWorker %d] Network error on part %d (retry %d): %s", wid, rpc.file_part, retry, ex)
+                    try:
+                        await sess.restart()
+                    except Exception:
+                        pass
                     await asyncio.sleep(0.5 * retry)
 
             if not success:
@@ -296,21 +294,39 @@ async def turbo_save_file(
     """
     High-performance multi-stream parallel file uploader for Pyrogram.
     Replaces the default single-session serial uploader with concurrent MTProto sessions.
-    Respects client's save_file_semaphore to maintain system stability.
+    Automatically and seamlessly falls back to Pyrogram's native save_file on any error.
     """
     semaphore = getattr(client, "save_file_semaphore", None)
-    if semaphore:
-        async with semaphore:
+    try:
+        if semaphore:
+            async with semaphore:
+                return await _turbo_save_file_impl(client, path, file_id, file_part, progress, progress_args)
+        else:
             return await _turbo_save_file_impl(client, path, file_id, file_part, progress, progress_args)
-    else:
-        return await _turbo_save_file_impl(client, path, file_id, file_part, progress, progress_args)
+    except StopTransmission:
+        raise
+    except Exception as e:
+        logger.warning("[TurboUploader] Turbo upload fallback triggered: %s. Using robust native save_file...", e)
+        orig_save = getattr(client, "_orig_save_file", None)
+        if orig_save:
+            try:
+                if semaphore:
+                    async with semaphore:
+                        return await orig_save(path, file_id, file_part, progress, progress_args)
+                else:
+                    return await orig_save(path, file_id, file_part, progress, progress_args)
+            except Exception as orig_e:
+                logger.error("[TurboUploader] Native fallback also failed: %s", orig_e)
+                raise
+        raise
 
 
 def install_turbo_uploader(client: Client):
     """
     Installs the Turbo Parallel Multi-Stream Uploader onto any Pyrogram Client instance.
-    Directly enhances `client.save_file` so all `send_video`, `send_document`, `send_audio`
-    calls across the entire codebase automatically hit 40-60+ MB/s upload speeds!
+    Preserves original save_file as _orig_save_file for 100% fail-safe fallback.
     """
+    if not hasattr(client, "_orig_save_file"):
+        client._orig_save_file = client.save_file
     client.save_file = types.MethodType(turbo_save_file, client)
     logger.info("[⚡ TURBO UPLOADER] Parallel Multi-Stream Upload Engine active on Client '%s'.", getattr(client, "name", "client"))

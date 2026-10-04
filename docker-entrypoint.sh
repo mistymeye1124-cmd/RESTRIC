@@ -8,8 +8,14 @@ echo "   Auto-Deploy & Session Immunity Guard (Dokploy Active)"
 echo "=========================================================="
 
 # 1. Ensure runtime directories exist
-mkdir -p /app/downloads /app/sessions /app/data /app/scratch /app/backups
-chmod 755 /app/downloads /app/sessions /app/data /app/scratch 2>/dev/null || true
+mkdir -p /app/downloads /app/sessions /app/data /app/scratch /app/backups /app/cookies /app/data/cookies
+chmod 755 /app/downloads /app/sessions /app/data /app/scratch /app/cookies 2>/dev/null || true
+
+# Restore global YouTube cookies if in persistent data storage
+if [ -f "/app/data/cookies/youtube_cookies.txt" ]; then
+    cp -f "/app/data/cookies/youtube_cookies.txt" "/app/cookies/youtube_cookies.txt" 2>/dev/null || true
+    cp -f "/app/data/cookies/youtube_cookies.txt" "/app/cookies/cookies.txt" 2>/dev/null || true
+fi
 
 # 2. Prevent Docker directory mount trap for SQLite files
 touch /app/bot_database.db /app/restricted_v2.db

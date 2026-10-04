@@ -353,6 +353,16 @@ async def upload_unlocked_media(
             thumb_path = None
             safe_thumb_path = None
 
+            # Render initial upload progress card immediately so user is never left waiting
+            try:
+                initial_card = tracker.card(0, total_size)
+                await status_message.edit_text(
+                    text=initial_card,
+                    reply_markup=get_progress_markup(job_id),
+                )
+            except Exception:
+                pass
+
             _last_upload_edit_task: Optional[asyncio.Task] = None
     
             try:

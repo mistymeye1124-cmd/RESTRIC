@@ -1493,7 +1493,7 @@ async def render_vip_plans_menu():
     if plans:
         for k, p in plans.items():
             status = "🟢 Active" if p.get("is_active", 1) else "🔴 Disabled"
-            plan_rows.append(f"│ • {p['badge']} **{p['name']}** (`{k}`): **{p['price_bdt']} BDT** ({p['days']} Days) — {status}")
+            plan_rows.append(f"│ • {p.get('badge', '⭐')} **{p['name']}** (`{k}`): **{p['price_bdt']} BDT** ({p['days']} Days) — {status}")
     else:
         plan_rows.append("│ • _No plans configured._")
     plans_block = "\n".join(plan_rows)
@@ -1501,26 +1501,32 @@ async def render_vip_plans_menu():
     text = (
         "💎 **VIP SUBSCRIPTION PLANS & PRICING CONFIGURATION** 💎\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Configure VIP package prices, durations, and names.\n"
+        "Configure VIP package prices, durations, names, badges, or delete.\n"
         "Whatever you change here **automatically updates live** on:\n"
         "• User `/premium` and `/plans` checkout page\n"
         "• `/features` Free vs VIP comparison matrix\n"
         "• Instant checkout buy buttons and invoices\n"
         "• Admin transaction approvals\n\n"
-        "┌── 📦 **ACTIVE SUBSCRIPTION PACKAGES** ──┐\n"
+        "┌── 📦 **ALL CONFIGURED PACKAGES** ──┐\n"
         f"{plans_block}\n"
         "└──────────────────────────────────────┘\n\n"
-        "👇 _Tap below to edit the price of any plan, add a new tier, or delete:_"
+        "👇 _Tap any plan below to open its dedicated edit & delete control panel:_"
     )
 
     buttons = []
-    for k, p in plans.items():
-        buttons.append([
-            InlineKeyboardButton(f"✏️ Edit Price: {p['badge']} {p['name']} ({p['price_bdt']}৳)", callback_data=f"adm_edit_plan_price:{k}")
-        ])
+    if plans:
+        for k, p in plans.items():
+            st_dot = "🟢" if p.get("is_active", 1) else "🔴"
+            buttons.append([
+                InlineKeyboardButton(
+                    f"{st_dot} {p.get('badge', '⭐')} {p['name']} ({p['price_bdt']}৳ / {p['days']}d)",
+                    callback_data=f"adm_manage_plan:{k}",
+                )
+            ])
+
     buttons.append([
         InlineKeyboardButton("➕ Add Custom VIP Plan", callback_data="adm_btn_add_vip_plan"),
-        InlineKeyboardButton("🗑️ Delete a VIP Plan", callback_data="adm_view_del_vip_plans"),
+        InlineKeyboardButton("🗑️ Delete a Plan", callback_data="adm_view_del_vip_plans"),
     ])
     buttons.append([
         InlineKeyboardButton("🔄 Reset Plans to Default", callback_data="adm_reset_vip_plans"),
@@ -1531,6 +1537,49 @@ async def render_vip_plans_menu():
     ])
 
     return text, InlineKeyboardMarkup(buttons)
+
+
+async def render_single_plan_card(plan_key: str):
+    plan = await db.get_vip_plan(plan_key)
+    if not plan:
+        text = f"⚠️ Plan `{plan_key}` not found in database."
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to VIP Plans", callback_data="adm_view_vip_plans")]])
+        return text, markup
+
+    is_act = plan.get("is_active", 1)
+    status_str = "🟢 Active (Visible on user checkout)" if is_act else "🔴 Disabled (Hidden from users)"
+    toggle_btn_text = "🔴 Deactivate Plan" if is_act else "🟢 Activate Plan"
+
+    text = (
+        f"⚙️ **VIP PLAN MANAGER: {plan.get('badge', '⭐')} {plan.get('name', plan_key)}**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• **Plan Key (ID):** `{plan_key}`\n"
+        f"• **Display Name:** **{plan.get('name')}**\n"
+        f"• **Price:** **{plan.get('price_bdt')} BDT**\n"
+        f"• **Duration:** **{plan.get('days')} Days**\n"
+        f"• **Badge / Emoji:** {plan.get('badge', '⭐')}\n"
+        f"• **Status:** {status_str}\n\n"
+        "👇 _Select any button below to modify, toggle, or delete this plan:_"
+    )
+
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💰 Edit Price", callback_data=f"adm_edit_plan_price:{plan_key}"),
+            InlineKeyboardButton("📅 Edit Days", callback_data=f"adm_edit_plan_days:{plan_key}"),
+        ],
+        [
+            InlineKeyboardButton("🏷️ Edit Name", callback_data=f"adm_edit_plan_name:{plan_key}"),
+            InlineKeyboardButton("⭐ Edit Badge/Emoji", callback_data=f"adm_edit_plan_badge:{plan_key}"),
+        ],
+        [
+            InlineKeyboardButton(toggle_btn_text, callback_data=f"adm_toggle_vip_plan:{plan_key}"),
+            InlineKeyboardButton("🗑️ Delete Plan", callback_data=f"adm_del_vip_confirm:{plan_key}"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to All VIP Plans", callback_data="adm_view_vip_plans"),
+        ],
+    ])
+    return text, markup
 
 
 async def render_delete_vip_plans_menu():
@@ -1548,7 +1597,7 @@ async def render_delete_vip_plans_menu():
     buttons = []
     for k, p in plans.items():
         buttons.append([
-            InlineKeyboardButton(f"🗑️ Delete: {p['badge']} {p['name']} ({p['price_bdt']}৳)", callback_data=f"adm_del_vip_act:{k}")
+            InlineKeyboardButton(f"🗑️ Delete: {p.get('badge', '⭐')} {p['name']} ({p['price_bdt']}৳)", callback_data=f"adm_del_vip_confirm:{k}")
         ])
     buttons.append([InlineKeyboardButton("🔙 Back to VIP Plans", callback_data="adm_view_vip_plans")])
     return text, InlineKeyboardMarkup(buttons)
@@ -1568,6 +1617,20 @@ async def adm_view_vip_plans_callback(client: Client, callback_query: CallbackQu
         await callback_query.message.reply_text(text, reply_markup=markup)
 
 
+@Client.on_callback_query(filters.regex(r"^adm_manage_plan:(.+)"))
+async def adm_manage_plan_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        return
+    plan_key = callback_query.matches[0].group(1)
+    clear_user_state(callback_query.from_user.id)
+    await callback_query.answer()
+    text, markup = await render_single_plan_card(plan_key)
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await callback_query.message.reply_text(text, reply_markup=markup)
+
+
 @Client.on_callback_query(filters.regex(r"^adm_edit_plan_price:(.+)"))
 async def adm_edit_plan_price_callback(client: Client, callback_query: CallbackQuery):
     if not is_admin(callback_query.from_user.id):
@@ -1580,15 +1643,100 @@ async def adm_edit_plan_price_callback(client: Client, callback_query: CallbackQ
     await callback_query.answer()
     set_user_state(callback_query.from_user.id, "waiting_adm_set_plan_price", extra={"plan_key": plan_key})
     text = (
-        f"✏️ **EDIT PRICE FOR: {plan['name']}**\n"
+        f"💰 **EDIT PRICE FOR: {plan.get('badge', '⭐')} {plan['name']}**\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• **Current Price:** `{plan['price_bdt']} BDT`\n"
         f"• **Duration:** `{plan['days']} Days`\n\n"
         "👉 **Send the new price in BDT** (e.g. `120`, `300`, `700`):\n"
         "_(Or tap Cancel below)_"
     )
-    markup = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="adm_view_vip_plans")]])
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"adm_manage_plan:{plan_key}")]])
     await callback_query.message.edit_text(text, reply_markup=markup)
+
+
+@Client.on_callback_query(filters.regex(r"^adm_edit_plan_days:(.+)"))
+async def adm_edit_plan_days_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        return
+    plan_key = callback_query.matches[0].group(1)
+    plan = await db.get_vip_plan(plan_key)
+    if not plan:
+        await callback_query.answer("⚠️ Plan not found.", show_alert=True)
+        return
+    await callback_query.answer()
+    set_user_state(callback_query.from_user.id, "waiting_adm_set_plan_days", extra={"plan_key": plan_key})
+    text = (
+        f"📅 **EDIT DURATION (DAYS) FOR: {plan.get('badge', '⭐')} {plan['name']}**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• **Current Duration:** `{plan['days']} Days`\n"
+        f"• **Price:** `{plan['price_bdt']} BDT`\n\n"
+        "👉 **Send the new duration in days** (e.g. `7`, `15`, `30`, `60`, `365`):\n"
+        "_(Or tap Cancel below)_"
+    )
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"adm_manage_plan:{plan_key}")]])
+    await callback_query.message.edit_text(text, reply_markup=markup)
+
+
+@Client.on_callback_query(filters.regex(r"^adm_edit_plan_name:(.+)"))
+async def adm_edit_plan_name_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        return
+    plan_key = callback_query.matches[0].group(1)
+    plan = await db.get_vip_plan(plan_key)
+    if not plan:
+        await callback_query.answer("⚠️ Plan not found.", show_alert=True)
+        return
+    await callback_query.answer()
+    set_user_state(callback_query.from_user.id, "waiting_adm_set_plan_name", extra={"plan_key": plan_key})
+    text = (
+        f"🏷️ **EDIT DISPLAY NAME FOR: {plan['name']}**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• **Current Name:** `{plan['name']}`\n\n"
+        "👉 **Send the new display name** (e.g. `1 Month VIP Elite Pass`):\n"
+        "_(Or tap Cancel below)_"
+    )
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"adm_manage_plan:{plan_key}")]])
+    await callback_query.message.edit_text(text, reply_markup=markup)
+
+
+@Client.on_callback_query(filters.regex(r"^adm_edit_plan_badge:(.+)"))
+async def adm_edit_plan_badge_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        return
+    plan_key = callback_query.matches[0].group(1)
+    plan = await db.get_vip_plan(plan_key)
+    if not plan:
+        await callback_query.answer("⚠️ Plan not found.", show_alert=True)
+        return
+    await callback_query.answer()
+    set_user_state(callback_query.from_user.id, "waiting_adm_set_plan_badge", extra={"plan_key": plan_key})
+    text = (
+        f"⭐ **EDIT BADGE / EMOJI FOR: {plan['name']}**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• **Current Badge:** {plan.get('badge', '⭐')}\n\n"
+        "👉 **Send the new emoji/badge** (e.g. `👑`, `⚡`, `💎`, `🚀`, `🔥`):\n"
+        "_(Or tap Cancel below)_"
+    )
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"adm_manage_plan:{plan_key}")]])
+    await callback_query.message.edit_text(text, reply_markup=markup)
+
+
+@Client.on_callback_query(filters.regex(r"^adm_toggle_vip_plan:(.+)"))
+async def adm_toggle_vip_plan_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        return
+    plan_key = callback_query.matches[0].group(1)
+    new_st = await db.toggle_vip_plan_active(plan_key)
+    if new_st is None:
+        await callback_query.answer("⚠️ Plan not found.", show_alert=True)
+        return
+    status_label = "🟢 Enabled (Visible to users)" if new_st == 1 else "🔴 Disabled (Hidden from checkout)"
+    await callback_query.answer(f"Status changed: {status_label}!", show_alert=True)
+    text, markup = await render_single_plan_card(plan_key)
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        pass
 
 
 @Client.on_callback_query(filters.regex(r"^adm_btn_add_vip_plan$"))
@@ -1627,6 +1775,37 @@ async def adm_view_del_vip_plans_callback(client: Client, callback_query: Callba
         await callback_query.message.reply_text(text, reply_markup=markup)
 
 
+@Client.on_callback_query(filters.regex(r"^adm_del_vip_confirm:(.+)"))
+async def adm_del_vip_confirm_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        return
+    plan_key = callback_query.matches[0].group(1)
+    plan = await db.get_vip_plan(plan_key)
+    if not plan:
+        await callback_query.answer("⚠️ Plan not found.", show_alert=True)
+        return
+    await callback_query.answer()
+    text = (
+        f"🗑️ **CONFIRM PERMANENT DELETION** 🗑️\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• **Plan:** {plan.get('badge', '⭐')} **{plan['name']}**\n"
+        f"• **Key:** `{plan_key}`\n"
+        f"• **Price:** `{plan['price_bdt']} BDT`\n"
+        f"• **Duration:** `{plan['days']} Days`\n\n"
+        "⚠️ **Are you sure you want to permanently delete this plan?**\n"
+        "This plan will be immediately deleted from the database and will no longer appear on user checkout pages."
+    )
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🗑️ Yes, Delete Permanently", callback_data=f"adm_del_vip_act:{plan_key}"),
+        ],
+        [
+            InlineKeyboardButton("❌ Cancel (Keep Plan)", callback_data=f"adm_manage_plan:{plan_key}"),
+        ]
+    ])
+    await callback_query.message.edit_text(text, reply_markup=markup)
+
+
 @Client.on_callback_query(filters.regex(r"^adm_del_vip_act:(.+)"))
 async def adm_del_vip_act_callback(client: Client, callback_query: CallbackQuery):
     if not is_admin(callback_query.from_user.id):
@@ -1634,10 +1813,10 @@ async def adm_del_vip_act_callback(client: Client, callback_query: CallbackQuery
     plan_key = callback_query.matches[0].group(1)
     deleted = await db.delete_vip_plan(plan_key)
     if deleted:
-        await callback_query.answer(f"🗑️ Deleted VIP plan: {plan_key}!", show_alert=True)
+        await callback_query.answer(f"🗑️ Permanently deleted plan: {plan_key}!", show_alert=True)
     else:
         await callback_query.answer("⚠️ Plan not found.", show_alert=True)
-    text, markup = await render_delete_vip_plans_menu()
+    text, markup = await render_vip_plans_menu()
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
@@ -4323,10 +4502,76 @@ async def admin_input_interceptor(client: Client, message: Message):
                 f"• New Price: **{new_price} BDT**\n\n"
                 "All user `/premium` cards, 1-click buy buttons, and feature matrices have updated live!"
             )
+            card_text, card_markup = await render_single_plan_card(pk)
+            await message.reply_text(card_text, reply_markup=card_markup)
         else:
             await message.reply_text("⚠️ Please send a valid positive number for price in BDT (e.g. `150` or `300`).")
-        p_text, p_markup = await render_vip_plans_menu()
-        await message.reply_text(p_text, reply_markup=p_markup)
+            p_text, p_markup = await render_vip_plans_menu()
+            await message.reply_text(p_text, reply_markup=p_markup)
+        message.stop_propagation()
+        return
+
+    # 13b. Edit VIP Plan Duration (Days)
+    if state == "waiting_adm_set_plan_days":
+        clear_user_state(user_id)
+        pk = extra.get("plan_key")
+        val = text.strip()
+        if pk and val.isdigit() and int(val) > 0:
+            new_days = int(val)
+            await db.update_vip_plan_days(pk, new_days)
+            await message.reply_text(
+                f"✅ **Duration Updated for Plan `{pk}`!**\n\n"
+                f"• New Duration: **{new_days} Days**\n\n"
+                "Approved transactions for this plan will now award this duration automatically!"
+            )
+            card_text, card_markup = await render_single_plan_card(pk)
+            await message.reply_text(card_text, reply_markup=card_markup)
+        else:
+            await message.reply_text("⚠️ Please send a valid positive integer for days (e.g. `7`, `30`, `365`).")
+            p_text, p_markup = await render_vip_plans_menu()
+            await message.reply_text(p_text, reply_markup=p_markup)
+        message.stop_propagation()
+        return
+
+    # 13c. Edit VIP Plan Display Name
+    if state == "waiting_adm_set_plan_name":
+        clear_user_state(user_id)
+        pk = extra.get("plan_key")
+        val = text.strip()
+        if pk and val:
+            await db.update_vip_plan_name(pk, val)
+            await message.reply_text(
+                f"✅ **Display Name Updated for Plan `{pk}`!**\n\n"
+                f"• New Name: **{val}**\n\n"
+                "Updated live across all user checkout pages and comparison matrices!"
+            )
+            card_text, card_markup = await render_single_plan_card(pk)
+            await message.reply_text(card_text, reply_markup=card_markup)
+        else:
+            await message.reply_text("⚠️ Plan name cannot be empty.")
+            p_text, p_markup = await render_vip_plans_menu()
+            await message.reply_text(p_text, reply_markup=p_markup)
+        message.stop_propagation()
+        return
+
+    # 13d. Edit VIP Plan Badge / Emoji
+    if state == "waiting_adm_set_plan_badge":
+        clear_user_state(user_id)
+        pk = extra.get("plan_key")
+        val = text.strip()
+        if pk and val:
+            await db.update_vip_plan_badge(pk, val)
+            await message.reply_text(
+                f"✅ **Badge Updated for Plan `{pk}`!**\n\n"
+                f"• New Badge: {val}\n\n"
+                "Updated live across all user menus!"
+            )
+            card_text, card_markup = await render_single_plan_card(pk)
+            await message.reply_text(card_text, reply_markup=card_markup)
+        else:
+            await message.reply_text("⚠️ Badge cannot be empty.")
+            p_text, p_markup = await render_vip_plans_menu()
+            await message.reply_text(p_text, reply_markup=p_markup)
         message.stop_propagation()
         return
 

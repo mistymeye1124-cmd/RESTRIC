@@ -2448,6 +2448,24 @@ class Database:
         """
         async with aiosqlite.connect(self.db_file) as db:
             db.row_factory = aiosqlite.Row
+
+            # Only auto-seed defaults if table is totally empty (first boot ever)
+            async with db.execute("SELECT COUNT(*) FROM vip_plans") as c_cur:
+                total_in_db = (await c_cur.fetchone())[0]
+
+            if total_in_db == 0:
+                default_vip_plans = [
+                    ("7_days", "7 Days VIP Pass", 100, 7, "⚡", 1, 1),
+                    ("30_days", "30 Days VIP Pass", 250, 30, "⭐", 1, 2),
+                    ("lifetime", "Lifetime VIP Access", 600, 3650, "👑", 1, 3),
+                ]
+                for pk, name, bdt, days, badge, act, order in default_vip_plans:
+                    await db.execute(
+                        "INSERT OR IGNORE INTO vip_plans (plan_key, name, price_bdt, days, badge, is_active, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (pk, name, bdt, days, badge, act, order),
+                    )
+                await db.commit()
+
             query = "SELECT * FROM vip_plans"
             if active_only:
                 query += " WHERE is_active = 1"
@@ -2465,23 +2483,6 @@ class Database:
                     "is_active": r["is_active"],
                     "sort_order": r["sort_order"],
                 }
-
-            if not plans:
-                default_vip_plans = [
-                    ("7_days", "7 Days VIP Pass", 100, 7, "⚡", 1, 1),
-                    ("30_days", "30 Days VIP Pass", 250, 30, "⭐", 1, 2),
-                    ("lifetime", "Lifetime VIP Access", 600, 3650, "👑", 1, 3),
-                ]
-                for pk, name, bdt, days, badge, act, order in default_vip_plans:
-                    await self.add_or_update_vip_plan(pk, name, bdt, days, badge, order)
-                    plans[pk] = {
-                        "name": name,
-                        "price_bdt": bdt,
-                        "days": days,
-                        "badge": badge,
-                        "is_active": 1,
-                        "sort_order": order,
-                    }
             return plans
 
     async def get_vip_plan(self, plan_key: str) -> Optional[Dict[str, Any]]:
@@ -2508,6 +2509,38 @@ class Database:
             )
             await db.commit()
             return cur.rowcount > 0
+
+    async def update_vip_plan_name(self, plan_key: str, name: str) -> bool:
+        """Updates the display name of a VIP plan."""
+        async with aiosqlite.connect(self.db_file) as db:
+            cur = await db.execute(
+                "UPDATE vip_plans SET name = ? WHERE plan_key = ?",
+                (name.strip(), plan_key),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def update_vip_plan_badge(self, plan_key: str, badge: str) -> bool:
+        """Updates the badge/emoji of a VIP plan."""
+        async with aiosqlite.connect(self.db_file) as db:
+            cur = await db.execute(
+                "UPDATE vip_plans SET badge = ? WHERE plan_key = ?",
+                (badge.strip(), plan_key),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def toggle_vip_plan_active(self, plan_key: str) -> Optional[int]:
+        """Toggles a VIP plan between active (1) and disabled (0)."""
+        async with aiosqlite.connect(self.db_file) as db:
+            cur = await db.execute("SELECT is_active FROM vip_plans WHERE plan_key = ?", (plan_key,))
+            row = await cur.fetchone()
+            if not row:
+                return None
+            new_st = 0 if row[0] == 1 else 1
+            await db.execute("UPDATE vip_plans SET is_active = ? WHERE plan_key = ?", (new_st, plan_key))
+            await db.commit()
+            return new_st
 
     async def add_or_update_vip_plan(
         self, plan_key: str, name: str, price_bdt: int, days: int, badge: str = "⭐", sort_order: int = 0

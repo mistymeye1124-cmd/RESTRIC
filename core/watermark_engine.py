@@ -151,15 +151,18 @@ async def concat_video_clips(
     cmd = [
         ffmpeg_bin,
         "-y",
+        "-threads", "0",
         *inputs,
         "-filter_complex", full_filter,
         "-map", "[outv]",
         "-map", "[outa]",
         "-c:v", "libx264",
         "-preset", "ultrafast",
-        "-crf", "22",
+        "-tune", "fastdecode,zerolatency",
+        "-crf", "28",
         "-c:a", "aac",
-        "-b:a", "128k",
+        "-b:a", "96k",
+        "-sn",
         "-movflags", "+faststart",
         output_path,
     ]
@@ -170,7 +173,16 @@ async def concat_video_clips(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=600.0)
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=20.0)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            print("[!] Concat intro/outro reached 20s deadline. Falling back to original.")
+            return main_video_path
+
         if proc.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
             print(f"[+] Intro/Outro merged successfully: {os.path.basename(output_path)}")
             return output_path
@@ -393,10 +405,10 @@ async def apply_video_watermark(
 
             cmd.extend([
                 "-threads", "0",
-                "-tune", "fastdecode",
+                "-tune", "fastdecode,zerolatency",
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
-                "-crf", "22",
+                "-crf", "28",
                 "-c:a", "copy",
                 "-sn",
                 "-movflags", "+faststart",
@@ -406,9 +418,9 @@ async def apply_video_watermark(
             # Strict, bounded encoding deadline (prevents dead stalls)
             if timeout is None:
                 f_size_mb = (os.path.getsize(input_path) / (1024 * 1024)) if os.path.exists(input_path) else 50.0
-                effective_timeout = max(20.0, min(60.0, f_size_mb * 0.25))
+                effective_timeout = max(10.0, min(20.0, f_size_mb * 0.12))
             else:
-                effective_timeout = float(timeout)
+                effective_timeout = min(25.0, float(timeout))
 
             try:
                 process = await asyncio.create_subprocess_exec(
@@ -695,10 +707,12 @@ async def apply_video_delogo(
             "-i", input_path,
             "-vf", delogo_filter,
             "-threads", "0",
+            "-tune", "fastdecode,zerolatency",
             "-c:v", "libx264",
             "-preset", "ultrafast",
-            "-crf", "22",
+            "-crf", "28",
             "-c:a", "copy",
+            "-sn",
             "-movflags", "+faststart",
             output_path,
         ]
@@ -706,9 +720,9 @@ async def apply_video_delogo(
         # Strict delogo timeout cap
         if timeout is None:
             f_size_mb = (os.path.getsize(input_path) / (1024 * 1024)) if os.path.exists(input_path) else 50.0
-            effective_timeout = max(15.0, min(50.0, f_size_mb * 0.20))
+            effective_timeout = max(10.0, min(20.0, f_size_mb * 0.10))
         else:
-            effective_timeout = float(timeout)
+            effective_timeout = min(20.0, float(timeout))
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,

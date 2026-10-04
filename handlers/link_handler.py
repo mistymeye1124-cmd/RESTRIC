@@ -607,8 +607,8 @@ async def run_batch_harvest_pipeline(
                 is_video_candidate = original_path and (original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".flv")) or dl_res.get("media_type") == "video")
                 if is_video_candidate and original_path and os.path.exists(original_path):
                     f_size_mb = os.path.getsize(original_path) / (1024 * 1024)
-                    if f_size_mb > 250:
-                        logger.info("[Pipeline] Video is %.1fMB (>250MB) — bypassing CPU transcode for zero-stall instant delivery", f_size_mb)
+                    if f_size_mb > 150:
+                        logger.info("[Pipeline] Video is %.1fMB (>150MB) — bypassing CPU transcode for zero-stall instant delivery", f_size_mb)
                     else:
                         global_wm = await db.get_global_watermark_config()
                         user_wm = await db.get_watermark_settings(user_id) if is_prem else None
@@ -621,7 +621,7 @@ async def run_batch_harvest_pipeline(
                         if is_prem and user_wm and user_wm.get("delogo_enabled"):
                             ext = os.path.splitext(original_path)[1] or ".mp4"
                             delogo_out = f"{original_path}_delogo{ext}"
-                            _est_delogo = min(40, max(15, int(f_size_mb * 0.15)))
+                            _est_delogo = min(20, max(8, int(f_size_mb * 0.10)))
                             async with live_pulse(
                                 s_msg,
                                 f"🧹 {prefix_label}Erasing Original Watermark & Logo",
@@ -629,7 +629,7 @@ async def run_batch_harvest_pipeline(
                                 start_pct=50.0, end_pct=78.0,
                                 estimated_seconds=_est_delogo,
                             ):
-                                delogo_res = await apply_video_delogo(original_path, delogo_out, user_wm, timeout=_est_delogo + 5)
+                                delogo_res = await apply_video_delogo(original_path, delogo_out, user_wm, timeout=_est_delogo)
                             if delogo_res and delogo_res != original_path and os.path.exists(delogo_res):
                                 try:
                                     if os.path.exists(original_path):
@@ -660,7 +660,7 @@ async def run_batch_harvest_pipeline(
                             has_actual_wm = True
 
                         if has_actual_wm:
-                            _est_wm = min(45, max(15, int(f_size_mb * 0.18)))
+                            _est_wm = min(20, max(8, int(f_size_mb * 0.10)))
                             async with live_pulse(
                                 s_msg,
                                 f"🎬 {prefix_label}Applying Watermark & Branding",
@@ -674,8 +674,8 @@ async def run_batch_harvest_pipeline(
                                     global_config=global_wm,
                                     user_config=user_wm,
                                     is_vip=is_prem,
-                                    timeout=_est_wm + 5,
-                                    )
+                                    timeout=_est_wm,
+                                )
                             if final_path and final_path != original_path and os.path.exists(final_path):
                                 try:
                                     if os.path.exists(original_path):

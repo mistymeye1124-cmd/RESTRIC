@@ -90,9 +90,9 @@ async def _turbo_save_file_impl(
     elif file_size < 20 * 1024 * 1024:
         workers_count = 4
     elif file_size < 100 * 1024 * 1024:
-        workers_count = 6
+        workers_count = 5 if not is_prem else 6
     else:
-        workers_count = 8
+        workers_count = 6 if not is_prem else 8
 
     file_total_parts = int(math.ceil(file_size / part_size))
     is_missing_part = file_id is not None
@@ -190,8 +190,9 @@ async def _turbo_save_file_impl(
                 except Exception:
                     pass
 
-            # 10ms micro-pacing smooths out token-bucket consumption and prevents FloodWait
-            await asyncio.sleep(0.010)
+            # Adaptive micro-pacing smooths out token-bucket consumption and prevents Telegram flood pauses
+            pacing = 0.012 if workers_count >= 6 else 0.008
+            await asyncio.sleep(pacing)
             queue.task_done()
 
     # Launch concurrent worker tasks

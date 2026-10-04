@@ -77,7 +77,8 @@ def is_duplicate_callback(query: types.CallbackQuery) -> Tuple[bool, str]:
     data = str(query.data or "")
     if user_id and data:
         # Numpad button clicks need low debounce (150ms) to allow entering repeated digits in OTP (e.g., "55")
-        debounce_window = 0.15 if data.startswith("numpad:") else 0.9
+        # Navigation callbacks use 350ms to prevent double-click while remaining fluid and responsive
+        debounce_window = 0.15 if data.startswith("numpad:") else 0.35
         key = (user_id, data)
         last_t = _user_button_last_click.get(key, 0.0)
         if (now - last_t) < debounce_window:

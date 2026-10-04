@@ -144,7 +144,7 @@ async def add_watcher_command(client: Client, message: Message):
             "Whenever a new message or video is posted in the source channel, the bot will automatically "
             "copy/mirror it to your destination channel in real time.\n\n"
             "📌 **Command Syntax:**\n"
-            "`/addwatcher <source_channel> <destination_channel>`\n\n"
+            "`/addwatcher [source_channel] [destination_channel]`\n\n"
             "💡 **Examples:**\n"
             "• `/addwatcher @source_channel -1002459862936`\n"
             "• `/addwatcher https://t.me/c/1234567890/1 -1009876543210`\n"
@@ -227,7 +227,7 @@ async def delete_watcher_command(client: Client, message: Message):
     user_id = message.from_user.id
     cmd = message.command
     if len(cmd) < 2 or not cmd[1].isdigit():
-        await message.reply_text("Usage: `/delwatcher <monitor_id>`\nExample: `/delwatcher 1`")
+        await message.reply_text("Usage: `/delwatcher [monitor_id]`\nExample: `/delwatcher 1`")
         return
 
     mon_id = int(cmd[1])
@@ -266,7 +266,7 @@ async def _render_watcher_dashboard(user_id: int, user_is_admin: bool) -> tuple[
         text += (
             "ℹ️ _No channel monitors configured yet._\n\n"
             "👉 Tap **➕ Add Channel Monitor** below for step-by-step setup, or send:\n"
-            "`/addwatcher <source_channel> <destination_channel>`"
+            "`/addwatcher [source_channel] [destination_channel]`"
         )
         buttons = [
             [InlineKeyboardButton("➕ Add Channel Monitor", callback_data="watcher_interactive_add")],
@@ -317,7 +317,10 @@ async def _render_watcher_dashboard(user_id: int, user_is_admin: bool) -> tuple[
 
 @Client.on_callback_query(filters.regex(r"^watcher_menu$"))
 async def watcher_menu_callback(client: Client, query: CallbackQuery):
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
     user_id = query.from_user.id
     user_is_admin = is_admin(user_id)
     user_is_vip = await db.is_user_premium(user_id)
@@ -344,17 +347,25 @@ async def watcher_menu_callback(client: Client, query: CallbackQuery):
             try:
                 await query.message.reply_text(text, reply_markup=markup, disable_web_page_preview=True)
             except Exception:
-                pass
+                try:
+                    await client.send_message(user_id, text, reply_markup=markup, disable_web_page_preview=True)
+                except Exception:
+                    pass
         return
 
     text, markup = await _render_watcher_dashboard(user_id, user_is_admin)
     try:
         await query.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
-    except Exception:
+    except Exception as e:
+        print(f"[WatcherMenu] edit_text failed: {e}, falling back to reply_text...")
         try:
             await query.message.reply_text(text, reply_markup=markup, disable_web_page_preview=True)
-        except Exception:
-            pass
+        except Exception as e2:
+            print(f"[WatcherMenu] reply_text failed: {e2}, falling back to send_message...")
+            try:
+                await client.send_message(user_id, text, reply_markup=markup, disable_web_page_preview=True)
+            except Exception as e3:
+                print(f"[WatcherMenu] send_message fatal: {e3}")
 
 
 @Client.on_callback_query(filters.regex(r"^watcher_interactive_add$"))
@@ -750,7 +761,7 @@ async def watcher_add_help_callback(client: Client, query: CallbackQuery):
         "1️⃣ **Interactive Wizard (Recommended):**\n"
         "Tap **➕ Add Channel Monitor** from the dashboard and follow the 2-step prompt!\n\n"
         "2️⃣ **Quick Command Syntax:**\n"
-        "`/addwatcher <source_channel> <destination_channel>`\n\n"
+        "`/addwatcher [source_channel] [destination_channel]`\n\n"
         "📌 **Command Examples:**\n"
         "• `/addwatcher @my_source_channel -1002459862936`\n"
         "• `/addwatcher https://t.me/c/1234567890/1 -1009876543210`\n"

@@ -82,20 +82,14 @@ async def _turbo_save_file_impl(
             fp.close()
         raise ValueError(f"Can't upload files bigger than {file_size_limit_mib} MiB")
 
-    # Dynamic Sweet-Spot Tuning:
-    # Under 10MB: 2 workers, 512KB
-    # 10MB - 50MB: 3 workers, 512KB
-    # > 50MB: 4 workers, 512KB (or 1024KB if file > 2GB for 4000 parts limit)
-    # 4 concurrent streams is the proven MTProto standard limit for zero socket resets
-    part_size = 1024 * 1024 if file_size > 2000 * 1024 * 1024 else 512 * 1024
+    # Dynamic Sweet-Spot Tuning: 1MB parts for large files to eliminate Telegram FloodWait rate-limits!
+    part_size = 1024 * 1024 if file_size > 30 * 1024 * 1024 else 512 * 1024
     if not is_big:
         workers_count = 3
     elif file_size < 30 * 1024 * 1024:
-        workers_count = 5
-    elif file_size < 100 * 1024 * 1024:
-        workers_count = 8
+        workers_count = 4
     else:
-        workers_count = 10
+        workers_count = 6
 
     file_total_parts = int(math.ceil(file_size / part_size))
     is_missing_part = file_id is not None

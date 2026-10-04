@@ -952,16 +952,22 @@ async def download_restricted_media(
                                 os.remove(target_file_path)
                             except Exception:
                                 pass
-                        downloaded_file = await current_client.download_media(
+                        downloaded_file = await asyncio.wait_for(
+                            current_client.download_media(
+                                message=source_msg,
+                                file_name=target_file_path,
+                                progress=pyrogram_progress,
+                            ),
+                            timeout=600.0,
+                        )
+                else:
+                    downloaded_file = await asyncio.wait_for(
+                        current_client.download_media(
                             message=source_msg,
                             file_name=target_file_path,
                             progress=pyrogram_progress,
-                        )
-                else:
-                    downloaded_file = await current_client.download_media(
-                        message=source_msg,
-                        file_name=target_file_path,
-                        progress=pyrogram_progress,
+                        ),
+                        timeout=600.0,
                     )
                 limiter.on_success()
                 try:

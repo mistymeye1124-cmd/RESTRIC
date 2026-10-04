@@ -312,6 +312,26 @@ async def main():
         except Exception:
             pass
 
+    # Clean-slate sweep of temporary downloads on boot
+    try:
+        from core.storage_shield import emergency_disk_purge
+        emergency_disk_purge()
+    except Exception:
+        pass
+
+    # Enable SQLite WAL mode on session to eliminate 'database is locked' during updates
+    session_file = os.path.join("sessions", f"{session_name}.session")
+    if os.path.exists(session_file):
+        try:
+            import sqlite3
+            conn = sqlite3.connect(session_file, timeout=5.0)
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA busy_timeout=15000;")
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
     print(f"[*] Starting Telegram Bot Client ({session_name})...")
     bot = Client(
         name=session_name,

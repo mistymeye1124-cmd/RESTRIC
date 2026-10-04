@@ -193,7 +193,7 @@ async def turbo_parallel_download(
     abort_reason = ""
     chunk_fail_counts: Dict[int, int] = {}
     consecutive_errors = 0
-    MAX_CONSECUTIVE_ERRORS = 16
+    MAX_CONSECUTIVE_ERRORS = 32
 
     async def restart_worker_session(sess: Session, w_id: int):
         """Cleanly re-establishes a broken TCP MTProto socket."""
@@ -225,7 +225,7 @@ async def turbo_parallel_download(
                 break
 
             chunk_success = False
-            for retry in range(2):
+            for retry in range(4):
                 if abort_event.is_set() or (active_jobs and job_id and active_jobs.get(job_id, {}).get("cancelled")):
                     break
 
@@ -237,9 +237,9 @@ async def turbo_parallel_download(
                                 offset=offset,
                                 limit=chunk_size,
                             ),
-                            timeout=8.0,
+                            timeout=18.0,
                         ),
-                        timeout=10.0,
+                        timeout=22.0,
                     )
 
                     if isinstance(r, raw.types.upload.File):
@@ -329,12 +329,12 @@ async def turbo_parallel_download(
             await asyncio.sleep(1.0)
             if downloaded_bytes >= total_size or abort_event.is_set():
                 break
-            if time.time() - last_progress_time > 8.0:
+            if time.time() - last_progress_time > 30.0:
                 logger.warning(
-                    "[TurboDownloader] Stall detected! No bytes received for 8.0s (transferred: %d/%d). Auto-recovering to fallback...",
+                    "[TurboDownloader] Stall detected! No bytes received for 30.0s (transferred: %d/%d). Auto-recovering to fallback...",
                     downloaded_bytes, total_size
                 )
-                abort_reason = "Stall detected (no bytes for 8s)"
+                abort_reason = "Stall detected (no bytes for 30s)"
                 abort_event.set()
                 for w in workers:
                     w.cancel()

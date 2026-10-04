@@ -645,31 +645,31 @@ async def run_batch_harvest_pipeline(
                     elif global_wm and global_wm.get("enabled") and not is_prem:
                         has_actual_wm = True
 
-                    # Estimate watermark time from file size (bounded strictly to 15-45s)
-                    _est_wm = min(45, max(15, int(f_size_mb * 0.18)))
-                    async with live_pulse(
-                        s_msg,
-                        f"🎬 {prefix_label}Applying Watermark & Branding",
-                        _wm_subtitle,
-                        start_pct=65.0, end_pct=93.0,
-                        estimated_seconds=_est_wm,
-                    ):
-                        final_path = await apply_dual_video_watermark(
-                            input_path=original_path,
-                            output_path=wm_path,
-                            global_config=global_wm,
-                            user_config=user_wm,
-                            is_vip=is_prem,
-                            timeout=_est_wm + 5,
-                        )
-                    if final_path and final_path != original_path and os.path.exists(final_path):
-                        try:
-                            if os.path.exists(original_path):
-                                os.remove(original_path)
-                        except Exception:
-                            pass
-                        dl_res["file_path"] = final_path
-                        original_path = final_path
+                    if has_actual_wm:
+                        _est_wm = min(45, max(15, int(f_size_mb * 0.18)))
+                        async with live_pulse(
+                            s_msg,
+                            f"🎬 {prefix_label}Applying Watermark & Branding",
+                            _wm_subtitle,
+                            start_pct=65.0, end_pct=93.0,
+                            estimated_seconds=_est_wm,
+                        ):
+                            final_path = await apply_dual_video_watermark(
+                                input_path=original_path,
+                                output_path=wm_path,
+                                global_config=global_wm,
+                                user_config=user_wm,
+                                is_vip=is_prem,
+                                timeout=_est_wm + 5,
+                            )
+                        if final_path and final_path != original_path and os.path.exists(final_path):
+                            try:
+                                if os.path.exists(original_path):
+                                    os.remove(original_path)
+                            except Exception:
+                                pass
+                            dl_res["file_path"] = final_path
+                            original_path = final_path
 
             # Step D.1: Stealth Metadata Anonymizer (Zero-Trace Digital Sanitizer)
             ghost_mode_active = bool(user_settings.get("ghost_mode", 1))

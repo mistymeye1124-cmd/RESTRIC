@@ -1,8 +1,10 @@
 # language: Python, file: core/queue_manager.py, target: Python 3.10+, Asyncio
 """
 Concurrent Multi-Worker Priority Queue for High-Load Commercial Telegram Bots.
-Ensures VIP Premium users get prioritized bandwidth and downloads execute without server choking.
-Protects VPS and co-hosted ProGuild HQ website via Storage & Memory Shield.
+Features:
+- Elastic Dynamic Scaling: 4 base workers scaling up to 8-10 parallel workers during high traffic
+- Memory & Disk Guard: Ensures ProGuild HQ website always has >=5GB disk and >=3GB RAM
+- Zero-Freeze Protection: Automatic post-execution cleanup of all media buffers
 """
 
 import asyncio
@@ -11,7 +13,7 @@ import logging
 from typing import Dict, Any, Callable
 from dataclasses import dataclass, field
 from config import MAX_CONCURRENT_WORKERS
-from core.storage_shield import check_storage_safety, cleanup_job_files
+from core.storage_shield import check_storage_safety, cleanup_job_files, get_free_ram_mb
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +36,14 @@ class QueueManager:
         self.active_count = 0
 
     async def start(self):
-        """Starts worker tasks in the background."""
+        """Starts baseline worker tasks in the background."""
         if self.is_running:
             return
         self.is_running = True
         for i in range(self.num_workers):
             task = asyncio.create_task(self._worker_loop(i))
             self.workers.append(task)
-        logger.info("[+] Multi-Worker Priority Queue started with %d parallel workers (Safe Server Concurrency).", self.num_workers)
+        logger.info("[+] Multi-Worker Priority Queue started with %d base workers (Elastic scaling up to 8-10).", self.num_workers)
 
     async def _worker_loop(self, worker_id: int):
         while self.is_running:
@@ -83,8 +85,43 @@ class QueueManager:
                     pass
                 self.queue.task_done()
 
+    async def _burst_worker(self, burst_id: int):
+        """Temporary elastic worker spawned during traffic spikes when RAM is plenty."""
+        if not self.is_running or self.queue.empty():
+            return
+
+        try:
+            job: PrioritizedJob = self.queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return
+
+        self.active_count += 1
+        logger.info("[QueueManager] Elastic Burst Worker-%d activated (RAM: plenty, high load).", burst_id)
+        try:
+            for _ in range(3):
+                is_safe, reason, _ = check_storage_safety()
+                if is_safe:
+                    break
+                await asyncio.sleep(2.0)
+
+            await job.handler(*job.args)
+        except Exception as e:
+            logger.error("[!] Burst Worker-%d job %s error: %s", burst_id, job.job_id, e)
+        finally:
+            self.active_count = max(0, self.active_count - 1)
+            try:
+                from core.download_engine import active_jobs
+                active_jobs.pop(job.job_id, None)
+            except Exception:
+                pass
+            try:
+                cleanup_job_files(job.job_id)
+            except Exception:
+                pass
+            self.queue.task_done()
+
     async def add_job(self, job_id: str, is_premium: bool, handler: Callable, *args) -> int:
-        """Adds a job with priority (Priority 1 for VIP, Priority 2 for Free). Returns queue depth."""
+        """Adds a job with priority. Dynamically spawns elastic burst workers when RAM allows."""
         priority = 1 if is_premium else 2
         job = PrioritizedJob(
             priority=priority,
@@ -94,7 +131,21 @@ class QueueManager:
             args=args,
         )
         await self.queue.put(job)
-        return self.queue.qsize()
+        q_size = self.queue.qsize()
+
+        # Dynamic Elastic Worker Scaling:
+        # If queue has waiting jobs and plenty of RAM is available (> 5000 MB free),
+        # dynamically spawn temporary burst workers (up to max 10 parallel workers total)
+        # to process user requests immediately without queue wait times!
+        try:
+            free_ram = get_free_ram_mb()
+            if free_ram > 5000 and self.active_count >= self.num_workers and self.active_count < 10:
+                burst_id = 100 + self.active_count
+                asyncio.create_task(self._burst_worker(burst_id))
+        except Exception:
+            pass
+
+        return q_size
 
     async def stop(self):
         self.is_running = False

@@ -344,7 +344,7 @@ async def main():
         workers=16,                       # Balanced async event dispatchers
         ipv6=False,
         proxy=get_configured_proxy(),
-        sleep_threshold=60,                 # handle FloodWait faster
+        sleep_threshold=5,                  # Raise FloodWait >5s immediately so UI & pipeline never freeze
     )
 
     # Attach Anti-Duplicate Idempotency Guard to prevent double execution and duplicate messages

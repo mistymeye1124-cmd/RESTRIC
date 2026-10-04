@@ -82,14 +82,17 @@ async def _turbo_save_file_impl(
             fp.close()
         raise ValueError(f"Can't upload files bigger than {file_size_limit_mib} MiB")
 
-    # Dynamic Sweet-Spot Tuning: 1MB parts for large files to eliminate Telegram FloodWait rate-limits!
-    part_size = 1024 * 1024 if file_size > 30 * 1024 * 1024 else 512 * 1024
+    # Dynamic Sweet-Spot Tuning: MTProto strictly enforces 512KB (524288 bytes) maximum part size.
+    # Concurrency is scaled through multiple independent MTProto media sessions.
+    part_size = 512 * 1024
     if not is_big:
         workers_count = 3
-    elif file_size < 30 * 1024 * 1024:
+    elif file_size < 20 * 1024 * 1024:
         workers_count = 4
-    else:
+    elif file_size < 100 * 1024 * 1024:
         workers_count = 6
+    else:
+        workers_count = 8
 
     file_total_parts = int(math.ceil(file_size / part_size))
     is_missing_part = file_id is not None
@@ -108,9 +111,10 @@ async def _turbo_save_file_impl(
     await asyncio.gather(*[s.start() for s in sessions])
 
     # Deep async queue prevents disk I/O from stalling network sockets
-    queue: asyncio.Queue = asyncio.Queue(maxsize=workers_count * 2)
+    queue: asyncio.Queue = asyncio.Queue(maxsize=workers_count * 4)
 
     uploaded_bytes = 0
+    last_progress_time = [0.0]
     progress_lock = asyncio.Lock()
     error_event = asyncio.Event()
     worker_error: List[Exception] = []
@@ -163,11 +167,16 @@ async def _turbo_save_file_impl(
                 queue.task_done()
                 return
 
+            now = time.time()
+            trigger_progress = False
             async with progress_lock:
                 uploaded_bytes += chunk_len
                 cur = min(uploaded_bytes, file_size)
+                if cur >= file_size or (now - last_progress_time[0] >= 0.25):
+                    last_progress_time[0] = now
+                    trigger_progress = True
 
-            if progress and not error_event.is_set():
+            if trigger_progress and progress and not error_event.is_set():
                 try:
                     if inspect.iscoroutinefunction(progress):
                         await progress(cur, file_size, *progress_args)

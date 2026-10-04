@@ -190,6 +190,8 @@ async def _turbo_save_file_impl(
                 except Exception:
                     pass
 
+            # 10ms micro-pacing smooths out token-bucket consumption and prevents FloodWait
+            await asyncio.sleep(0.010)
             queue.task_done()
 
     # Launch concurrent worker tasks

@@ -211,7 +211,7 @@ async def _telethon_fallback_download(
         # VIP Protection Gate inside Telethon Engine
         if user_id:
             from database import db as _db
-            from utils import is_admin as _is_admin
+            from handlers.admin import is_admin as _is_admin
             if not _is_admin(user_id):
                 ch_title = ""
                 ch_uname = ""
@@ -552,7 +552,7 @@ async def download_restricted_media(
     }
 
     from database import db as _vip_db
-    from utils import is_admin as _vip_is_admin
+    from handlers.admin import is_admin as _vip_is_admin
     if user_id and not _vip_is_admin(user_id):
         if await _vip_db.is_channel_protected(chat_id):
             logger.warning("[Security] User %s blocked from protected VIP channel ID %s", user_id, chat_id)

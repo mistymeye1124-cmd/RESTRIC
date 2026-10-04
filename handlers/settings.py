@@ -113,10 +113,13 @@ async def render_settings_card(user_id: int):
             ],
             [
                 InlineKeyboardButton("👥 Referral & Earn VIP", callback_data="user_view_referral"),
-                InlineKeyboardButton("📢 Auto-Forward Channel", callback_data="prompt_channel_help"),
+                InlineKeyboardButton("📢 Custom Target Channel", callback_data="prompt_channel_help"),
             ],
             [
+                InlineKeyboardButton("📡 24/7 Channel Mirror", callback_data="watcher_menu"),
                 InlineKeyboardButton(f"🌐 Language: {lang_display}", callback_data="user_view_language"),
+            ],
+            [
                 InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main"),
             ],
         ]

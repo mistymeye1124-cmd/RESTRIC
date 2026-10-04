@@ -415,6 +415,14 @@ async def main():
         print("🛡️ Automated VPS Storage Shield & Zero-Residual Scavenger: ACTIVE")
     except Exception as e:
         print(f"[!] Storage shield warning: {e}")
+
+    # 24/7 Real-Time Channel Auto-Forwarder & Mirror Watcher Daemon
+    try:
+        from core.channel_watcher import start_channel_mirror_daemon
+        asyncio.create_task(start_channel_mirror_daemon(bot))
+        print("📡 Real-Time Channel Auto-Forwarder & Mirror Watcher: ACTIVE")
+    except Exception as e:
+        print(f"[!] Channel watcher daemon warning: {e}")
     print("=" * 65)
 
     # Register bot menu commands in Telegram UI
@@ -422,6 +430,7 @@ async def main():
         from pyrogram.types import BotCommand
         await bot.set_bot_commands([
             BotCommand("start", "Start bot & view dashboard"),
+            BotCommand("autoforward", "Live 24/7 Channel Auto-Forwarder & Mirror"),
             BotCommand("setup", "Watermark (text, headline, clip)"),
             BotCommand("login", "Connect Telegram account for restricted content"),
             BotCommand("batch", "Multi-link batch queue downloader"),

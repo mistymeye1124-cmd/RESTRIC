@@ -604,6 +604,41 @@ class Database:
             except Exception:
                 pass
 
+            # 14. Real-time Channel Auto-Forwarder / Mirror Watcher
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS channel_monitors (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    source_chat_id INTEGER NOT NULL,
+                    source_title TEXT DEFAULT '',
+                    dest_chat_id INTEGER NOT NULL,
+                    dest_title TEXT DEFAULT '',
+                    is_active INTEGER DEFAULT 1,
+                    clean_ads INTEGER DEFAULT 1,
+                    custom_caption TEXT DEFAULT '',
+                    last_msg_id INTEGER DEFAULT 0,
+                    total_forwarded INTEGER DEFAULT 0,
+                    last_forwarded_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_channel_monitors_source ON channel_monitors(source_chat_id, is_active);")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_channel_monitors_user ON channel_monitors(user_id);")
+
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS channel_monitor_history (
+                    monitor_id INTEGER,
+                    source_msg_id INTEGER,
+                    dest_msg_id INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (monitor_id, source_msg_id)
+                )
+                """
+            )
+
             await db.commit()
 
     # --- User & Quota Management ---
@@ -3027,6 +3062,150 @@ class Database:
             deleted = cursor.rowcount
             await db.commit()
             return deleted > 0
+
+    # --- Real-Time Channel Auto-Forwarder / Mirror Watcher Methods ---
+
+    async def add_channel_monitor(
+        self,
+        user_id: int,
+        source_chat_id: int,
+        source_title: str,
+        dest_chat_id: int,
+        dest_title: str,
+        clean_ads: int = 1,
+        custom_caption: str = "",
+    ) -> int:
+        """Registers a new channel auto-forward / mirror monitor."""
+        async with aiosqlite.connect(self.db_file) as db:
+            cursor = await db.execute(
+                """
+                INSERT INTO channel_monitors (
+                    user_id, source_chat_id, source_title, dest_chat_id, dest_title, clean_ads, custom_caption
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (user_id, source_chat_id, source_title, dest_chat_id, dest_title, clean_ads, custom_caption),
+            )
+            monitor_id = cursor.lastrowid
+            await db.commit()
+            return monitor_id
+
+    async def get_channel_monitors(self, user_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Returns all channel monitors, optionally filtered by user_id."""
+        async with aiosqlite.connect(self.db_file) as db:
+            db.row_factory = aiosqlite.Row
+            if user_id is not None:
+                cursor = await db.execute(
+                    "SELECT * FROM channel_monitors WHERE user_id = ? ORDER BY id DESC",
+                    (user_id,),
+                )
+            else:
+                cursor = await db.execute("SELECT * FROM channel_monitors ORDER BY id DESC")
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    async def get_channel_monitor_by_id(self, monitor_id: int) -> Optional[Dict[str, Any]]:
+        """Returns a specific channel monitor by its ID."""
+        async with aiosqlite.connect(self.db_file) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM channel_monitors WHERE id = ?", (monitor_id,))
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_active_monitors_for_source(self, source_chat_id: int) -> List[Dict[str, Any]]:
+        """Returns all active monitors listening to a given source_chat_id."""
+        async with aiosqlite.connect(self.db_file) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM channel_monitors WHERE source_chat_id = ? AND is_active = 1",
+                (source_chat_id,),
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    async def get_all_active_monitors(self) -> List[Dict[str, Any]]:
+        """Returns all currently active channel monitors."""
+        async with aiosqlite.connect(self.db_file) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM channel_monitors WHERE is_active = 1")
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    async def toggle_channel_monitor(self, monitor_id: int, user_id: Optional[int] = None) -> Optional[int]:
+        """Toggles a channel monitor active/paused. Returns new status (1 or 0) or None."""
+        async with aiosqlite.connect(self.db_file) as db:
+            query = "SELECT is_active FROM channel_monitors WHERE id = ?"
+            params: list = [monitor_id]
+            if user_id is not None:
+                query += " AND user_id = ?"
+                params.append(user_id)
+            cursor = await db.execute(query, tuple(params))
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            new_status = 0 if row[0] == 1 else 1
+            up_query = "UPDATE channel_monitors SET is_active = ? WHERE id = ?"
+            up_params = [new_status, monitor_id]
+            if user_id is not None:
+                up_query += " AND user_id = ?"
+                up_params.append(user_id)
+            await db.execute(up_query, tuple(up_params))
+            await db.commit()
+            return new_status
+
+    async def delete_channel_monitor(self, monitor_id: int, user_id: Optional[int] = None) -> bool:
+        """Deletes a channel monitor and its history."""
+        async with aiosqlite.connect(self.db_file) as db:
+            query = "DELETE FROM channel_monitors WHERE id = ?"
+            params: list = [monitor_id]
+            if user_id is not None:
+                query += " AND user_id = ?"
+                params.append(user_id)
+            cursor = await db.execute(query, tuple(params))
+            deleted = cursor.rowcount > 0
+            if deleted:
+                await db.execute("DELETE FROM channel_monitor_history WHERE monitor_id = ?", (monitor_id,))
+            await db.commit()
+            return deleted
+
+    async def is_monitor_post_forwarded(self, monitor_id: int, source_msg_id: int) -> bool:
+        """Checks if a source post has already been mirrored by this monitor."""
+        async with aiosqlite.connect(self.db_file) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM channel_monitor_history WHERE monitor_id = ? AND source_msg_id = ? LIMIT 1",
+                (monitor_id, source_msg_id),
+            )
+            return (await cursor.fetchone()) is not None
+
+    async def record_monitor_forward(self, monitor_id: int, source_msg_id: int, dest_msg_id: int = 0):
+        """Records a successful post mirror in history and increments stats."""
+        async with aiosqlite.connect(self.db_file) as db:
+            await db.execute(
+                """
+                INSERT OR IGNORE INTO channel_monitor_history (monitor_id, source_msg_id, dest_msg_id)
+                VALUES (?, ?, ?)
+                """,
+                (monitor_id, source_msg_id, dest_msg_id),
+            )
+            await db.execute(
+                """
+                UPDATE channel_monitors
+                SET total_forwarded = total_forwarded + 1,
+                    last_forwarded_at = CURRENT_TIMESTAMP,
+                    last_msg_id = MAX(last_msg_id, ?)
+                WHERE id = ?
+                """,
+                (source_msg_id, monitor_id),
+            )
+            await db.commit()
+
+    async def update_monitor_last_msg(self, monitor_id: int, last_msg_id: int):
+        """Updates the highest checked message ID for a monitor."""
+        async with aiosqlite.connect(self.db_file) as db:
+            await db.execute(
+                "UPDATE channel_monitors SET last_msg_id = MAX(last_msg_id, ?) WHERE id = ?",
+                (last_msg_id, monitor_id),
+            )
+            await db.commit()
 
 
 db = Database()

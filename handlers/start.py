@@ -337,11 +337,14 @@ async def render_start_card(client: Client, user_id: int, first_name: str):
             InlineKeyboardButton("⚙️ Squad Settings", callback_data="user_view_settings"),
         ],
         [
+            InlineKeyboardButton("📡 Live Channel Mirror", callback_data="watcher_menu"),
             InlineKeyboardButton("👥 Squad Referral", callback_data="user_view_referral"),
-            InlineKeyboardButton("📊 Tier Comparison", callback_data="user_view_features"),
         ],
         [
+            InlineKeyboardButton("📊 Tier Comparison", callback_data="user_view_features"),
             InlineKeyboardButton("📖 Tactical Manual", callback_data="user_view_guide"),
+        ],
+        [
             InlineKeyboardButton(f"🌐 {lang_display}", callback_data="user_view_language"),
         ],
     ]

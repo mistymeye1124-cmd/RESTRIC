@@ -194,7 +194,14 @@ async def compress_or_rescale_video(
     ffmpeg_bin = get_ffmpeg_binary()
     scale_filter = f"scale=-2:{target_height}"
 
-    # Try fast copy for audio first
+    # Strict maximum encoding deadline (never let user wait more than 20 seconds)
+    if timeout is None:
+        f_size_mb = (os.path.getsize(input_path) / (1024 * 1024)) if os.path.exists(input_path) else 50.0
+        effective_timeout = max(10.0, min(20.0, f_size_mb * 0.15))
+    else:
+        effective_timeout = min(25.0, float(timeout))
+
+    # Pass 1: Ultra-fast stream-copy audio + multi-threaded ultrafast video rescale
     cmd = [
         ffmpeg_bin,
         "-y",
@@ -203,17 +210,13 @@ async def compress_or_rescale_video(
         "-vf", scale_filter,
         "-c:v", "libx264",
         "-preset", "ultrafast",
-        "-crf", "25",
+        "-tune", "fastdecode,zerolatency",
+        "-crf", "28",
         "-c:a", "copy",
+        "-sn",
         "-movflags", "+faststart",
         output_path,
     ]
-
-    if timeout is None:
-        f_size_mb = (os.path.getsize(input_path) / (1024 * 1024)) if os.path.exists(input_path) else 50.0
-        effective_timeout = max(20.0, min(50.0, f_size_mb * 0.25))
-    else:
-        effective_timeout = float(timeout)
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -224,9 +227,13 @@ async def compress_or_rescale_video(
         try:
             await asyncio.wait_for(proc.communicate(), timeout=effective_timeout)
         except asyncio.TimeoutError:
-            proc.kill()
+            try:
+                proc.kill()
+            except Exception:
+                pass
             print(f"[!] Video rescale reached {effective_timeout:.0f}s deadline for {input_path}. Falling back to original.")
             return input_path
+
         if proc.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
             try:
                 if input_path != output_path and os.path.exists(input_path):
@@ -237,7 +244,8 @@ async def compress_or_rescale_video(
     except Exception as e:
         print(f"[!] Fast compression error: {e}")
 
-    # Fallback with audio re-encode if audio copy fails
+    # Pass 2: Fallback with fast aac audio re-encode (with strict 15s deadline, never 600s!)
+    fallback_timeout = min(15.0, effective_timeout)
     cmd_fallback = [
         ffmpeg_bin,
         "-y",
@@ -246,9 +254,11 @@ async def compress_or_rescale_video(
         "-vf", scale_filter,
         "-c:v", "libx264",
         "-preset", "ultrafast",
-        "-crf", "25",
+        "-tune", "fastdecode,zerolatency",
+        "-crf", "28",
         "-c:a", "aac",
-        "-b:a", "128k",
+        "-b:a", "96k",
+        "-sn",
         "-movflags", "+faststart",
         output_path,
     ]
@@ -259,10 +269,15 @@ async def compress_or_rescale_video(
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            await asyncio.wait_for(proc.communicate(), timeout=600.0)
+            await asyncio.wait_for(proc.communicate(), timeout=fallback_timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            raise RuntimeError("FFmpeg fallback compress timed out (600s)")
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            print(f"[!] Video rescale fallback reached {fallback_timeout:.0f}s deadline. Falling back to original.")
+            return input_path
+
         if proc.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
             try:
                 if input_path != output_path and os.path.exists(input_path):
@@ -273,6 +288,7 @@ async def compress_or_rescale_video(
     except Exception as e:
         print(f"[!] Fallback compression error: {e}")
 
+    # Guaranteed non-blocking escape hatch: return original intact video immediately
     return input_path
 
 

@@ -590,9 +590,9 @@ async def run_batch_harvest_pipeline(
                 effective_res = current_settings.get("resolution", res_pref)
                 if delivery_fmt != "audio" and effective_res.isdigit() and int(effective_res) < 1080 and original_path and original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm")):
                     f_size_mb_pre = (os.path.getsize(original_path) / (1024 * 1024)) if os.path.exists(original_path) else 0
-                    if f_size_mb_pre <= 250:
+                    if f_size_mb_pre <= 150:
                         scaled_path = f"{original_path}_scaled.mp4"
-                        _est_rescale = min(45, max(15, int(f_size_mb_pre * 0.20)))
+                        _est_rescale = min(20, max(8, int(f_size_mb_pre * 0.12)))
                         async with live_pulse(
                             s_msg,
                             f"🎬 {prefix_label}Optimizing Video Quality",
@@ -600,7 +600,7 @@ async def run_batch_harvest_pipeline(
                             start_pct=45.0, end_pct=75.0,
                             estimated_seconds=_est_rescale,
                         ):
-                            original_path = await compress_or_rescale_video(original_path, scaled_path, int(effective_res))
+                            original_path = await compress_or_rescale_video(original_path, scaled_path, int(effective_res), timeout=_est_rescale)
                         dl_res["file_path"] = original_path
 
                 # Step C: 100% Watermark Removal & Dual-Layer Branding Engine

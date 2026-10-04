@@ -179,7 +179,7 @@ async def submit_payment_handler(client: Client, message: Message):
         "Our admin is reviewing your transaction. Your account will be upgraded within a few minutes!"
     )
 
-    # Dispatch notification to all Admins with instant One-Click Approval buttons
+    # Dispatch notification to all genuine Admin Users with instant One-Click Approval buttons
     admin_alert = (
         "🚨 **NEW PAYMENT SUBMISSION**\n\n"
         f"• **User:** {message.from_user.mention} (`{user_id}`)\n"
@@ -197,7 +197,32 @@ async def submit_payment_handler(client: Client, message: Message):
         ]
     )
 
+    # Strictly collect real admin user accounts (positive Telegram User IDs only)
+    fsub_ch = str(await db.get_force_sub_channel() or "").strip()
+    fsub_raw = fsub_ch.replace("-100", "").lstrip("-")
+
+    target_admin_uids = set()
     for admin_id in ADMIN_IDS:
+        # ABSOLUTE SAFETY LOCK: Never send user payment details or approval buttons to channels or groups!
+        # Telegram Channel/Group IDs are negative numbers (e.g. -100..., -...).
+        if admin_id <= 0:
+            continue
+        if fsub_raw and str(admin_id).replace("-100", "").lstrip("-") == fsub_raw:
+            continue
+        target_admin_uids.add(admin_id)
+
+    # Also include dynamic co-admins from DB if they are genuine user IDs
+    try:
+        dyn_admins = await db.get_all_admins()
+        for d in dyn_admins:
+            daid = d.get("admin_id")
+            if daid and daid > 0:
+                if not (fsub_raw and str(daid).replace("-100", "").lstrip("-") == fsub_raw):
+                    target_admin_uids.add(daid)
+    except Exception:
+        pass
+
+    for admin_id in target_admin_uids:
         try:
             await client.send_message(chat_id=admin_id, text=admin_alert, reply_markup=admin_markup)
         except Exception as e:

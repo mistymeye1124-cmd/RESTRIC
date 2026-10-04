@@ -27,7 +27,7 @@ API_HASH = os.getenv("TELEGRAM_API_HASH", "").strip()
 # Get from @BotFather
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
-# Admin User IDs and Channel/Group IDs who receive payment notifications, stats, and control panel
+# Admin User IDs who receive payment notifications, stats, and control panel (strictly user IDs > 0)
 def _parse_admin_ids(raw_val: str) -> list[int]:
     parsed = []
     for x in raw_val.split(","):
@@ -36,7 +36,9 @@ def _parse_admin_ids(raw_val: str) -> list[int]:
             continue
         try:
             val = int(cleaned)
-            if val != 0:
+            # Only genuine Telegram User IDs (positive integers > 0) can be bot administrators.
+            # Negative IDs represent channels or supergroups (-100...) and must NEVER be treated as admin users.
+            if val > 0:
                 parsed.append(val)
         except ValueError:
             pass

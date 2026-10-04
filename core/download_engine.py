@@ -2,15 +2,20 @@
 """
 High-Speed Telegram Restricted Media & Content Download Engine.
 Extracts videos, documents, photos, audio, voice notes, and text posts from noforwards/restricted channels.
-Anti-ban Protections:
-- Humanized Action Simulation (ChatAction.RECORD_VIDEO / TYPING)
+
+Anti-ban & Performance Protections:
+- Humanized Action Simulation & Rate Pacing
 - Hot-Swap Session Failover (Switches to alternate pool client on FloodWait/PeerFlood)
 - Per-Session Rate-Limiter with Natural Jitter
 - FLOOD_WAIT Auto-Sleep with Randomized Extra Delay
 - Guaranteed Clean Extension Determination (.mp4 / .mkv / .pdf / etc.)
+- Turbo Parallel Multi-Stream Engine (5MB+ media)
+- Active Anti-Stall Guardian Watchdog
+- High-Layer (Layer 229) Telethon Fallback with 1MB buffered streaming
 """
 
 import os
+import re
 import time
 import asyncio
 import logging
@@ -18,11 +23,10 @@ import random
 import struct
 import base64
 import ipaddress
-from pathlib import Path
 from typing import Optional, Dict, Any
+
 from pyrogram import Client
 from pyrogram.types import Message
-from pyrogram.enums import ChatAction
 from pyrogram.errors import (
     ChannelInvalid,
     PeerIdInvalid,
@@ -40,18 +44,44 @@ from pyrogram.errors import (
     SlowmodeWait,
     RPCError,
 )
-from config import TEMP_DOWNLOAD_DIR
-from core.progress import ProgressTracker, get_progress_markup
-from core.rate_limiter import rate_registry
-from core.client_manager import get_next_available_pool_client, handle_dead_session, mark_account_flood_wait
 import pyrogram.utils
 from pyrogram.storage.sqlite_storage import SQLiteStorage
+from pyrogram.parser import Parser
 
-# Ensure 64-bit Channel ID support
+from telethon import TelegramClient
+from telethon.sessions import MemorySession
+from telethon.crypto import AuthKey as TeleAuthKey
+from telethon.extensions import markdown as tele_md
+from telethon.tl.types import (
+    DocumentAttributeFilename,
+    DocumentAttributeVideo,
+    DocumentAttributeAudio,
+)
+
+from config import TEMP_DOWNLOAD_DIR, API_ID, API_HASH
+from database import db
+from handlers.admin import is_admin
+from core.progress import ProgressTracker, get_progress_markup
+from core.rate_limiter import rate_registry
+from core.client_manager import (
+    account_pool,
+    admin_pool_clients,
+    account_metadata,
+    get_next_available_pool_client,
+    get_personal_user_client,
+    handle_dead_session,
+    mark_account_flood_wait,
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 64-bit Channel ID compatibility layer for Pyrogram & SQLite storage
+# ─────────────────────────────────────────────────────────────────────────────
 pyrogram.utils.MIN_CHANNEL_ID = -1009999999999999
 pyrogram.utils.MAX_CHANNEL_ID = -1000000000000
 
 _de_orig_get_peer_type = getattr(pyrogram.utils, "_orig_get_peer_type", pyrogram.utils.get_peer_type)
+
+
 def _de_safe_get_peer_type(peer_id: int) -> str:
     if isinstance(peer_id, int):
         if peer_id <= -1000000000000:
@@ -62,14 +92,19 @@ def _de_safe_get_peer_type(peer_id: int) -> str:
             return "user"
     return _de_orig_get_peer_type(peer_id)
 
+
 pyrogram.utils.get_peer_type = _de_safe_get_peer_type
+
 
 def _de_safe_get_channel_id(peer_id: int) -> int:
     return -1000000000000 - peer_id
 
+
 pyrogram.utils.get_channel_id = _de_safe_get_channel_id
 
 _de_orig_get_peer_by_id = getattr(SQLiteStorage, "_orig_get_peer_by_id", SQLiteStorage.get_peer_by_id)
+
+
 async def _de_safe_get_peer_by_id(self, peer_id: int):
     try:
         return await _de_orig_get_peer_by_id(self, peer_id)
@@ -80,6 +115,7 @@ async def _de_safe_get_peer_by_id(self, peer_id: int):
             return await _de_orig_get_peer_by_id(self, alt_id)
         except Exception:
             raise KeyError(peer_id)
+
 
 SQLiteStorage._orig_get_peer_by_id = _de_orig_get_peer_by_id
 SQLiteStorage.get_peer_by_id = _de_safe_get_peer_by_id
@@ -110,7 +146,6 @@ def _pyro_session_to_telethon(pyro_b64: str) -> str:
     """
     raw = base64.urlsafe_b64decode(pyro_b64 + "=" * (-len(pyro_b64) % 4))
     dc_id = raw[0]
-    # Pyrogram 2.x: bytes 1-4 = api_id, byte 5 = test_mode, bytes 6..261 = auth_key
     auth_key = raw[6:262]  # 256-byte auth key
     ip_packed = ipaddress.ip_address(_TELE_DC_IPS[dc_id]).packed  # 4 bytes for IPv4
     packed = struct.pack(f">B{len(ip_packed)}sH256s", dc_id, ip_packed, 443, auth_key)
@@ -120,7 +155,7 @@ def _pyro_session_to_telethon(pyro_b64: str) -> str:
 def extract_formatted_text(msg) -> str:
     """
     Extracts text or caption from a Pyrogram or Telethon Message object, preserving all
-    hyperlinks (e.g. [Click](https://...)), bold, italic, code, and formatting as standard Markdown.
+    hyperlinks, bold, italic, code, and formatting as standard Markdown.
     If no entities are present, returns clean raw text.
     """
     if not msg:
@@ -133,7 +168,6 @@ def extract_formatted_text(msg) -> str:
             return ""
         if msg.entities:
             try:
-                from telethon.extensions import markdown as tele_md
                 formatted = tele_md.unparse(raw_text, msg.entities)
                 if formatted:
                     return formatted
@@ -149,7 +183,6 @@ def extract_formatted_text(msg) -> str:
     entities = getattr(msg, "caption_entities", None) or getattr(msg, "entities", None)
     if entities:
         try:
-            from pyrogram.parser import Parser
             formatted = Parser.unparse(text, entities, is_html=False)
             if formatted:
                 return formatted
@@ -159,12 +192,61 @@ def extract_formatted_text(msg) -> str:
     return text
 
 
+def _safe_remove(*file_paths: Optional[str]) -> None:
+    """Silently cleans up temporary files if they exist."""
+    for fp in file_paths:
+        if fp and os.path.exists(fp):
+            try:
+                os.remove(fp)
+            except Exception:
+                pass
+
+
+async def _get_pyrogram_session_str(client: Optional[Client], user_id: Optional[int]) -> Optional[str]:
+    """Helper to extract or export an in-memory Pyrogram session string for Telethon fallback."""
+    sess_str = None
+    if user_id:
+        session_row = await db.get_session(user_id)
+        if session_row:
+            sess_str = session_row if isinstance(session_row, str) else getattr(session_row, "session_string", None)
+    if not sess_str and client and getattr(client, "is_connected", False):
+        try:
+            sess_str = await client.export_session_string()
+        except Exception:
+            pass
+    return sess_str
+
+
+async def _check_vip_channel_access(user_id: Optional[int], chat_id: Any, title: str = "", username: str = "") -> None:
+    """Validates that a user has permission to download from a VIP protected channel."""
+    if not user_id or is_admin(user_id):
+        return
+    if (
+        await db.is_channel_protected(chat_id, title=title)
+        or (username and await db.is_channel_protected(username))
+        or (title and await db.is_channel_protected(None, title=title))
+    ):
+        logger.warning("[Security] User %s blocked from protected VIP channel: ID=%s Title='%s'", user_id, chat_id, title)
+        raise PermissionError("PROTECTED_VIP_CHANNEL")
+
+
+def _record_account_download(client: Optional[Client]) -> None:
+    """Increments the download counter for worker pool accounts."""
+    cname = getattr(client, "name", "")
+    if "account_" in cname:
+        try:
+            aid = int(cname.split("_")[1])
+            asyncio.create_task(db.increment_bot_account_downloads(aid))
+        except Exception:
+            pass
+
+
 async def _telethon_fallback_download(
     pyro_session_str: str,
-    chat_id: int,
+    chat_id: Any,
     message_id: int,
     out_path: str,
-    status_message,
+    status_message: Message,
     job_id: str,
     active_jobs: dict,
     progress_callback=None,
@@ -172,26 +254,14 @@ async def _telethon_fallback_download(
 ) -> Optional[Dict[str, Any]]:
     """
     Uses Telethon (MTProto Layer 229) to download media with turbo-speed 1MB buffered streaming.
-    Works for edited posts, MessageMediaUnsupported, Layer 170+ constructors, and all new formats.
-    Returns rich dictionary with local file path, caption, filename, and video dimensions.
+    Bypasses Pyrogram MessageMediaUnsupported on newer / edited Telegram posts.
     """
     try:
-        from telethon import TelegramClient
-        from telethon.sessions import MemorySession
-        from telethon.crypto import AuthKey as TeleAuthKey
-        from config import API_ID, API_HASH
-        import re
-    except ImportError:
-        logger.error("[TelethonFallback] Telethon is not installed — cannot handle MessageMediaUnsupported")
-        return None
+        raw_b64 = pyro_session_str.strip()
+        raw = base64.urlsafe_b64decode(raw_b64 + "=" * (-len(raw_b64) % 4))
+        dc_id = raw[0]
+        auth_key_bytes = raw[6:262]
 
-    try:
-        # Decode Pyrogram 2.x session: dc_id[1] | api_id[4] | test_mode[1] | auth_key[256] | ...
-        raw_sess = base64.urlsafe_b64decode(pyro_session_str + "=" * (-len(pyro_session_str) % 4))
-        dc_id = raw_sess[0]
-        auth_key_bytes = raw_sess[6:262]  # 256-byte auth key
-
-        # Build a MemorySession with the extracted credentials
         session = MemorySession()
         session.set_dc(dc_id, _TELE_DC_IPS.get(dc_id, "91.108.56.130"), 443)
         session.auth_key = TeleAuthKey(auth_key_bytes)
@@ -209,26 +279,20 @@ async def _telethon_fallback_download(
             return None
 
         # VIP Protection Gate inside Telethon Engine
-        if user_id:
-            from database import db as _db
-            from handlers.admin import is_admin as _is_admin
-            if not _is_admin(user_id):
-                ch_title = ""
-                ch_uname = ""
-                try:
-                    entity = await client.get_entity(chat_id)
-                    ch_title = getattr(entity, "title", "") or ""
-                    ch_uname = getattr(entity, "username", "") or ""
-                except Exception:
-                    pass
-                if (
-                    await _db.is_channel_protected(chat_id, title=ch_title)
-                    or (ch_uname and await _db.is_channel_protected(ch_uname))
-                    or (ch_title and await _db.is_channel_protected(None, title=ch_title))
-                ):
-                    logger.warning("[Security] User %s blocked in Telethon fallback: chat=%s title='%s'", user_id, chat_id, ch_title)
-                    await client.disconnect()
-                    raise PermissionError("PROTECTED_VIP_CHANNEL")
+        if user_id and not is_admin(user_id):
+            ch_title = ""
+            ch_uname = ""
+            try:
+                entity = await client.get_entity(chat_id)
+                ch_title = getattr(entity, "title", "") or ""
+                ch_uname = getattr(entity, "username", "") or ""
+            except Exception:
+                pass
+            try:
+                await _check_vip_channel_access(user_id, chat_id, title=ch_title, username=ch_uname)
+            except PermissionError:
+                await client.disconnect()
+                raise
 
         msg = await client.get_messages(chat_id, ids=message_id)
         if msg is None or msg.media is None:
@@ -247,11 +311,6 @@ async def _telethon_fallback_download(
 
         if hasattr(msg, "document") and msg.document:
             try:
-                from telethon.tl.types import (
-                    DocumentAttributeFilename,
-                    DocumentAttributeVideo,
-                    DocumentAttributeAudio,
-                )
                 for attr in getattr(msg.document, "attributes", []):
                     if isinstance(attr, DocumentAttributeFilename) and attr.file_name:
                         file_name = attr.file_name
@@ -272,7 +331,7 @@ async def _telethon_fallback_download(
         if not file_name:
             if caption:
                 first_line = caption.strip().split("\n")[0][:40].strip()
-                clean_slug = re.sub(r'[\/:*?"<>|]', '_', first_line).strip(". ")
+                clean_slug = re.sub(r'[\/:*?"<>|]', "_", first_line).strip(". ")
                 if clean_slug:
                     file_name = f"{clean_slug}{ext}"
             if not file_name:
@@ -293,8 +352,12 @@ async def _telethon_fallback_download(
                 )
                 _last_cb_time[0] = now
 
-        logger.info("[TelethonFallback] Turbo-downloading msg %d via Telethon (DC%d, %.1f MB)",
-                    message_id, dc_id, total_size / (1024 * 1024) if total_size else 0)
+        logger.info(
+            "[TelethonFallback] Turbo-downloading msg %d via Telethon (DC%d, %.1f MB)",
+            message_id,
+            dc_id,
+            total_size / (1024 * 1024) if total_size else 0,
+        )
         os.makedirs(os.path.dirname(out_path) if os.path.dirname(out_path) else ".", exist_ok=True)
 
         # High-Speed 1MB chunked streaming (3.5x - 5x faster than default sequential chunks)
@@ -338,9 +401,12 @@ async def _telethon_fallback_download(
         logger.error("[TelethonFallback] File missing or empty after download")
         return None
 
+    except PermissionError:
+        raise
     except Exception as e:
         logger.error("[TelethonFallback] Exception: %s", e)
         return None
+
 
 # Active job tracker for handling cancellation and alert popups
 active_jobs: Dict[str, Dict[str, Any]] = {}
@@ -366,8 +432,6 @@ async def _safe_get_messages(
     """
     Wraps client.get_messages with FLOOD_WAIT auto-sleep,
     PEER_FLOOD quarantine, and session-error detection.
-    No artificial rate-limiter wait — get_messages is a read-only call
-    that rarely triggers FLOOD_WAIT and does NOT need pacing delays.
     """
     limiter = rate_registry.get_sync(session_key)
 
@@ -375,9 +439,9 @@ async def _safe_get_messages(
         if limiter.is_quarantined:
             wait_sec = limiter.quarantine_remaining
             logger.warning("[Download] Session %s quarantined — waiting %.0fs", session_key, wait_sec)
-            await asyncio.sleep(min(wait_sec, 10))  # cap at 10s so we retry fast
+            await asyncio.sleep(min(wait_sec, 10))
         elif attempt > 1:
-            await asyncio.sleep(0.15)  # only pause on retry, attempt 1 executes immediately
+            await asyncio.sleep(0.15)
 
         try:
             msg = await asyncio.wait_for(
@@ -388,7 +452,12 @@ async def _safe_get_messages(
             return msg
 
         except (asyncio.TimeoutError, TimeoutError):
-            logger.warning("[Download] get_messages timed out on %s (attempt %d/%d) — MTProto Layer 170+ detected", session_key, attempt, max_retries)
+            logger.warning(
+                "[Download] get_messages timed out on %s (attempt %d/%d) — MTProto Layer 170+ detected",
+                session_key,
+                attempt,
+                max_retries,
+            )
             return None
 
         except FloodWait as e:
@@ -436,7 +505,6 @@ async def _safe_get_messages(
         except (ChannelInvalid, PeerIdInvalid, KeyError, ValueError) as e:
             logger.warning("[Download] Peer %s not resolved yet (%s). Direct resolving...", chat_id, e)
             try:
-                # 1. Fast direct resolution first (without GetFullChannel crash)
                 try:
                     await asyncio.wait_for(client.resolve_peer(chat_id), timeout=2.0)
                 except Exception:
@@ -452,7 +520,6 @@ async def _safe_get_messages(
                 pass
 
             try:
-                # 2. Comprehensive human-paced dialog sync fallback (learns MTProto access_hash)
                 target_raw = None
                 try:
                     target_raw = int(str(chat_id).replace("-100", "").lstrip("-"))
@@ -501,7 +568,7 @@ async def _safe_get_messages(
     return None
 
 
-# Track channels that use MTProto Layer 170+ constructors (e.g. 0x7600b9d3)
+# Track channels that use MTProto Layer 170+ constructors
 _known_high_layer_peers: set = {"-1003474693027", "3474693027"}
 
 
@@ -528,7 +595,6 @@ async def download_restricted_media(
     current_client = client
 
     # Check if download client is Telegram Premium
-    from core.client_manager import account_metadata
     is_tg_prem = False
     cname = getattr(current_client, "name", "")
     if cname.startswith("account_"):
@@ -548,16 +614,15 @@ async def download_restricted_media(
     active_jobs[job_id] = {
         "tracker": tracker,
         "cancelled": False,
-        "current_client": current_client
+        "current_client": current_client,
     }
 
-    from database import db as _vip_db
-    from handlers.admin import is_admin as _vip_is_admin
-    if user_id and not _vip_is_admin(user_id):
-        if await _vip_db.is_channel_protected(chat_id):
-            logger.warning("[Security] User %s blocked from protected VIP channel ID %s", user_id, chat_id)
-            active_jobs.pop(job_id, None)
-            raise PermissionError("PROTECTED_VIP_CHANNEL")
+    # VIP Channel Protection Gate
+    try:
+        await _check_vip_channel_access(user_id, chat_id)
+    except PermissionError:
+        active_jobs.pop(job_id, None)
+        raise
 
     _last_edit_task: Optional[asyncio.Task] = None
 
@@ -620,7 +685,6 @@ async def download_restricted_media(
             source_msg = await _safe_get_messages(current_client, chat_id, message_id, session_key, max_retries=1)
 
             if source_msg is None and user_id:
-                from core.client_manager import get_personal_user_client
                 personal_c = await get_personal_user_client(user_id)
                 if personal_c and personal_c != current_client:
                     current_client = personal_c
@@ -629,7 +693,6 @@ async def download_restricted_media(
 
             # Candidate pool workers only make sense for public chats, NOT for private channels
             if source_msg is None and not is_private_chat:
-                from core.client_manager import account_pool, admin_pool_clients
                 candidate_clients = [c for c in list(account_pool.values()) if c != current_client and getattr(c, "is_connected", False)]
                 for ac in admin_pool_clients:
                     if ac != current_client and getattr(ac, "is_connected", False) and ac not in candidate_clients:
@@ -648,33 +711,20 @@ async def download_restricted_media(
                             break
 
         # Deep MTProto Chat & Title VIP Protection Check
-        if source_msg and user_id and not _vip_is_admin(user_id):
+        if source_msg and user_id and not is_admin(user_id):
             s_chat = getattr(source_msg, "chat", None)
             s_cid = getattr(s_chat, "id", None) or chat_id
             s_title = getattr(s_chat, "title", "") or ""
             s_uname = getattr(s_chat, "username", "") or ""
-            if (
-                await _vip_db.is_channel_protected(s_cid, title=s_title)
-                or (s_uname and await _vip_db.is_channel_protected(s_uname))
-                or (s_title and await _vip_db.is_channel_protected(None, title=s_title))
-            ):
-                logger.warning("[Security] User %s blocked from protected VIP channel: ID=%s Title='%s'", user_id, s_cid, s_title)
+            try:
+                await _check_vip_channel_access(user_id, s_cid, title=s_title, username=s_uname)
+            except PermissionError:
                 active_jobs.pop(job_id, None)
-                raise PermissionError("PROTECTED_VIP_CHANNEL")
+                raise
 
         if source_msg is None:
             # Pyrogram failed to fetch message (e.g. unknown Layer 170+ constructor). Fallback to Telethon High-Layer Engine (Layer 229)
-            _pyro_sess_str = None
-            if user_id:
-                from database import db as _db
-                _session_row = await _db.get_session(user_id)
-                if _session_row:
-                    _pyro_sess_str = _session_row if isinstance(_session_row, str) else getattr(_session_row, "session_string", None)
-            if not _pyro_sess_str and current_client and getattr(current_client, "is_connected", False):
-                try:
-                    _pyro_sess_str = await current_client.export_session_string()
-                except Exception:
-                    pass
+            _pyro_sess_str = await _get_pyrogram_session_str(current_client, user_id)
 
             if _pyro_sess_str:
                 try:
@@ -742,24 +792,8 @@ async def download_restricted_media(
         )
 
         # ── Telethon Fallback for Layer 170+ / Edited Media ────────────────────
-        # Pyrogram (Layer 158) cannot parse media created with newer Telegram layers
-        # (e.g. edited video posts, MessageMediaUnsupported, Layer 170+ constructors).
-        # Whenever Pyrogram reports has_file_media == False, we automatically route
-        # through the Telethon High-Layer Engine (Layer 229) to check for and download
-        # any actual video/document before treating it as text or empty.
         if not has_file_media:
-            _pyro_sess_str = None
-            if user_id:
-                from database import db as _db
-                _session_row = await _db.get_session(user_id)
-                if _session_row:
-                    _pyro_sess_str = _session_row if isinstance(_session_row, str) else getattr(_session_row, "session_string", None)
-            
-            if not _pyro_sess_str and current_client and getattr(current_client, "is_connected", False):
-                try:
-                    _pyro_sess_str = await current_client.export_session_string()
-                except Exception:
-                    pass
+            _pyro_sess_str = await _get_pyrogram_session_str(current_client, user_id)
 
             if _pyro_sess_str:
                 try:
@@ -799,7 +833,6 @@ async def download_restricted_media(
                     raise
                 except Exception as _tele_err:
                     logger.debug("[Download] Telethon fallback check: %s", _tele_err)
-
 
         # Case 1: Text-only / WebPage Link / Google Docs / Poll / Contact / Location / Non-file message
         if not has_file_media:
@@ -844,20 +877,18 @@ async def download_restricted_media(
                     "source_msg": source_msg,
                 }
             elif source_msg.location or source_msg.venue:
-                loc = source_msg.location
                 venue = getattr(source_msg, "venue", None)
                 v_title = getattr(venue, "title", "Pinned Location") if venue else "Pinned Location"
                 v_addr = f"\n• **Address:** {venue.address}" if venue and getattr(venue, "address", None) else ""
-                loc_text = (
+                loc = source_msg.location
+                l_text = (
                     f"📍 **{v_title}**{v_addr}\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"• **Latitude:** `{loc.latitude}`\n"
-                    f"• **Longitude:** `{loc.longitude}`\n"
-                    f"• **Google Maps:** https://maps.google.com/?q={loc.latitude},{loc.longitude}"
+                    f"• **Coordinates:** `{loc.latitude}, {loc.longitude}`\n"
+                    f"• **Map:** https://maps.google.com/?q={loc.latitude},{loc.longitude}"
                 )
                 return {
                     "is_text_only": True,
-                    "text": loc_text,
+                    "text": l_text,
                     "file_path": None,
                     "caption": "",
                     "media_type": "text",
@@ -950,7 +981,7 @@ async def download_restricted_media(
                 ext = doc_ext
             else:
                 ext = ".mp4" if "video" in mime else ".bin"
-                
+
             if not original_file_name:
                 original_file_name = f"document_{message_id}{ext}"
         else:
@@ -985,17 +1016,7 @@ async def download_restricted_media(
                 await limiter.on_download_start()
 
                 # Clean leftover partial temp file from aborted attempts
-                temp_file = target_file_path + ".temp"
-                if os.path.exists(temp_file):
-                    try:
-                        os.remove(temp_file)
-                    except Exception:
-                        pass
-                if os.path.exists(target_file_path):
-                    try:
-                        os.remove(target_file_path)
-                    except Exception:
-                        pass
+                _safe_remove(target_file_path + ".temp", target_file_path)
 
                 # Engine 1: Turbo Parallel Multi-Stream for large files (>= 5MB)
                 if dl_attempt == 1 and media_file_size >= 5 * 1024 * 1024 and getattr(media_target, "file_id", None):
@@ -1012,22 +1033,11 @@ async def download_restricted_media(
                         )
                         if downloaded_file and os.path.exists(str(downloaded_file)) and os.path.getsize(str(downloaded_file)) > 0:
                             limiter.on_success()
-                            try:
-                                cname = getattr(current_client, "name", "")
-                                if "account_" in cname:
-                                    from database import db
-                                    aid = int(cname.split("_")[1])
-                                    asyncio.create_task(db.increment_bot_account_downloads(aid))
-                            except Exception:
-                                pass
+                            _record_account_download(current_client)
                             break
                     except Exception as turbo_err:
                         logger.warning("[DownloadEngine] Turbo parallel attempt skipped (%s), routing to Anti-Stall Pyrogram Stream...", turbo_err)
-                        if os.path.exists(target_file_path):
-                            try:
-                                os.remove(target_file_path)
-                            except Exception:
-                                pass
+                        _safe_remove(target_file_path)
 
                 # Engine 2: Pyrogram Stream with Active Anti-Stall Heartbeat Watchdog
                 last_progress_time = [time.time()]
@@ -1049,7 +1059,9 @@ async def download_restricted_media(
                         if elapsed >= 20.0:
                             logger.warning(
                                 "[Anti-Stall Guardian] Zero bytes received for %.1fs (stuck at %d/%d). Terminating frozen socket...",
-                                elapsed, last_rx_bytes[0], media_file_size
+                                elapsed,
+                                last_rx_bytes[0],
+                                media_file_size,
                             )
                             try:
                                 await current_client.stop_transmission()
@@ -1073,27 +1085,20 @@ async def download_restricted_media(
 
                 if downloaded_file and os.path.exists(str(downloaded_file)) and os.path.getsize(str(downloaded_file)) > 0:
                     limiter.on_success()
-                    try:
-                        cname = getattr(current_client, "name", "")
-                        if "account_" in cname:
-                            from database import db
-                            aid = int(cname.split("_")[1])
-                            asyncio.create_task(db.increment_bot_account_downloads(aid))
-                    except Exception:
-                        pass
+                    _record_account_download(current_client)
                     break
 
             except FloodWait as e:
                 wait_sec = e.value + random_extra(5, 10)
                 limiter.on_flood_wait(int(wait_sec))
-                try:
-                    cname = getattr(current_client, "name", "")
-                    if "account_" in cname:
+                cname = getattr(current_client, "name", "")
+                if "account_" in cname:
+                    try:
                         aid = int(cname.split("_")[1])
                         mark_account_flood_wait(aid, int(wait_sec))
-                except Exception:
-                    pass
-                
+                    except Exception:
+                        pass
+
                 alt_client = get_next_available_pool_client(exclude_client=current_client)
                 if alt_client:
                     logger.info("[Download] FloodWait %ds encountered — hot-swapping to %s", wait_sec, alt_client.name)
@@ -1160,14 +1165,9 @@ async def download_restricted_media(
                 if active_jobs.get(job_id, {}).get("cancelled"):
                     break
                 logger.error("[Download] Download attempt %d failed on client %s: %s", dl_attempt, getattr(current_client, "name", "client"), e)
-                
+
                 # Auto clean partial files
-                for tf in (target_file_path, target_file_path + ".temp"):
-                    if os.path.exists(tf):
-                        try:
-                            os.remove(tf)
-                        except Exception:
-                            pass
+                _safe_remove(target_file_path, target_file_path + ".temp")
 
                 # Auto hot-swap to another healthy pool account
                 alt_client = get_next_available_pool_client(exclude_client=current_client)
@@ -1189,17 +1189,7 @@ async def download_restricted_media(
 
         # Engine 3: Ultimate Failover via Telethon Layer 229 Engine if Pyrogram struggled
         if (not downloaded_file or not os.path.exists(str(downloaded_file)) or os.path.getsize(str(downloaded_file)) == 0) and not active_jobs.get(job_id, {}).get("cancelled"):
-            _pyro_sess_str = None
-            if user_id:
-                from database import db as _db
-                _session_row = await _db.get_session(user_id)
-                if _session_row:
-                    _pyro_sess_str = _session_row if isinstance(_session_row, str) else getattr(_session_row, "session_string", None)
-            if not _pyro_sess_str and current_client and getattr(current_client, "is_connected", False):
-                try:
-                    _pyro_sess_str = await current_client.export_session_string()
-                except Exception:
-                    pass
+            _pyro_sess_str = await _get_pyrogram_session_str(current_client, user_id)
 
             if _pyro_sess_str:
                 logger.info("[DownloadEngine] Activating Telethon Layer 229 Fallback after Pyrogram socket timeout...")
@@ -1223,10 +1213,7 @@ async def download_restricted_media(
 
         if active_jobs.get(job_id, {}).get("cancelled"):
             if downloaded_file and os.path.exists(str(downloaded_file)):
-                try:
-                    os.remove(str(downloaded_file))
-                except Exception:
-                    pass
+                _safe_remove(str(downloaded_file))
             await status_message.edit_text("❌ Download cancelled.")
             active_jobs.pop(job_id, None)
             return None

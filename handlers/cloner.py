@@ -320,6 +320,19 @@ async def _run_channel_clone_worker(
             # 2.5-second anti-ban polite cool-down
             await asyncio.sleep(2.5)
 
+        except PermissionError as pe:
+            if "PROTECTED_VIP_CHANNEL" in str(pe):
+                try:
+                    await status_msg.edit_text(
+                        "🔒 **ACCESS DENIED — VIP CHANNEL PROTECTED** 🔒\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "⛔ **This VIP channel is locked by the owner.**\n\n"
+                        "Cloning from this channel has been aborted immediately!"
+                    )
+                except Exception:
+                    pass
+                break
+            skipped += 1
         except FloodWait as fw:
             await asyncio.sleep(fw.value + 2)
         except Exception as e:

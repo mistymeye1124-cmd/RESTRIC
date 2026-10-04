@@ -168,6 +168,7 @@ async def _telethon_fallback_download(
     job_id: str,
     active_jobs: dict,
     progress_callback=None,
+    user_id: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Uses Telethon (MTProto Layer 229) to download media with turbo-speed 1MB buffered streaming.
@@ -206,6 +207,28 @@ async def _telethon_fallback_download(
             logger.error("[TelethonFallback] Session not authorized after conversion")
             await client.disconnect()
             return None
+
+        # VIP Protection Gate inside Telethon Engine
+        if user_id:
+            from database import db as _db
+            from utils import is_admin as _is_admin
+            if not _is_admin(user_id):
+                ch_title = ""
+                ch_uname = ""
+                try:
+                    entity = await client.get_entity(chat_id)
+                    ch_title = getattr(entity, "title", "") or ""
+                    ch_uname = getattr(entity, "username", "") or ""
+                except Exception:
+                    pass
+                if (
+                    await _db.is_channel_protected(chat_id, title=ch_title)
+                    or (ch_uname and await _db.is_channel_protected(ch_uname))
+                    or (ch_title and await _db.is_channel_protected(None, title=ch_title))
+                ):
+                    logger.warning("[Security] User %s blocked in Telethon fallback: chat=%s title='%s'", user_id, chat_id, ch_title)
+                    await client.disconnect()
+                    raise PermissionError("PROTECTED_VIP_CHANNEL")
 
         msg = await client.get_messages(chat_id, ids=message_id)
         if msg is None or msg.media is None:
@@ -528,6 +551,14 @@ async def download_restricted_media(
         "current_client": current_client
     }
 
+    from database import db as _vip_db
+    from utils import is_admin as _vip_is_admin
+    if user_id and not _vip_is_admin(user_id):
+        if await _vip_db.is_channel_protected(chat_id):
+            logger.warning("[Security] User %s blocked from protected VIP channel ID %s", user_id, chat_id)
+            active_jobs.pop(job_id, None)
+            raise PermissionError("PROTECTED_VIP_CHANNEL")
+
     _last_edit_task: Optional[asyncio.Task] = None
 
     async def _progress_callback(current: int, total: int):
@@ -616,6 +647,21 @@ async def download_restricted_media(
                             active_jobs[job_id]["current_client"] = current_client
                             break
 
+        # Deep MTProto Chat & Title VIP Protection Check
+        if source_msg and user_id and not _vip_is_admin(user_id):
+            s_chat = getattr(source_msg, "chat", None)
+            s_cid = getattr(s_chat, "id", None) or chat_id
+            s_title = getattr(s_chat, "title", "") or ""
+            s_uname = getattr(s_chat, "username", "") or ""
+            if (
+                await _vip_db.is_channel_protected(s_cid, title=s_title)
+                or (s_uname and await _vip_db.is_channel_protected(s_uname))
+                or (s_title and await _vip_db.is_channel_protected(None, title=s_title))
+            ):
+                logger.warning("[Security] User %s blocked from protected VIP channel: ID=%s Title='%s'", user_id, s_cid, s_title)
+                active_jobs.pop(job_id, None)
+                raise PermissionError("PROTECTED_VIP_CHANNEL")
+
         if source_msg is None:
             # Pyrogram failed to fetch message (e.g. unknown Layer 170+ constructor). Fallback to Telethon High-Layer Engine (Layer 229)
             _pyro_sess_str = None
@@ -650,6 +696,7 @@ async def download_restricted_media(
                         job_id=job_id,
                         active_jobs=active_jobs,
                         progress_callback=_progress_callback,
+                        user_id=user_id,
                     )
                     if _tele_res and _tele_res.get("file_path") and os.path.exists(_tele_res["file_path"]):
                         _known_high_layer_peers.add(str(chat_id))
@@ -666,6 +713,8 @@ async def download_restricted_media(
                             "width": _tele_res.get("width"),
                             "height": _tele_res.get("height"),
                         }
+                except PermissionError:
+                    raise
                 except Exception as _tele_err:
                     logger.debug("[Download] Telethon fallback for None msg: %s", _tele_err)
 
@@ -729,6 +778,7 @@ async def download_restricted_media(
                         job_id=job_id,
                         active_jobs=active_jobs,
                         progress_callback=_progress_callback,
+                        user_id=user_id,
                     )
                     if _tele_res and _tele_res.get("file_path") and os.path.exists(_tele_res["file_path"]):
                         _known_high_layer_peers.add(str(chat_id))
@@ -745,6 +795,8 @@ async def download_restricted_media(
                             "width": _tele_res.get("width"),
                             "height": _tele_res.get("height"),
                         }
+                except PermissionError:
+                    raise
                 except Exception as _tele_err:
                     logger.debug("[Download] Telethon fallback check: %s", _tele_err)
 

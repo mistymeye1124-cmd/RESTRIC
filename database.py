@@ -44,6 +44,26 @@ def _cache_bust(user_id: int):
 
 # In-Memory Cache for Protected VIP Channels — 0.0001ms check on all link downloads
 _PROTECTED_CHANNELS_CACHE: set = set()
+_PROTECTED_CHANNEL_TITLES: set = set()
+
+
+def _normalize_title_text(t: str) -> str:
+    """Normalizes channel title string, stripping emojis, small caps, and unicode bold/italics."""
+    if not t:
+        return ""
+    import unicodedata, re
+    norm = unicodedata.normalize('NFKD', str(t))
+    small_caps_map = {
+        'ᴀ': 'a', 'ʙ': 'b', 'ᴄ': 'c', 'ᴅ': 'd', 'ᴇ': 'e', 'ꜰ': 'f', 'ɢ': 'g', 'ʜ': 'h',
+        'ɪ': 'i', 'ᴊ': 'j', 'ᴋ': 'k', 'ʟ': 'l', 'ᴍ': 'm', 'ɴ': 'n', 'ᴏ': 'o', 'ᴘ': 'p',
+        'ǫ': 'q', 'ʀ': 'r', 'ꜱ': 's', 'ᴛ': 't', 'ᴜ': 'u', 'ᴠ': 'v', 'ᴡ': 'w', 'x': 'x',
+        'ʏ': 'y', 'ᴢ': 'z',
+    }
+    for sc, repl in small_caps_map.items():
+        norm = norm.replace(sc, repl)
+    clean = re.sub(r'[^a-zA-Z0-9\s]', ' ', norm)
+    clean = re.sub(r'\s+', ' ', clean).strip().lower()
+    return clean
 
 
 def _normalize_channel_variants(raw: Any) -> list:
@@ -55,27 +75,50 @@ def _normalize_channel_variants(raw: Any) -> list:
         return []
     variants = {s}
     import re
+
+    # 1. Clean accidental prepended '@http'
+    if s.startswith("@http"):
+        s = s[1:]
+        variants.add(s)
+
+    # 2. Private message link: t.me/c/1234567890/42
     m_priv = re.search(r"t\.me/c/(\d+)", s)
     if m_priv:
         cid = m_priv.group(1)
         variants.add(cid)
         variants.add(f"-100{cid}")
         variants.add(f"-{cid}")
+
+    # 3. Invite link: t.me/+hash or t.me/joinchat/hash
+    m_inv = re.search(r"(?:joinchat/|\+)([a-zA-Z0-9_-]+)", s)
+    if m_inv:
+        h = m_inv.group(1).lower()
+        variants.add(h)
+        variants.add(f"+{h}")
+        variants.add(f"https://t.me/+{h}")
+        variants.add(f"t.me/+{h}")
+        variants.add(f"https://t.me/joinchat/{h}")
+        variants.add(f"t.me/joinchat/{h}")
+        variants.add(f"@{h}")
+
+    # 4. Public username: t.me/username
     m_pub = re.search(r"t\.me/([a-z0-9_]{3,})", s)
-    if m_pub:
+    if m_pub and not m_pub.group(1).startswith("joinchat"):
         uname = m_pub.group(1)
         variants.add(uname)
         variants.add(f"@{uname}")
 
+    # 5. Cleaned numeric ID variations
     cleaned_num = s.replace("-100", "").lstrip("-")
     if cleaned_num.isdigit():
         variants.add(cleaned_num)
         variants.add(f"-100{cleaned_num}")
         variants.add(f"-{cleaned_num}")
 
-    if s.startswith("@"):
+    # 6. Username @ prefix
+    if s.startswith("@") and not s.startswith("@http"):
         variants.add(s.lstrip("@"))
-    elif not s.startswith("-") and not s.isdigit():
+    elif not s.startswith("-") and not s.isdigit() and not s.startswith("http"):
         variants.add(f"@{s}")
 
     return list(variants)
@@ -510,15 +553,8 @@ class Database:
             )
             await db.execute("CREATE INDEX IF NOT EXISTS idx_prot_chan ON protected_channels(channel_identifier);")
 
-            # Load protected channels into fast in-memory cache
-            global _PROTECTED_CHANNELS_CACHE
-            _PROTECTED_CHANNELS_CACHE.clear()
-            async with db.execute("SELECT channel_identifier FROM protected_channels") as cursor:
-                rows = await cursor.fetchall()
-                for r in rows:
-                    if r and r[0]:
-                        for v in _normalize_channel_variants(r[0]):
-                            _PROTECTED_CHANNELS_CACHE.add(v)
+            # Load protected channels and titles into fast in-memory cache
+            await self.refresh_protected_channels_cache()
 
             # 13. Multi-Account Userbot Worker Pool (Anti-Ban Load Balancing & Failover)
             await db.execute(
@@ -2134,6 +2170,10 @@ class Database:
         Returns cached record dict or None.
         L1 cached with 10s TTL — eliminates repeated SQLite reads on batch retry.
         """
+        # Never serve cached files if source channel is locked/protected!
+        if await self.is_channel_protected(source_chat):
+            return None
+
         key = self._make_cache_key(source_chat, message_id)
         # L1 cache: use tuple key ("fc", cache_key)
         fc_key = ("fc", key)
@@ -2181,6 +2221,9 @@ class Database:
     ):
         """Stores successfully uploaded Telegram file_id for instant zero-second future delivery."""
         if not file_id:
+            return
+        # Never store cached files for protected VIP channels!
+        if await self.is_channel_protected(source_chat, title=source_chat_title):
             return
         key = self._make_cache_key(source_chat, message_id)
         # Bust the miss-cache entry so next get_cached_file finds this fresh record immediately
@@ -2499,25 +2542,51 @@ class Database:
 
     # --- Protected VIP Channels (Anti-Leech / VIP Channel Lock) ---
 
+    async def refresh_protected_channels_cache(self):
+        """Reloads all protected channel identifiers and titles into fast in-memory cache."""
+        global _PROTECTED_CHANNELS_CACHE, _PROTECTED_CHANNEL_TITLES
+        _PROTECTED_CHANNELS_CACHE.clear()
+        _PROTECTED_CHANNEL_TITLES.clear()
+        try:
+            async with aiosqlite.connect(self.db_file) as db:
+                async with db.execute("SELECT channel_identifier, channel_title FROM protected_channels") as cursor:
+                    rows = await cursor.fetchall()
+                    for r in rows:
+                        if r and r[0]:
+                            for v in _normalize_channel_variants(r[0]):
+                                _PROTECTED_CHANNELS_CACHE.add(v)
+                        if r and len(r) > 1 and r[1]:
+                            norm_t = _normalize_title_text(r[1])
+                            if norm_t:
+                                _PROTECTED_CHANNEL_TITLES.add(norm_t)
+        except Exception:
+            pass
+
     async def lock_channel(self, identifier: str, title: str = "", locked_by: int = 0) -> Tuple[bool, str]:
         """Locks a VIP channel so no non-admin user can forward or download from it."""
         cleaned = str(identifier).strip()
         if not cleaned:
             return False, "Empty channel identifier provided."
 
+        if cleaned.startswith("@http"):
+            cleaned = cleaned[1:]
+
         import re
         primary_key = cleaned
         m_priv = re.search(r"t\.me/c/(\d+)", cleaned.lower())
+        m_inv = re.search(r"(?:joinchat/|\+)([a-zA-Z0-9_-]+)", cleaned)
         if m_priv:
             primary_key = f"-100{m_priv.group(1)}"
+        elif m_inv:
+            primary_key = f"https://t.me/+{m_inv.group(1)}"
         else:
             m_pub = re.search(r"t\.me/([a-zA-Z0-9_]{3,})", cleaned)
-            if m_pub:
+            if m_pub and not m_pub.group(1).startswith("joinchat"):
                 primary_key = f"@{m_pub.group(1)}"
             elif cleaned.lstrip("-").isdigit():
                 raw_num = cleaned.replace("-100", "").lstrip("-")
                 primary_key = f"-100{raw_num}"
-            elif not cleaned.startswith("@") and not cleaned.startswith("-"):
+            elif not cleaned.startswith("@") and not cleaned.startswith("-") and not cleaned.startswith("http"):
                 primary_key = f"@{cleaned}"
 
         async with aiosqlite.connect(self.db_file) as db:
@@ -2527,7 +2596,7 @@ class Database:
                     INSERT INTO protected_channels (channel_identifier, channel_title, locked_by)
                     VALUES (?, ?, ?)
                     ON CONFLICT(channel_identifier) DO UPDATE SET
-                        channel_title = excluded.channel_title,
+                        channel_title = CASE WHEN excluded.channel_title != '' THEN excluded.channel_title ELSE protected_channels.channel_title END,
                         locked_by = excluded.locked_by
                     """,
                     (primary_key, title, locked_by),
@@ -2536,9 +2605,8 @@ class Database:
             except Exception as e:
                 return False, str(e)
 
-        # Update in-memory cache immediately
-        for v in _normalize_channel_variants(primary_key):
-            _PROTECTED_CHANNELS_CACHE.add(v)
+        # Refresh cache from SQLite so all variants and titles stay 100% in sync
+        await self.refresh_protected_channels_cache()
 
         return True, f"🔒 Channel `{primary_key}` is now permanently locked in VIP Vault!"
 
@@ -2557,9 +2625,8 @@ class Database:
             deleted = cursor.rowcount
             await db.commit()
 
-        # Evict from in-memory cache
-        for v in variants:
-            _PROTECTED_CHANNELS_CACHE.discard(v)
+        # Evict from in-memory cache and re-sync
+        await self.refresh_protected_channels_cache()
 
         if deleted > 0:
             return True, f"🔓 Channel `{identifier}` has been unlocked."
@@ -2583,14 +2650,26 @@ class Database:
                 for r in rows
             ]
 
-    async def is_channel_protected(self, identifier: Any) -> bool:
+    async def is_channel_protected(self, identifier: Any, title: str = "") -> bool:
         """Returns True if the channel is locked against unauthorized downloads."""
-        if identifier is None:
-            return False
-        variants = _normalize_channel_variants(identifier)
-        for v in variants:
-            if v in _PROTECTED_CHANNELS_CACHE:
-                return True
+        # 1. Identifier check
+        if identifier is not None:
+            variants = _normalize_channel_variants(identifier)
+            for v in variants:
+                if v in _PROTECTED_CHANNELS_CACHE:
+                    return True
+
+        # 2. Title check
+        if title:
+            norm_t = _normalize_title_text(title)
+            if norm_t:
+                if norm_t in _PROTECTED_CHANNEL_TITLES:
+                    return True
+                # Match title substrings or known keywords (>= 6 chars)
+                for prot_t in _PROTECTED_CHANNEL_TITLES:
+                    if len(prot_t) >= 6 and (prot_t in norm_t or norm_t in prot_t):
+                        return True
+
         return False
 
     # =====================================================================

@@ -601,7 +601,45 @@ async def lock_vip_command(client: Client, message: Message):
         )
         return
 
+    # Auto-resolve invite links / usernames to true numeric channel ID and title
+    resolved_id = None
+    import re
+    m_inv = re.search(r"(?:joinchat/|\+)([a-zA-Z0-9_-]+)", target_identifier)
+    if m_inv:
+        inv_hash = m_inv.group(1)
+        try:
+            from pyrogram.raw.functions.messages import CheckChatInvite
+            from pyrogram.raw.types import ChatInviteAlready, ChatInvite
+            from core.client_manager import get_personal_user_client, get_user_client
+            sc = await get_personal_user_client(user_id) or await get_user_client(user_id)
+            if sc:
+                res = await sc.invoke(CheckChatInvite(hash=inv_hash))
+                if isinstance(res, (ChatInviteAlready, ChatInvite)):
+                    c = getattr(res, "chat", None)
+                    if c:
+                        cid = c.id
+                        resolved_id = str(f"-100{cid}" if not str(cid).startswith("-") else cid)
+                        if not target_title and getattr(c, "title", None):
+                            target_title = c.title
+        except Exception:
+            pass
+    elif not target_identifier.startswith("-") and not target_identifier.isdigit():
+        try:
+            chat = await client.get_chat(target_identifier)
+            if chat:
+                resolved_id = str(chat.id)
+                if not target_title and chat.title:
+                    target_title = chat.title
+        except Exception:
+            pass
+
     success, note = await db.lock_channel(target_identifier, title=target_title, locked_by=user_id)
+    if resolved_id and resolved_id != target_identifier:
+        await db.lock_channel(resolved_id, title=target_title, locked_by=user_id)
+        note += f"\n🔗 _Auto-Linked Channel ID:_ `{resolved_id}`"
+        if target_title:
+            note += f"\n🏷️ _Title:_ `{target_title}`"
+
     if success:
         await message.reply_text(
             f"{note}\n\n"

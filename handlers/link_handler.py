@@ -491,17 +491,34 @@ async def run_batch_harvest_pipeline(
             pass
 
         # Step A: Download / Extract content
-        dl_res = await download_restricted_media(
-            client=download_client,
-            bot_client=bot_client,
-            chat_id=l_link.chat_identifier,
-            message_id=l_link.message_id,
-            status_message=s_msg,
-            job_id=item_job_id,
-            res_pref=res_pref,
-            batch_info=batch_label,
-            user_id=user_id,
-        )
+        try:
+            dl_res = await download_restricted_media(
+                client=download_client,
+                bot_client=bot_client,
+                chat_id=l_link.chat_identifier,
+                message_id=l_link.message_id,
+                status_message=s_msg,
+                job_id=item_job_id,
+                res_pref=res_pref,
+                batch_info=batch_label,
+                user_id=user_id,
+            )
+        except PermissionError as pe:
+            if "PROTECTED_VIP_CHANNEL" in str(pe):
+                skipped += 1
+                active_jobs.pop(item_job_id, None)
+                try:
+                    await s_msg.edit_text(
+                        "🔒 **ACCESS DENIED — VIP CHANNEL PROTECTED** 🔒\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "⛔ **This VIP channel is locked by the owner.**\n\n"
+                        "Downloading, forwarding, or scraping content from this channel is strictly prohibited!\n"
+                        "Your request has been terminated."
+                    )
+                except Exception:
+                    pass
+                continue
+            raise
         if not dl_res:
             skipped += 1
             active_jobs.pop(item_job_id, None)
@@ -872,6 +889,20 @@ async def wizard_run_callback(client: Client, callback_query: CallbackQuery):
     is_prem = req["is_prem"]
     user_settings = req["user_settings"]
     download_client = req["download_client"]
+
+    # Owner Anti-Leech Protection: VIP Channel Lock Gate
+    from config import ADMIN_IDS
+    if user_id not in ADMIN_IDS:
+        for l in telegram_links:
+            if await db.is_channel_protected(l.chat_identifier):
+                await callback_query.message.edit_text(
+                    "🔒 **ACCESS DENIED — VIP CHANNEL PROTECTED** 🔒\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "⛔ **This VIP channel is locked by the owner.**\n\n"
+                    "Downloading, forwarding, or scraping content from this channel is strictly prohibited!\n"
+                    "Your request has been rejected."
+                )
+                return
 
     # Apply resolution / delivery format selection
     if pref == "audio":

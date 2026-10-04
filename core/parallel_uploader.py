@@ -89,13 +89,13 @@ async def _turbo_save_file_impl(
     # 4 concurrent streams is the proven MTProto standard limit for zero socket resets
     part_size = 1024 * 1024 if file_size > 2000 * 1024 * 1024 else 512 * 1024
     if not is_big:
-        workers_count = 2
+        workers_count = 3
     elif file_size < 30 * 1024 * 1024:
-        workers_count = 4
+        workers_count = 5
     elif file_size < 100 * 1024 * 1024:
-        workers_count = 6
-    else:
         workers_count = 8
+    else:
+        workers_count = 10
 
     file_total_parts = int(math.ceil(file_size / part_size))
     is_missing_part = file_id is not None
@@ -237,15 +237,15 @@ async def _turbo_save_file_impl(
             raise StopTransmission()
 
         # Wait for all chunks to be processed with zero-freeze timeout guard
-        while not error_event.is_set() and queue.unfinished_tasks > 0:
+        while not error_event.is_set():
             if all(t.done() for t in tasks):
                 # All workers exited; break out immediately
                 break
             try:
-                await asyncio.wait_for(queue.join(), timeout=1.0)
+                await asyncio.wait_for(queue.join(), timeout=0.5)
                 break
             except asyncio.TimeoutError:
-                pass
+                continue
 
         if error_event.is_set():
             while not queue.empty():

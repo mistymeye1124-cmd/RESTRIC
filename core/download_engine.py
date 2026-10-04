@@ -930,10 +930,15 @@ async def download_restricted_media(
                     except Exception:
                         pass
 
-                # High-speed Turbo Parallel MTProto Downloader (6 concurrent MTProto workers, 1MB pipelining)
-                is_parallel_candidate = bool(
-                    source_msg.video or source_msg.document or source_msg.audio or source_msg.voice or source_msg.video_note or source_msg.photo
+                # High-speed Turbo Parallel MTProto Downloader (concurrent MTProto workers, pipelining)
+                media_obj = (
+                    source_msg.video
+                    or source_msg.document
+                    or source_msg.audio
+                    or source_msg.video_note
                 )
+                media_size = getattr(media_obj, "file_size", 0) if media_obj else 0
+                is_parallel_candidate = bool(media_obj and media_size >= 5 * 1024 * 1024)
                 if is_parallel_candidate:
                     try:
                         from core.parallel_downloader import turbo_parallel_download

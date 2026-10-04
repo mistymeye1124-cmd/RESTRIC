@@ -167,13 +167,11 @@ async def turbo_parallel_download(
             except Exception as imp_err:
                 logger.debug("[TurboParallel] ImportAuthorization on DC %d: %s", dc_id, imp_err)
 
-    # 3. Build chunk queue with sentinel termination tokens
+    # 3. Build chunk queue for workers
     offsets = list(range(0, total_size, chunk_size))
     queue: asyncio.Queue = asyncio.Queue()
     for o in offsets:
         queue.put_nowait(o)
-    for _ in range(num_workers):
-        queue.put_nowait(None)  # Sentinels guarantee workers exit cleanly without early starvation
 
     downloaded_bytes = 0
     t_start = time.time()
@@ -190,26 +188,38 @@ async def turbo_parallel_download(
     else:
         file_handle = open(out_path, "r+b")
 
-    # Circuit breaker & watchdog state
+    # Circuit breaker, completion and watchdog state
     abort_event = asyncio.Event()
+    completed_event = asyncio.Event()
     abort_reason = ""
     chunk_fail_counts: Dict[int, int] = {}
     consecutive_errors = 0
     MAX_CONSECUTIVE_ERRORS = 32
+    in_flight = 0
 
     async def restart_worker_session(sess: Session, w_id: int):
-        """Cleanly re-establishes a broken TCP MTProto socket."""
+        """Cleanly re-establishes a broken TCP MTProto socket with re-authorization."""
         try:
             logger.info("[TurboWorker %d] Re-establishing MTProto socket connection...", w_id)
             await sess.restart()
+            if exported_auth:
+                try:
+                    await sess.invoke(
+                        raw.functions.auth.ImportAuthorization(
+                            id=exported_auth.id,
+                            bytes=exported_auth.bytes
+                        )
+                    )
+                except Exception as imp_err:
+                    logger.debug("[TurboWorker %d] Re-import auth on restart: %s", w_id, imp_err)
             logger.info("[TurboWorker %d] Socket connection successfully restored.", w_id)
         except Exception as r_err:
             logger.debug("[TurboWorker %d] Session restart error: %s", w_id, r_err)
 
     async def worker(worker_id: int, session: Session):
-        nonlocal downloaded_bytes, last_cb_time, last_progress_time, consecutive_errors, abort_reason
+        nonlocal downloaded_bytes, last_cb_time, last_progress_time, consecutive_errors, abort_reason, in_flight
 
-        while not abort_event.is_set():
+        while not abort_event.is_set() and not completed_event.is_set():
             if active_jobs and job_id and active_jobs.get(job_id, {}).get("cancelled"):
                 abort_event.set()
                 abort_reason = "Cancelled by user"
@@ -218,13 +228,14 @@ async def turbo_parallel_download(
             try:
                 offset = await asyncio.wait_for(queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
-                if downloaded_bytes >= total_size or abort_event.is_set():
+                if downloaded_bytes >= total_size or completed_event.is_set():
+                    break
+                if queue.empty() and in_flight == 0:
+                    completed_event.set()
                     break
                 continue
 
-            if offset is None:  # Sentinel reached
-                queue.task_done()
-                break
+            in_flight += 1
 
             chunk_success = False
             for retry in range(4):
@@ -312,6 +323,9 @@ async def turbo_parallel_download(
 
                     await asyncio.sleep(0.25 * (retry + 1))
 
+            if chunk_success and downloaded_bytes >= total_size:
+                completed_event.set()
+
             if not chunk_success and not abort_event.is_set():
                 fails = chunk_fail_counts.get(offset, 0) + 1
                 chunk_fail_counts[offset] = fails
@@ -322,22 +336,23 @@ async def turbo_parallel_download(
                     abort_reason = f"Offset {offset} unrecoverable after {fails} attempts"
                     abort_event.set()
 
+            in_flight = max(0, in_flight - 1)
             queue.task_done()
 
     workers: List[asyncio.Task] = []
 
     async def stall_watchdog():
         """Monitors download throughput and triggers graceful fallback if stream freezes."""
-        while not abort_event.is_set():
+        while not abort_event.is_set() and not completed_event.is_set():
             await asyncio.sleep(1.0)
-            if downloaded_bytes >= total_size or abort_event.is_set():
+            if downloaded_bytes >= total_size or abort_event.is_set() or completed_event.is_set():
                 break
-            if time.time() - last_progress_time > 45.0:
+            if time.time() - last_progress_time > 25.0:
                 logger.warning(
-                    "[TurboDownloader] Stall detected! No bytes received for 45.0s (transferred: %d/%d). Auto-recovering to fallback...",
+                    "[TurboDownloader] Stall detected! No bytes received for 25.0s (transferred: %d/%d). Auto-recovering to fallback...",
                     downloaded_bytes, total_size
                 )
-                abort_reason = "Stall detected (no bytes for 45s)"
+                abort_reason = "Stall detected (no bytes for 25s)"
                 abort_event.set()
                 for w in workers:
                     w.cancel()

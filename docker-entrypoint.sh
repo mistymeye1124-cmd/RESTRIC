@@ -11,6 +11,12 @@ echo "=========================================================="
 mkdir -p /app/downloads /app/sessions /app/data /app/scratch /app/backups /app/cookies /app/data/cookies
 chmod 755 /app/downloads /app/sessions /app/data /app/scratch /app/cookies 2>/dev/null || true
 
+# 1.1 Automated Clean-up: Purge old download/scratch remnants and unlock SQLite sessions
+echo "[*] Cleaning old temporary debris and stale session locks..."
+find /app/downloads -type f -mmin +10 -delete 2>/dev/null || true
+find /app/scratch -type f -mmin +10 -delete 2>/dev/null || true
+rm -f /app/*.session-journal /app/*.session-wal /app/sessions/*.session-journal /app/sessions/*.session-wal 2>/dev/null || true
+
 # Restore global YouTube cookies if in persistent data storage
 if [ -f "/app/data/cookies/youtube_cookies.txt" ]; then
     cp -f "/app/data/cookies/youtube_cookies.txt" "/app/cookies/youtube_cookies.txt" 2>/dev/null || true

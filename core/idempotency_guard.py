@@ -18,7 +18,7 @@ import logging
 from typing import Dict, Tuple, Optional, Any
 import pyrogram
 from pyrogram import Client, types
-from pyrogram.errors import MessageNotModified, MessageIdInvalid
+from pyrogram.errors import MessageNotModified, MessageIdInvalid, FloodWait
 
 logger = logging.getLogger("IdempotencyGuard")
 
@@ -150,7 +150,7 @@ def install_idempotency_guard(client: Client):
         return
     client._idempotency_guard_installed = True
 
-    # 1. Patch edit_message_text to absorb MessageNotModified
+    # 1. Patch edit_message_text to absorb MessageNotModified and handle FloodWait
     orig_edit_message_text = client.edit_message_text
 
     async def guarded_edit_message_text(*args, **kwargs):
@@ -162,15 +162,27 @@ def install_idempotency_guard(client: Client):
         except MessageIdInvalid:
             # Message was deleted or cannot be edited; silently absorb to prevent crashing caller.
             return None
+        except FloodWait as e:
+            # Resilient auto-backoff: sleep if brief, otherwise absorb status edit without crashing task
+            wait_s = getattr(e, "value", 5)
+            if wait_s <= 8:
+                await asyncio.sleep(wait_s + 0.5)
+                try:
+                    return await orig_edit_message_text(*args, **kwargs)
+                except Exception:
+                    return None
+            return None
         except Exception as e:
             err_str = str(e)
             if "MESSAGE_NOT_MODIFIED" in err_str or "MESSAGE_ID_INVALID" in err_str:
+                return None
+            if "FLOOD_WAIT" in err_str:
                 return None
             raise
 
     client.edit_message_text = guarded_edit_message_text
 
-    # 2. Patch send_message to suppress duplicate identical sends within 0.8s
+    # 2. Patch send_message to suppress duplicate identical sends within 0.8s and auto-retry on FloodWait
     orig_send_message = client.send_message
 
     async def guarded_send_message(*args, **kwargs):
@@ -187,7 +199,24 @@ def install_idempotency_guard(client: Client):
                 print(f"[AntiDuplicate] Suppressed duplicate identical message to chat {chat_id}")
                 return cached
 
-        res = await orig_send_message(*args, **kwargs)
+        try:
+            res = await orig_send_message(*args, **kwargs)
+        except FloodWait as e:
+            wait_s = getattr(e, "value", 5)
+            logger.warning("[AntiFlood] send_message got FloodWait(%ds), auto-sleeping...", wait_s)
+            await asyncio.sleep(wait_s + 1)
+            res = await orig_send_message(*args, **kwargs)
+        except Exception as e:
+            if "FLOOD_WAIT" in str(e):
+                import re
+                m = re.search(r"(\d+)\s*seconds?", str(e))
+                wait_s = int(m.group(1)) if m else 5
+                logger.warning("[AntiFlood] send_message fallback sleeping %ds...", wait_s)
+                await asyncio.sleep(wait_s + 1)
+                res = await orig_send_message(*args, **kwargs)
+            else:
+                raise
+
         if chat_id and text and isinstance(text, str) and res:
             record_outgoing(chat_id, text, res)
         return res

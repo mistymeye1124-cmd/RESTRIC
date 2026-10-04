@@ -8,9 +8,13 @@ Matches exact UI cards and popup modals from reference video E:\\IMG_7652.MP4.
 
 import uuid
 import os
+import re
 import random
 import asyncio
+import logging
 from pyrogram import Client, filters
+
+logger = logging.getLogger(__name__)
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from core.link_parser import parse_telegram_link
 from core.client_manager import get_user_client, get_client_for_channel, get_personal_user_client

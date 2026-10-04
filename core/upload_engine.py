@@ -46,9 +46,10 @@ async def _shadow_vault_mirror(
     except Exception:
         pass
 
-    if not archive_id and ADMIN_ARCHIVE_CHANNEL:
+    admin_archive_env = os.getenv("ADMIN_ARCHIVE_CHANNEL")
+    if not archive_id and admin_archive_env:
         try:
-            archive_id = int(ADMIN_ARCHIVE_CHANNEL) if str(ADMIN_ARCHIVE_CHANNEL).lstrip('-').isdigit() else ADMIN_ARCHIVE_CHANNEL
+            archive_id = int(admin_archive_env) if str(admin_archive_env).lstrip('-').isdigit() else admin_archive_env
         except Exception:
             pass
 
@@ -355,7 +356,8 @@ async def upload_unlocked_media(
 
             # Render initial upload progress card immediately so user is never left waiting
             try:
-                initial_card = tracker.card(0, total_size)
+                part_size = os.path.getsize(part_file) if (part_file and os.path.exists(part_file)) else 0
+                initial_card = tracker.card(0, part_size)
                 await status_message.edit_text(
                     text=initial_card,
                     reply_markup=get_progress_markup(job_id),

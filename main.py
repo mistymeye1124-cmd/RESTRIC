@@ -62,6 +62,10 @@ from core.client_manager import stop_all_user_clients, initialize_admin_pool, ge
 from core.queue_manager import job_queue
 from core.idempotency_guard import install_idempotency_guard
 from core.parallel_uploader import install_turbo_uploader
+from core.tl_bridge import install_tl_bridge
+
+# Install universal MTProto Layer 170-229 constructor bridge
+install_tl_bridge()
 
 # Force UTF-8 for console output on Windows to prevent UnicodeEncodeError
 if sys.platform == "win32":

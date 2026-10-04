@@ -5,7 +5,9 @@ Payment Approvals, Global Watermark, System Settings, and Anti-Ban Health Monito
 Only accessible by IDs listed in ADMIN_IDS.
 """
 
+import os
 import asyncio
+import datetime
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from config import ADMIN_IDS, PREMIUM_PLANS, FREE_DAILY_DOWNLOAD_LIMIT, FORCE_SUB_CHANNEL

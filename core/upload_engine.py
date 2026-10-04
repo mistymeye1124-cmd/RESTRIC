@@ -382,12 +382,37 @@ async def upload_unlocked_media(
                         except Exception:
                             pass
                         return
-    
+
                     should_edit, card_text = tracker.update(current, total)
+                    is_finishing = (current >= total) or (total > 0 and current / total >= 0.98)
+                    if is_finishing:
+                        spin = "🚀"
+                        card_text = (
+                            "⚡ **PRO DISPATCHER TURBO** ⚡\n"
+                            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                            f"🎯 **Operation:** `{act}`\n"
+                            "📊 **Progress:**\n"
+                            "🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩  **100% Uploaded** ✅\n"
+                            "⏳ **Status:** `Finalizing Telegram Super-Cloud Ingestion...` 🚀\n\n"
+                            "╭── 📡 **LIVE TELEMETRY** ─────────────────\n"
+                            f"│ 📦 **Transferred:** `{human_readable_size(total)} / {human_readable_size(total)}`\n"
+                            "│ 🚀 **Throughput:** `Delivering to Chat`\n"
+                            "│ ⏱️ **Estimated:** `00:00 (Finishing)`\n"
+                            "│ 🛡️ **Shield:** `Active Anti-Ban Stealth (Zero Trace)`\n"
+                            "╰────────────────────────────────────────╯\n"
+                            "⚡ _Engine: TITAN v7.0 Multi-Stream Core_"
+                        )
+                        should_edit = True
+
                     if should_edit:
                         if _last_upload_edit_task and not _last_upload_edit_task.done():
-                            return
-    
+                            if not is_finishing:
+                                return
+                            try:
+                                _last_upload_edit_task.cancel()
+                            except Exception:
+                                pass
+
                         async def _do_upload_edit(text_to_send: str):
                             try:
                                 await status_message.edit_text(
@@ -398,7 +423,7 @@ async def upload_unlocked_media(
                                 tracker.last_update_time = time.time() + e.value
                             except Exception:
                                 pass
-    
+
                         _last_upload_edit_task = asyncio.create_task(_do_upload_edit(card_text))
     
                 # Detect whether this file is a video

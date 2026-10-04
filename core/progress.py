@@ -65,10 +65,13 @@ def format_progress_line(percentage: float, show_remaining: bool = True, anim_fr
 
 
 def get_progress_markup(job_id: str, res_pref: str = "original") -> InlineKeyboardMarkup:
-    """Inline keyboard with '📊 Live Stats', '⚙️ Quality', and '🛑 Cancel Task'."""
+    """Inline keyboard with '🔄 Force Complete / Refresh', '📊 Live Stats', '⚙️ Quality', and '🛑 Cancel Task'."""
     res_label = "⚡ Original" if res_pref == "original" else f"📺 {res_pref}p"
     return InlineKeyboardMarkup(
         [
+            [
+                InlineKeyboardButton("🔄 Force Complete / Refresh ⚡", callback_data=f"force_complete:{job_id}"),
+            ],
             [
                 InlineKeyboardButton("📊 Live Telemetry", callback_data=f"prog:{job_id}"),
                 InlineKeyboardButton(f"⚙️ {res_label}", callback_data=f"quick_res:{job_id}"),

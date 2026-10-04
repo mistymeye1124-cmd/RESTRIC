@@ -91,9 +91,11 @@ async def _turbo_save_file_impl(
     if not is_big:
         workers_count = 2
     elif file_size < 30 * 1024 * 1024:
-        workers_count = 3
-    else:
         workers_count = 4
+    elif file_size < 100 * 1024 * 1024:
+        workers_count = 6
+    else:
+        workers_count = 8
 
     file_total_parts = int(math.ceil(file_size / part_size))
     is_missing_part = file_id is not None

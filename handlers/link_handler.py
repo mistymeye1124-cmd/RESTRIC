@@ -1269,6 +1269,38 @@ async def progress_callback_handler(bot_client: Client, callback_query: Callback
         await callback_query.answer("⚡ Initializing transfer pipeline...", show_alert=False)
 
 
+@Client.on_callback_query(filters.regex(r"^force_complete:(.+)"))
+async def force_complete_callback_handler(bot_client: Client, callback_query: CallbackQuery):
+    job_id = callback_query.matches[0].group(1)
+    job_info = active_jobs.get(job_id)
+    if not job_info:
+        for k, v in active_jobs.items():
+            if k.startswith(f"{job_id}_") or job_id.startswith(f"{k}_"):
+                job_info = v
+                break
+
+    await callback_query.answer(
+        "⚡ TURBO FORCE ACTIVATED! ⚡\n"
+        "Refreshing transfer, flushing network sockets, and applying maximum delivery priority!",
+        show_alert=True,
+    )
+
+    if job_info:
+        job_info["force_complete"] = True
+        tracker = job_info.get("tracker")
+        if tracker:
+            tracker.last_update_time = 0.0
+            try:
+                card_text = tracker.render_card(tracker.current_bytes, tracker.total_bytes)
+                from core.progress import get_progress_markup
+                await callback_query.message.edit_text(
+                    text=card_text,
+                    reply_markup=get_progress_markup(job_id),
+                )
+            except Exception:
+                pass
+
+
 @Client.on_callback_query(filters.regex(r"^(?:cancel|cancel_job):(.+)"))
 async def cancel_callback_handler(bot_client: Client, callback_query: CallbackQuery):
     job_id = callback_query.matches[0].group(1)

@@ -12,26 +12,49 @@ from typing import Optional, List, Dict, Any, Union
 
 def strip_competitor_ads(raw_caption: str) -> str:
     """
-    Aggressively strips telegram invite links, URLs, competitor channel handles (@...),
-    credit attributions (both English and Bengali), and decorative spam dividers from captions.
+    Intelligently strips competitor Telegram channel handles (@...), Telegram links (t.me/...),
+    invite links, credit attributions, and spam dividers while strictly PRESERVING genuine
+    course/lecture resources (Medium, Quora, Drive, Docs, YouTube, GitHub, websites, etc.)
+    and markdown hyperlinks [Text](https://...).
     """
     if not raw_caption:
         return ""
 
     text = raw_caption
 
-    # 1. Strip Markdown links: [Join Channel](https://t.me/xyz) or [Credit](url)
-    text = re.sub(r"\[([^\]]+)\]\((?:https?://|t\.me/|tg://)[^\)]+\)", r"\1", text)
+    # 1. Strip Markdown links that point specifically to Telegram channels, bots, or invites
+    # e.g. [Join Channel](https://t.me/xyz) or [VIP](tg://join?invite=...)
+    text = re.sub(r"\[([^\]]*)\]\((?:https?://(?:t\.me|telegram\.me|telegram\.dog)/|t\.me/|tg://)[^\)]+\)", "", text)
 
-    # 2. Remove URLs (http, https, t.me, tg://)
-    text = re.sub(r"https?://\S+", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"(?:^|\s)t\.me/\S+", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"tg://\S+", "", text, flags=re.IGNORECASE)
+    # 2. Tokenize & protect legitimate non-Telegram markdown links and URLs
+    # so they are never damaged by handle stripping or ad cleansers
+    protected_urls = []
 
-    # 3. Remove Channel Usernames (@example_channel)
-    text = re.sub(r"@[\w\d_]{3,}", "", text)
+    def _save_token(match):
+        token = f"QQQURLTOKEN{len(protected_urls)}ZZZ"
+        protected_urls.append(match.group(0))
+        return token
 
-    # 4. Remove common promo buzzwords, credit lines & call-to-actions (multilingual: EN + BN)
+    # Protect [Text](https://example.com)
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^\)]+)\)", _save_token, text)
+
+    # Protect raw http/https URLs that are NOT Telegram
+    def _protect_raw_url(match):
+        url = match.group(0)
+        if re.search(r"(?:t\.me|telegram\.me|telegram\.dog)/", url, re.IGNORECASE):
+            return ""  # Remove Telegram URL directly
+        return _save_token(match)
+
+    text = re.sub(r"https?://\S+", _protect_raw_url, text)
+
+    # 3. Remove any remaining raw Telegram URLs & protocol links (e.g. t.me/xyz, tg://...)
+    text = re.sub(r"(?:^|\s)(?:t\.me|telegram\.me|telegram\.dog)/\S+", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"tg://\S+", " ", text, flags=re.IGNORECASE)
+
+    # 4. Remove standalone Telegram channel handles (@channel_name), preserving email addresses
+    text = re.sub(r"(?:^|\s)@[\w\d_]{3,}", " ", text)
+
+    # 5. Remove common promo buzzwords, credit lines & call-to-actions (multilingual: EN + BN)
     credit_line_patterns = [
         # Full credit attributions
         r"(?im)^\s*(?:credit|credits|source|from|by|uploaded\s*by|provided\s*by|owner|channel|main\s*channel|backup\s*channel|vip\s*channel)\s*[:►👉-].*$",
@@ -51,7 +74,7 @@ def strip_competitor_ads(raw_caption: str) -> str:
     for pattern in credit_line_patterns:
         text = re.sub(pattern, "", text)
 
-    # 5. Clean up decorative divider symbols and empty lines
+    # 6. Clean up decorative divider symbols and empty lines
     lines = text.split("\n")
     cleaned_lines = []
     prev_blank = False
@@ -74,7 +97,13 @@ def strip_competitor_ads(raw_caption: str) -> str:
         cleaned_lines.append(stripped)
         prev_blank = False
 
-    return "\n".join(cleaned_lines).strip()
+    result = "\n".join(cleaned_lines).strip()
+
+    # 7. Restore all protected URLs and markdown links
+    for idx, orig_val in enumerate(protected_urls):
+        result = result.replace(f"QQQURLTOKEN{idx}ZZZ", orig_val)
+
+    return result.strip()
 
 
 def apply_caption_replacements(

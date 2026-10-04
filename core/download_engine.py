@@ -117,6 +117,48 @@ def _pyro_session_to_telethon(pyro_b64: str) -> str:
     return "1" + base64.urlsafe_b64encode(packed).decode().rstrip("=")
 
 
+def extract_formatted_text(msg) -> str:
+    """
+    Extracts text or caption from a Pyrogram or Telethon Message object, preserving all
+    hyperlinks (e.g. [Click](https://...)), bold, italic, code, and formatting as standard Markdown.
+    If no entities are present, returns clean raw text.
+    """
+    if not msg:
+        return ""
+
+    # Telethon Message format check
+    if hasattr(msg, "message") and hasattr(msg, "entities") and not hasattr(msg, "caption"):
+        raw_text = msg.message or ""
+        if not raw_text:
+            return ""
+        if msg.entities:
+            try:
+                from telethon.extensions import markdown as tele_md
+                formatted = tele_md.unparse(raw_text, msg.entities)
+                if formatted:
+                    return formatted
+            except Exception as e:
+                logger.debug("[Download] Telethon unparse error: %s", e)
+        return raw_text
+
+    # Pyrogram Message format check
+    text = getattr(msg, "caption", None) or getattr(msg, "text", None) or ""
+    if not text:
+        return ""
+
+    entities = getattr(msg, "caption_entities", None) or getattr(msg, "entities", None)
+    if entities:
+        try:
+            from pyrogram.parser import Parser
+            formatted = Parser.unparse(text, entities, is_html=False)
+            if formatted:
+                return formatted
+        except Exception as e:
+            logger.debug("[Download] Pyrogram unparse error: %s", e)
+
+    return text
+
+
 async def _telethon_fallback_download(
     pyro_session_str: str,
     chat_id: int,
@@ -178,7 +220,7 @@ async def _telethon_fallback_download(
         width = 0
         height = 0
         media_type = "video"
-        caption = msg.message or msg.text or ""
+        caption = extract_formatted_text(msg)
 
         if hasattr(msg, "document") and msg.document:
             try:
@@ -696,7 +738,7 @@ async def download_restricted_media(
                             "is_text_only": False,
                             "file_path": _tele_res["file_path"],
                             "original_file_name": _tele_res.get("file_name") or f"video_{message_id}.mp4",
-                            "caption": _tele_res.get("caption") or (source_msg.caption if source_msg else "") or (source_msg.text if source_msg else "") or "",
+                            "caption": _tele_res.get("caption") or (extract_formatted_text(source_msg) if source_msg else "") or "",
                             "media_type": _tele_res.get("media_type") or "video",
                             "source_msg": source_msg,
                             "duration": _tele_res.get("duration"),
@@ -709,14 +751,14 @@ async def download_restricted_media(
 
         # Case 1: Text-only / WebPage Link / Google Docs / Poll / Contact / Location / Non-file message
         if not has_file_media:
-            msg_text = source_msg.text or source_msg.caption or ""
+            msg_text = extract_formatted_text(source_msg)
             if msg_text:
                 return {
                     "is_text_only": True,
                     "text": msg_text,
-                    "entities": source_msg.entities or source_msg.caption_entities,
+                    "entities": None,
                     "file_path": None,
-                    "caption": "",
+                    "caption": msg_text,
                     "media_type": "text",
                     "source_msg": source_msg,
                 }
@@ -791,7 +833,7 @@ async def download_restricted_media(
         # Case 2: Media restricted message
         os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
 
-        caption = source_msg.caption or ""
+        caption = extract_formatted_text(source_msg)
         media_type = source_msg.media.value if source_msg.media else "document"
 
         # Determine explicit, robust target file path, extension, and original file name

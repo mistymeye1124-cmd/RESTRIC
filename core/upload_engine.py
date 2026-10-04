@@ -351,6 +351,11 @@ async def upload_unlocked_media(
                 active_jobs[job_id]["tracker"] = tracker
 
             part_caption = f"🎬 **Part {p_idx}/{total_parts}**\n\n{base_caption}" if total_parts > 1 else (base_caption or None)
+            overflow_caption = None
+            if part_caption and len(part_caption) > 1024:
+                overflow_caption = part_caption
+                part_caption = part_caption[:1020] + "..."
+
             thumb_path = None
             safe_thumb_path = None
 
@@ -636,6 +641,17 @@ async def upload_unlocked_media(
                             )
     
                         if sent_msg:
+                            if overflow_caption and len(overflow_caption) > 1024:
+                                try:
+                                    await bot_client.send_message(
+                                        chat_id=target_chat_id,
+                                        text=f"📝 **Full Caption & Resource Links:**\n\n{overflow_caption}",
+                                        reply_to_message_id=sent_msg.id,
+                                        disable_web_page_preview=True,
+                                    )
+                                except Exception as _ov_err:
+                                    print(f"[!] Overflow caption delivery notice: {_ov_err}")
+
                             # Auto-save to Zero-Second Cloud Vault Cache ONLY if clean/unbranded (no custom thumbnail)
                             # to prevent custom branding from leaking to other users or persisting after toggle OFF
                             if not custom_thumb:

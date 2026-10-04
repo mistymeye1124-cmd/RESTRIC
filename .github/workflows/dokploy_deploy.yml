@@ -17,20 +17,25 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: setup-python@v5
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Syntax & Integrity Validation
         run: |
-          python -m py_compile main.py database.py config.py core/auto_recover.py core/auto_sync.py core/client_manager.py handlers/admin.py
+          python -m py_compile main.py database.py config.py \
+            core/auto_recover.py core/auto_sync.py core/client_manager.py \
+            core/progress.py handlers/link_handler.py handlers/admin.py
           echo "Code integrity check passed."
 
       - name: Trigger Dokploy Webhook (Auto Deploy)
-        if: env.DOKPLOY_WEBHOOK_URL != ''
+        if: ${{ env.DOKPLOY_WEBHOOK_URL != '' }}
         env:
           DOKPLOY_WEBHOOK_URL: ${{ secrets.DOKPLOY_WEBHOOK_URL }}
         run: |
           echo "Triggering Dokploy Auto-Deploy Webhook..."
-          curl -X POST "$DOKPLOY_WEBHOOK_URL" -H "Content-Type: application/json" -d '{"event":"push","branch":"main"}'
-          echo "Dokploy redeployment triggered successfully!"
+          curl -fsSL -X POST "$DOKPLOY_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d '{"event":"push","branch":"main"}' \
+            && echo "Dokploy redeployment triggered successfully!" \
+            || echo "Webhook call failed or DOKPLOY_WEBHOOK_URL not set."

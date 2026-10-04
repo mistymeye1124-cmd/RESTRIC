@@ -14,6 +14,7 @@ from core.i18n import t, get_lang_display
 from core.emojis import apply_custom_emojis
 
 
+import re
 import time
 
 # In-memory TTL cache for force-sub: {user_id: timestamp_valid_until}
@@ -21,6 +22,7 @@ import time
 _fsub_cache: dict[int, float] = {}
 _FSUB_CACHE_MAX = 10_000
 _FSUB_CACHE_EVICT = 500
+_pending_claims: dict[int, str] = {}
 
 
 def _fsub_cache_set(user_id: int, value: float) -> None:
@@ -128,13 +130,16 @@ async def start_handler(client: Client, message: Message):
 
     await db.register_user(user_id, first_name, username)
 
-    # 3. Process Viral Referral Parameter (Only for brand new users!)
+    # 3. Process 1-Click Auto Claim or Viral Referral Parameter
     cmd = message.command
     has_ref_param = False
     inviter_id = None
-    if is_brand_new_user and cmd and len(cmd) > 1:
+    claim_code = None
+    if cmd and len(cmd) > 1:
         param = cmd[1].strip()
-        if param.startswith("ref_"):
+        if param.lower().startswith(("claim_", "redeem_", "code_")):
+            claim_code = re.sub(r"^(?:claim_|redeem_|code_)", "", param, flags=re.IGNORECASE).strip()
+        elif is_brand_new_user and param.startswith("ref_"):
             try:
                 candidate_inviter = int(param.split("ref_")[1])
                 if candidate_inviter != user_id:
@@ -146,6 +151,8 @@ async def start_handler(client: Client, message: Message):
     # 4. Check Force-Subscribe Channel
     is_joined = await check_force_sub(client, user_id)
     if not is_joined:
+        if claim_code:
+            _pending_claims[user_id] = claim_code
         if has_ref_param and inviter_id:
             # Hold referral as pending until user verifies channel membership!
             await db.add_pending_referral(user_id, inviter_id)
@@ -194,6 +201,20 @@ async def start_handler(client: Client, message: Message):
                     ]
                 ),
             )
+            return
+
+    # 6. Auto-Claim 1-Click Code if arrived via deep link
+    if claim_code:
+        _pending_claims.pop(user_id, None)
+        success, reply = await db.redeem_coupon(user_id, claim_code)
+        await message.reply_text(
+            f"🎟️ **AUTO-CLAIM VIP CODE** 🎁\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{reply}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👉 Send any restricted link anytime to download!"
+        )
+        if success:
             return
 
     text, markup = await render_start_card(client, user_id, first_name)
@@ -567,6 +588,21 @@ async def verify_fsub_callback(client: Client, callback_query: CallbackQuery):
         if pending_inviter:
             await db.remove_pending_referral(user_id)
             await credit_verified_referral(client, pending_inviter, user_id, first_name, username)
+
+        # Auto-claim any 1-Click code that was held pending channel join
+        pending_code = _pending_claims.pop(user_id, None)
+        if pending_code:
+            success, reply = await db.redeem_coupon(user_id, pending_code)
+            try:
+                await callback_query.message.reply_text(
+                    f"🎟️ **AUTO-CLAIM VIP CODE** 🎁\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"{reply}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"👉 Send any restricted link anytime to download!"
+                )
+            except Exception:
+                pass
 
         await callback_query.answer("✅ Verification successful! Welcome aboard!", show_alert=True)
         try:

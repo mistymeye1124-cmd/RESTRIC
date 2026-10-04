@@ -3220,7 +3220,8 @@ async def gencode_command(client: Client, message: Message):
             return
 
         bot_me = getattr(client, "me", None)
-        bot_uname = bot_me.username if bot_me else "your_bot"
+        bot_uname = getattr(bot_me, "username", None) or "ProPrivateForwarder_bot"
+        claim_url = f"https://t.me/{bot_uname}?start=claim_{code}"
 
         # Ready-to-broadcast Telegram card
         broadcast_card = (
@@ -3229,21 +3230,26 @@ async def gencode_command(client: Client, message: Message):
             f"⚡ Unlock **{days} Days** of VIP Premium Access for FREE!\n\n"
             f"🎟️ **Redeem Code:** `{code}`\n"
             f"👥 **Claim Slots:** First **{uses}** users only!\n\n"
-            f"👇 **How to Claim:**\n"
-            f"1. Open bot: @{bot_uname}\n"
-            f"2. Send command: `/redeem {code}`\n"
+            f"🚀 **1-Click Auto Claim:**\n"
+            f"👉 [🎁 এক ক্লিকে VIP ক্লেইম করুন]({claim_url})\n\n"
+            f"_(অথবা বটে সরাসরি পাঠান: `/redeem {code}`)_\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "⚠️ _Hurry up before all slots are claimed!_"
         )
+
+        claim_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🎁 1-Click Claim VIP", url=claim_url)]])
 
         await message.reply_text(
             f"✅ **Giveaway Code Created Successfully!**\n\n"
             f"• **Code:** `{code}`\n"
             f"• **VIP Duration:** `{days} Days`\n"
-            f"• **Max Users:** `{uses} Users (1 claim per user)`\n\n"
+            f"• **Max Users:** `{uses} Users (1 claim per user)`\n"
+            f"• **1-Click Claim Link:** `{claim_url}`\n\n"
             f"📢 **Ready-to-Post Telegram Channel Card (Tap to copy below):**\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"{broadcast_card}"
+            f"{broadcast_card}",
+            reply_markup=claim_markup,
+            disable_web_page_preview=True,
         )
     except Exception as e:
         await message.reply_text(f"❌ Error creating giveaway code: {e}")
@@ -3268,6 +3274,9 @@ async def gen_batch_vouchers_command(client: Client, message: Message):
         days = int(message.command[1])
         count = min(int(message.command[2]), 50)  # max 50 at once
 
+        bot_me = getattr(client, "me", None)
+        bot_uname = getattr(bot_me, "username", None) or "ProPrivateForwarder_bot"
+
         generated = []
         for _ in range(count):
             rand_code = f"VIP{days}-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
@@ -3278,12 +3287,13 @@ async def gen_batch_vouchers_command(client: Client, message: Message):
             f"🎉 **Successfully Generated {len(generated)} VIP Vouchers!**",
             f"• **Duration:** `{days} Days Each`",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            "📋 **Copy & send individually to winners:**\n",
+            "📋 **Copy & send individually to winners (with 1-Click Claim):**\n",
         ]
         for idx, c in enumerate(generated, 1):
-            lines.append(f"{idx}. `/redeem {c}`")
+            claim_l = f"https://t.me/{bot_uname}?start=claim_{c}"
+            lines.append(f"{idx}. `{c}` ➔ [🎁 1-Click Claim]({claim_l})")
 
-        await message.reply_text("\n".join(lines))
+        await message.reply_text("\n".join(lines), disable_web_page_preview=True)
     except Exception as e:
         await message.reply_text(f"❌ Error generating vouchers: {e}")
 

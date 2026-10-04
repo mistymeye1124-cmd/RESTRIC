@@ -385,12 +385,14 @@ async def manual_reject_trx_command(client: Client, message: Message):
 @Client.on_callback_query(filters.regex(r"^user_prompt_redeem$"))
 async def prompt_redeem_callback(client: Client, callback_query: CallbackQuery):
     await callback_query.answer()
+    from core.state_manager import set_user_state
+    set_user_state(callback_query.from_user.id, "waiting_user_redeem_code")
     await callback_query.message.reply_text(
         "🎟️ **REDEEM VIP GIVEAWAY CODE** 🎁\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "To redeem your VIP voucher or giveaway code, simply send the following command:\n\n"
-        "👉 `/redeem <YOUR_CODE>`\n\n"
-        "💡 **Example:**\n"
-        "`/redeem VIP2026`\n\n"
-        "✨ Your VIP access and high-speed downloading will be unlocked instantly!"
+        "To redeem your VIP voucher or giveaway code, simply **send your code now**:\n\n"
+        "👉 **নিচে আপনার রিডিম কোডটি লিখে বা পেস্ট করে পাঠিয়ে দিন:**\n"
+        "💡 _(যেমন: `VIP2026` বা সরাসরি কোডটি পাঠান)_\n\n"
+        "✨ Your VIP access and high-speed downloading will be unlocked instantly!",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_user_redeem")]]),
     )

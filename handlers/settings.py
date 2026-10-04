@@ -12,6 +12,7 @@ from database import db
 from core.i18n import t, get_lang_display
 from core.emojis import apply_custom_emojis
 from config import BASE_DIR
+from core.state_manager import set_user_state, get_user_state, clear_user_state
 
 COOKIES_DIR = BASE_DIR / "cookies"
 COOKIES_DIR.mkdir(parents=True, exist_ok=True)
@@ -614,18 +615,52 @@ async def cookie_document_receiver(client: Client, message: Message):
 async def redeem_coupon_handler(client: Client, message: Message):
     user_id = message.from_user.id
     if len(message.command) < 2:
+        set_user_state(user_id, "waiting_user_redeem_code")
         await message.reply_text(
             "🎟️ **REDEEM VIP GIVEAWAY CODE** 🎁\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "Have a giveaway or promo voucher code? Redeem it now for free VIP days!\n\n"
-            "👉 **Usage:** `/redeem <CODE>`\n"
-            "💡 **Example:** `/redeem VIP2026`\n\n"
-            "_(Type `/redeem` followed by your code and send)_"
+            "👉 **এখনই আপনার রিডিম কোডটি লিখে বা পেস্ট করে পাঠিয়ে দিন:**\n"
+            "💡 _(যেমন: `VIP2026` বা সরাসরি কোডটি পাঠান)_\n\n"
+            "_(অথবা টাইপ করতে পারেন: `/redeem <CODE>`)_",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_user_redeem")]]),
         )
         return
     code = message.command[1].strip()
     success, reply = await db.redeem_coupon(user_id, code)
     await message.reply_text(reply)
+
+
+@Client.on_message(filters.private & filters.text & ~filters.regex(r"^/"), group=-1)
+async def user_redeem_text_interceptor(client: Client, message: Message):
+    user_id = message.from_user.id
+    state_info = get_user_state(user_id)
+    if not state_info or state_info.get("state") != "waiting_user_redeem_code":
+        return
+
+    code = (message.text or "").strip()
+    if not code:
+        return
+
+    clear_user_state(user_id)
+    success, reply = await db.redeem_coupon(user_id, code)
+    await message.reply_text(
+        f"🎟️ **REDEEM CODE RESULT**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{reply}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    message.stop_propagation()
+
+
+@Client.on_callback_query(filters.regex(r"^cancel_user_redeem$"))
+async def cancel_user_redeem_callback(client: Client, callback_query: CallbackQuery):
+    clear_user_state(callback_query.from_user.id)
+    await callback_query.answer("Cancelled", show_alert=False)
+    try:
+        await callback_query.message.delete()
+    except Exception:
+        pass
 
 
 # ─────────────────── CAPTION & REPLACEMENT COMMANDS ────────────────────────

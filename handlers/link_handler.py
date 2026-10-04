@@ -1359,6 +1359,15 @@ async def web_video_link_listener(bot_client: Client, message: Message):
     user_id = message.from_user.id
     raw_url = message.text.strip()
 
+    # Block YouTube video downloading to protect server resources
+    if re.search(r"(?:youtube\.com|youtu\.be)", raw_url, re.IGNORECASE):
+        await message.reply_text(
+            "⚠️ **YouTube ডাউনলোড সাময়িকভাবে বন্ধ আছে।**\n\n"
+            "সার্ভারের পারফরম্যান্স ও স্পিড স্থিতিশীল রাখতে ইউটিউব ভিডিও ডাউনলোড সাময়িকভাবে নিষ্ক্রিয় রাখা হয়েছে।\n"
+            "টেলিগ্রাম রেস্ট্রিক্টেড পোস্ট ও ফাইল ফরোয়ার্ড স্বাভাবিকভাবে সচল রয়েছে।"
+        )
+        return
+
     if await db.is_user_banned(user_id):
         await message.reply_text("⛔ **Account Suspended**\n\nYour account has been suspended from using this bot by the administration.")
         return

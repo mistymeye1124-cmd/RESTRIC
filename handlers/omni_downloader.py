@@ -170,6 +170,15 @@ async def omni_url_listener(client: Client, message: Message):
     target_url = match.group(0).strip()
     domain = urlparse(target_url).netloc.replace("www.", "")
 
+    # Block YouTube video downloading to protect server resources
+    if re.search(r"(?:youtube\.com|youtu\.be)", target_url, re.IGNORECASE):
+        await message.reply_text(
+            "⚠️ **YouTube ডাউনলোড সাময়িকভাবে বন্ধ আছে।**\n\n"
+            "সার্ভারের পারফরম্যান্স ও স্পিড স্থিতিশীল রাখতে ইউটিউব ভিডিও ডাউনলোড সাময়িকভাবে নিষ্ক্রিয় রাখা হয়েছে।\n"
+            "টেলিগ্রাম রেস্ট্রিক্টেড পোস্ট ও ফাইল ফরোয়ার্ড স্বাভাবিকভাবে সচল রয়েছে।"
+        )
+        return
+
     job_id = f"omni_{uuid.uuid4().hex[:8]}"
     active_jobs[job_id] = {
         "status": "extracting",

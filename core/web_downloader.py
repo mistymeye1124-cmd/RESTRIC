@@ -5,6 +5,7 @@ Supports educational portals, YouTube, Facebook private groups, Drive, and m3u8 
 """
 
 import os
+import re
 import asyncio
 import yt_dlp
 from typing import Optional, Dict, Any, Callable
@@ -55,6 +56,9 @@ async def download_web_video(
     """
     Downloads video from web sources using yt-dlp with live progress hook.
     """
+    if re.search(r"(?:youtube\.com|youtu\.be)", url, re.IGNORECASE):
+        return {"error": "YouTube downloads are disabled by administration to prevent server overload."}
+
     out_template = os.path.join(TEMP_DOWNLOAD_DIR, f"web_{job_id}_%(title).50s.%(ext)s")
     ffmpeg_bin = get_ffmpeg_binary()
 

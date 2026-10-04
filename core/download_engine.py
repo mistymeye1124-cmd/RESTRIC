@@ -966,6 +966,16 @@ async def download_restricted_media(
 
         target_file_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{job_id}_{safe_name}")
 
+        media_target = (
+            getattr(source_msg, "video", None)
+            or getattr(source_msg, "document", None)
+            or getattr(source_msg, "audio", None)
+            or getattr(source_msg, "voice", None)
+            or getattr(source_msg, "video_note", None)
+            or getattr(source_msg, "photo", None)
+        )
+        media_file_size = getattr(media_target, "file_size", 0) if media_target else 0
+
         pyrogram_progress = _progress_callback
 
         downloaded_file = None
@@ -981,27 +991,97 @@ async def download_restricted_media(
                         os.remove(temp_file)
                     except Exception:
                         pass
+                if os.path.exists(target_file_path):
+                    try:
+                        os.remove(target_file_path)
+                    except Exception:
+                        pass
 
-                # High-speed native Pyrogram download with streaming chunk pipeline
-                downloaded_file = await asyncio.wait_for(
-                    current_client.download_media(
-                        message=source_msg,
-                        file_name=target_file_path,
-                        progress=pyrogram_progress,
-                    ),
-                    timeout=900.0,
-                )
-                limiter.on_success()
+                # Engine 1: Turbo Parallel Multi-Stream for large files (>= 5MB)
+                if dl_attempt == 1 and media_file_size >= 5 * 1024 * 1024 and getattr(media_target, "file_id", None):
+                    try:
+                        from core.parallel_downloader import turbo_parallel_download
+                        logger.info("[DownloadEngine] Attempting Turbo Parallel download for %d MB file...", media_file_size // (1024 * 1024))
+                        downloaded_file = await turbo_parallel_download(
+                            client=current_client,
+                            msg=source_msg,
+                            out_path=target_file_path,
+                            progress_callback=pyrogram_progress,
+                            job_id=job_id,
+                            active_jobs=active_jobs,
+                        )
+                        if downloaded_file and os.path.exists(str(downloaded_file)) and os.path.getsize(str(downloaded_file)) > 0:
+                            limiter.on_success()
+                            try:
+                                cname = getattr(current_client, "name", "")
+                                if "account_" in cname:
+                                    from database import db
+                                    aid = int(cname.split("_")[1])
+                                    asyncio.create_task(db.increment_bot_account_downloads(aid))
+                            except Exception:
+                                pass
+                            break
+                    except Exception as turbo_err:
+                        logger.warning("[DownloadEngine] Turbo parallel attempt skipped (%s), routing to Anti-Stall Pyrogram Stream...", turbo_err)
+                        if os.path.exists(target_file_path):
+                            try:
+                                os.remove(target_file_path)
+                            except Exception:
+                                pass
+
+                # Engine 2: Pyrogram Stream with Active Anti-Stall Heartbeat Watchdog
+                last_progress_time = [time.time()]
+                last_rx_bytes = [0]
+                dl_done_event = asyncio.Event()
+
+                async def _stall_safe_progress(current: int, total: int):
+                    last_progress_time[0] = time.time()
+                    last_rx_bytes[0] = current
+                    await pyrogram_progress(current, total)
+
+                async def _anti_stall_watchdog():
+                    """Actively detects socket stalls and breaks out of hanging transmission within 20s."""
+                    while not dl_done_event.is_set():
+                        await asyncio.sleep(2.5)
+                        if dl_done_event.is_set():
+                            break
+                        elapsed = time.time() - last_progress_time[0]
+                        if elapsed >= 20.0:
+                            logger.warning(
+                                "[Anti-Stall Guardian] Zero bytes received for %.1fs (stuck at %d/%d). Terminating frozen socket...",
+                                elapsed, last_rx_bytes[0], media_file_size
+                            )
+                            try:
+                                await current_client.stop_transmission()
+                            except Exception:
+                                pass
+                            break
+
+                watchdog_task = asyncio.create_task(_anti_stall_watchdog())
                 try:
-                    cname = getattr(current_client, "name", "")
-                    if "account_" in cname:
-                        from database import db
-                        aid = int(cname.split("_")[1])
-                        asyncio.create_task(db.increment_bot_account_downloads(aid))
-                except Exception:
-                    pass
-                break
+                    downloaded_file = await asyncio.wait_for(
+                        current_client.download_media(
+                            message=source_msg,
+                            file_name=target_file_path,
+                            progress=_stall_safe_progress,
+                        ),
+                        timeout=900.0,
+                    )
+                finally:
+                    dl_done_event.set()
+                    watchdog_task.cancel()
 
+                if downloaded_file and os.path.exists(str(downloaded_file)) and os.path.getsize(str(downloaded_file)) > 0:
+                    limiter.on_success()
+                    try:
+                        cname = getattr(current_client, "name", "")
+                        if "account_" in cname:
+                            from database import db
+                            aid = int(cname.split("_")[1])
+                            asyncio.create_task(db.increment_bot_account_downloads(aid))
+                    except Exception:
+                        pass
+                    break
 
             except FloodWait as e:
                 wait_sec = e.value + random_extra(5, 10)
@@ -1021,7 +1101,10 @@ async def download_restricted_media(
                     session_key = _session_key_from_client(current_client)
                     limiter = rate_registry.get_sync(session_key)
                     active_jobs[job_id]["current_client"] = current_client
-                    await status_message.edit_text("🔄 Switching to backup session to bypass rate-limit...")
+                    try:
+                        await status_message.edit_text("🔄 Switching to backup session to bypass rate-limit...")
+                    except Exception:
+                        pass
                     await asyncio.sleep(2)
                     continue
 
@@ -1039,7 +1122,10 @@ async def download_restricted_media(
                     session_key = _session_key_from_client(current_client)
                     limiter = rate_registry.get_sync(session_key)
                     active_jobs[job_id]["current_client"] = current_client
-                    await status_message.edit_text("🔄 Switching to backup session...")
+                    try:
+                        await status_message.edit_text("🔄 Switching to backup session...")
+                    except Exception:
+                        pass
                     await asyncio.sleep(2)
                     continue
 
@@ -1074,6 +1160,15 @@ async def download_restricted_media(
                 if active_jobs.get(job_id, {}).get("cancelled"):
                     break
                 logger.error("[Download] Download attempt %d failed on client %s: %s", dl_attempt, getattr(current_client, "name", "client"), e)
+                
+                # Auto clean partial files
+                for tf in (target_file_path, target_file_path + ".temp"):
+                    if os.path.exists(tf):
+                        try:
+                            os.remove(tf)
+                        except Exception:
+                            pass
+
                 # Auto hot-swap to another healthy pool account
                 alt_client = get_next_available_pool_client(exclude_client=current_client)
                 if alt_client:
@@ -1083,7 +1178,7 @@ async def download_restricted_media(
                     limiter = rate_registry.get_sync(session_key)
                     active_jobs[job_id]["current_client"] = current_client
                     try:
-                        await status_message.edit_text("🔄 Switching to backup session to continue download...")
+                        await status_message.edit_text("🔄 Stream stalled or reset — switching to backup worker to continue...")
                     except Exception:
                         pass
                     await asyncio.sleep(1)
@@ -1091,11 +1186,40 @@ async def download_restricted_media(
 
                 if dl_attempt < 3:
                     await asyncio.sleep(2 * dl_attempt)
-                else:
-                    await status_message.edit_text(f"❌ Download failed after {dl_attempt} attempts: {str(e)}")
-                    active_jobs.pop(job_id, None)
-                    return None
 
+        # Engine 3: Ultimate Failover via Telethon Layer 229 Engine if Pyrogram struggled
+        if (not downloaded_file or not os.path.exists(str(downloaded_file)) or os.path.getsize(str(downloaded_file)) == 0) and not active_jobs.get(job_id, {}).get("cancelled"):
+            _pyro_sess_str = None
+            if user_id:
+                from database import db as _db
+                _session_row = await _db.get_session(user_id)
+                if _session_row:
+                    _pyro_sess_str = _session_row if isinstance(_session_row, str) else getattr(_session_row, "session_string", None)
+            if not _pyro_sess_str and current_client and getattr(current_client, "is_connected", False):
+                try:
+                    _pyro_sess_str = await current_client.export_session_string()
+                except Exception:
+                    pass
+
+            if _pyro_sess_str:
+                logger.info("[DownloadEngine] Activating Telethon Layer 229 Fallback after Pyrogram socket timeout...")
+                try:
+                    await status_message.edit_text("⚡ **Activating High-Layer Stream (Layer 229)** to bypass network stall...")
+                except Exception:
+                    pass
+                _tele_res = await _telethon_fallback_download(
+                    pyro_session_str=_pyro_sess_str,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    out_path=target_file_path,
+                    status_message=status_message,
+                    job_id=job_id,
+                    active_jobs=active_jobs,
+                    progress_callback=pyrogram_progress,
+                    user_id=user_id,
+                )
+                if _tele_res and _tele_res.get("file_path") and os.path.exists(_tele_res["file_path"]):
+                    downloaded_file = _tele_res["file_path"]
 
         if active_jobs.get(job_id, {}).get("cancelled"):
             if downloaded_file and os.path.exists(str(downloaded_file)):

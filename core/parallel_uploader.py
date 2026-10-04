@@ -138,7 +138,7 @@ async def _turbo_save_file_impl(
 
             while retry < 3 and not error_event.is_set():
                 try:
-                    await sess.invoke(rpc)
+                    await asyncio.wait_for(sess.invoke(rpc), timeout=25.0)
                     success = True
                     break
                 except RPCError as rpc_err:

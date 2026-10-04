@@ -118,12 +118,14 @@ def get_numpad_markup(entered_digits: str = "") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
-async def render_accounts_cockpit(user_id: int):
+async def render_accounts_cockpit(user_id: int, page: int = 1, per_page: int = 5):
     """
     Renders the enterprise Multi-Account Cockpit with live telemetry,
     anti-ban badges, device identities, and quick actions.
+    Uses responsive pagination to ensure messages and keyboards never exceed Telegram limits.
     """
     import time
+    import math
     is_adm = user_id in ADMIN_IDS
     accounts = await db.get_bot_accounts(owner_user_id=None if is_adm else user_id)
 
@@ -136,16 +138,21 @@ async def render_accounts_cockpit(user_id: int):
     )
     cooldown_cnt = sum(1 for a in accounts if a.get("flood_wait_until", 0) > now)
 
+    total_pages = max(1, math.ceil(total_accs / per_page))
+    page = max(1, min(page, total_pages))
+    start_idx = (page - 1) * per_page
+    page_accounts = accounts[start_idx : start_idx + per_page]
+
     title_scope = "ENTERPRISE WORKER POOL" if is_adm else "YOUR CONNECTED USERBOT ACCOUNTS"
     text_lines = [
         f"👥 **MULTI-ACCOUNT MANAGEMENT COCKPIT** 👥",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         f"⚡ **{title_scope} & ANTI-BAN STATUS**\n",
-        f"• **Connected Accounts:** `{total_accs}` ({active_cnt} active)",
+        f"• **Fleet Size:** `{total_accs} Accounts` ({active_cnt} active) | 📄 **Page:** `{page}/{total_pages}`",
         f"• **Health State:** `🟢 {healthy_cnt} Healthy` | `⏳ {cooldown_cnt} Cooldown`",
         f"• **Anti-Ban Device Spoofer:** `ACTIVE 🟢 (Isolated Official Fingerprints)`",
         f"• **Load Balancing Rotation:** `ACTIVE 🟢 (Auto Round-Robin Distribution)`",
-        f"• 🚀 **Fleet Bandwidth Multiplier:** `{max(1, healthy_cnt)}x (~{max(1, healthy_cnt) * 25} - {max(1, healthy_cnt) * 35} Mbps Peak)`",
+        f"• 🚀 **Fleet Bandwidth:** `{max(1, healthy_cnt)}x (~{max(1, healthy_cnt) * 25} - {max(1, healthy_cnt) * 35} Mbps Peak)`",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n",
     ]
 
@@ -160,7 +167,8 @@ async def render_accounts_cockpit(user_id: int):
             "• 100% immune to Telegram rate limits & automatic flood-wait hot-swap failover!"
         )
     else:
-        for idx, acc in enumerate(accounts, 1):
+        for offset, acc in enumerate(page_accounts, 1):
+            idx = start_idx + offset
             aid = acc["account_id"]
             uname = f"@{acc['username']}" if acc.get("username") else (acc.get("first_name") or f"ID:{aid}")
             fp = get_fingerprint_for_user(aid)
@@ -185,7 +193,7 @@ async def render_accounts_cockpit(user_id: int):
                     pass
 
             if is_tg_prem:
-                role_title = "⭐ 👑 [MASTER TURBO VIP - TELEGRAM PREMIUM]"
+                role_title = "⭐ 👑 [TURBO VIP]"
             elif aid in ADMIN_IDS or aid == user_id:
                 role_title = "👑 [PRIMARY ADMIN]"
             else:
@@ -196,47 +204,54 @@ async def render_accounts_cockpit(user_id: int):
                 st_badge = "⚪ Paused"
             elif f_until > now:
                 rem = int(f_until - now)
-                st_badge = f"⏳ Cooldown ({rem}s left)"
+                st_badge = f"⏳ Wait ({rem}s)"
             elif acc.get("status") == "dead":
-                st_badge = "🔴 Dead (Session Revoked)"
+                st_badge = "🔴 Revoked"
             else:
-                st_badge = "🟢 Healthy & Ready"
+                st_badge = "🟢 Ready"
 
             can_sh = acc.get("can_share", 1)
-            if is_tg_prem:
-                mode_badge = "🚀 Turbo VIP (8x Streams - Shared)"
-                toggle_mode_text = "🛡️ Personal" if can_sh else "⚡ Worker"
-            else:
-                mode_badge = "⚡ Shared Worker Pool" if can_sh else "🛡️ Personal Only"
-                toggle_mode_text = "🛡️ Personal" if can_sh else "⚡ Worker"
-
-            prem_badge = "⭐ Active (8 Streams Multiplier)" if is_tg_prem else "Standard (4 Streams)"
+            mode_badge = "⚡ Shared" if can_sh else "🛡️ Personal"
+            prem_badge = "8x Turbo" if is_tg_prem else "Standard"
 
             text_lines.append(
                 f"{idx}. {role_title} **{uname}** (`{aid}`){phone_str}\n"
-                f"   📱 **Hardware:** `{device}`\n"
-                f"   📊 **Telemetry:** `{dl_today}` today | `{dl_total}` total downloads\n"
-                f"   ⚡ **Status:** {st_badge} | **Premium:** `{prem_badge}`\n"
-                f"   🔄 **Mode:** `{mode_badge}`\n"
+                f"   📱 `{device}` | ⚡ {st_badge} | 🚀 `{prem_badge}`\n"
+                f"   📊 `{dl_today}` today, `{dl_total}` total | 🔄 `{mode_badge}`\n"
             )
 
             is_act = bool(acc.get("is_active"))
             toggle_text = "⏸️ Pause" if is_act else "▶️ Resume"
-            prem_btn_text = "⭐ VIP Turbo: ON 🟢" if is_tg_prem else "⭐ Set as Turbo VIP"
+            toggle_mode_text = "🛡️ Personal" if can_sh else "⚡ Shared"
+            prem_btn_text = "⭐ Turbo 🟢" if is_tg_prem else "⭐ Turbo"
             buttons.append([
-                InlineKeyboardButton(f"{toggle_text}", callback_data=f"acc_toggle:{aid}"),
-                InlineKeyboardButton(f"{toggle_mode_text}", callback_data=f"acc_toggle_share:{aid}"),
-                InlineKeyboardButton(f"{prem_btn_text}", callback_data=f"acc_toggle_prem:{aid}"),
+                InlineKeyboardButton(f"{toggle_text}", callback_data=f"acc_toggle:{aid}:{page}"),
+                InlineKeyboardButton(f"{toggle_mode_text}", callback_data=f"acc_toggle_share:{aid}:{page}"),
+                InlineKeyboardButton(f"{prem_btn_text}", callback_data=f"acc_toggle_prem:{aid}:{page}"),
+                InlineKeyboardButton("🗑️ Del", callback_data=f"acc_del_confirm:{aid}:{page}"),
             ])
-            buttons.append([
-                InlineKeyboardButton("🗑️ Remove Account", callback_data=f"acc_del_confirm:{aid}"),
-            ])
+
+        # Pagination controls row
+        if total_pages > 1:
+            nav_row = []
+            if page > 1:
+                nav_row.append(InlineKeyboardButton("◀️ Prev", callback_data=f"accounts_page:{page-1}"))
+            nav_row.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop_click"))
+            if page < total_pages:
+                nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"accounts_page:{page+1}"))
+            buttons.append(nav_row)
 
     buttons.append([
         InlineKeyboardButton("➕ Add New Account", callback_data="acc_add_new"),
-        InlineKeyboardButton("🔄 Refresh Cockpit", callback_data="refresh_accounts_cockpit"),
+        InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh_accounts_cockpit:{page}"),
     ])
-    buttons.append([InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main")])
+    if is_adm:
+        buttons.append([
+            InlineKeyboardButton("👑 Master Admin Panel", callback_data="adm_open_panel"),
+            InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main"),
+        ])
+    else:
+        buttons.append([InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main")])
 
     return "\n".join(text_lines), InlineKeyboardMarkup(buttons)
 
@@ -255,13 +270,13 @@ async def render_login_hub_card(user_id: int):
             "• Anti-Ban Device Spoofer: **ACTIVE 🟢**\n"
             "• Auto Round-Robin Rotation: **ACTIVE 🟢**\n"
             "• Hot-Swap Failover on FloodWait: **ACTIVE 🟢**\n\n"
-            "👉 _You can connect multiple Telegram accounts to distribute download load "
-            "and eliminate any risk of account restriction!_"
+            "👉 _Scan QR to link another account, or tap Manage to configure active workers._"
         )
         markup = InlineKeyboardMarkup(
             [
+                [InlineKeyboardButton("📱 Scan QR Code (Instant Link)", callback_data="start_qr_login")],
                 [InlineKeyboardButton(f"👥 Manage Multi-Accounts ({len(accounts)})", callback_data="view_my_accounts")],
-                [InlineKeyboardButton("➕ Add Another Account", callback_data="acc_add_new")],
+                [InlineKeyboardButton("🔢 Phone Number Login", callback_data="prompt_phone_login")],
                 [InlineKeyboardButton("🚪 Disconnect All Accounts", callback_data="user_disconnect_session")],
                 [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main")],
             ]
@@ -295,34 +310,47 @@ async def render_login_hub_card(user_id: int):
 
 @Client.on_message(filters.command(["accounts", "myaccounts", "workers", "worker"]) & filters.private)
 async def accounts_command_handler(client: Client, message: Message):
-    text, markup = await render_accounts_cockpit(message.from_user.id)
+    text, markup = await render_accounts_cockpit(message.from_user.id, page=1)
     await message.reply_text(text, reply_markup=markup)
 
 
-@Client.on_callback_query(filters.regex(r"^view_my_accounts$"))
+@Client.on_callback_query(filters.regex(r"^(?:view_my_accounts|accounts_page:(\d+))$"))
 async def view_my_accounts_callback(client: Client, callback_query: CallbackQuery):
     await callback_query.answer()
-    text, markup = await render_accounts_cockpit(callback_query.from_user.id)
+    match = callback_query.matches[0]
+    page = int(match.group(1)) if match and match.group(1) else 1
+    text, markup = await render_accounts_cockpit(callback_query.from_user.id, page=page)
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
-        pass
+        await callback_query.message.reply_text(text, reply_markup=markup)
 
 
-@Client.on_callback_query(filters.regex(r"^refresh_accounts_cockpit$"))
+@Client.on_callback_query(filters.regex(r"^refresh_accounts_cockpit(?::(\d+))?$"))
 async def refresh_accounts_cockpit_callback(client: Client, callback_query: CallbackQuery):
     await callback_query.answer("🔄 Refreshing and checking all account sessions...", show_alert=False)
+    page = 1
+    if callback_query.matches and callback_query.matches[0].group(1):
+        try:
+            page = int(callback_query.matches[0].group(1))
+        except Exception:
+            pass
     try:
         from core.client_manager import sync_pool_with_database, check_and_revive_dead_accounts
         await sync_pool_with_database()
         await check_and_revive_dead_accounts()
     except Exception:
         pass
-    text, markup = await render_accounts_cockpit(callback_query.from_user.id)
+    text, markup = await render_accounts_cockpit(callback_query.from_user.id, page=page)
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
-        pass
+        await callback_query.message.reply_text(text, reply_markup=markup)
+
+
+@Client.on_callback_query(filters.regex(r"^noop_click$"))
+async def noop_click_callback(client: Client, callback_query: CallbackQuery):
+    await callback_query.answer()
 
 
 @Client.on_callback_query(filters.regex(r"^acc_add_new$"))
@@ -351,9 +379,10 @@ async def acc_add_new_callback(client: Client, callback_query: CallbackQuery):
         pass
 
 
-@Client.on_callback_query(filters.regex(r"^acc_toggle:(\d+)$"))
+@Client.on_callback_query(filters.regex(r"^acc_toggle:(\d+)(?::(\d+))?$"))
 async def acc_toggle_callback(client: Client, callback_query: CallbackQuery):
     target_aid = int(callback_query.matches[0].group(1))
+    page = int(callback_query.matches[0].group(2)) if callback_query.matches[0].group(2) else 1
     user_id = callback_query.from_user.id
     owner_filter = None if user_id in ADMIN_IDS else user_id
 
@@ -364,16 +393,17 @@ async def acc_toggle_callback(client: Client, callback_query: CallbackQuery):
 
     label = "resumed and active in pool" if new_state == 1 else "paused (downloads won't use it)"
     await callback_query.answer(f"Account {target_aid} is now {label}!", show_alert=True)
-    text, markup = await render_accounts_cockpit(user_id)
+    text, markup = await render_accounts_cockpit(user_id, page=page)
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
         pass
 
 
-@Client.on_callback_query(filters.regex(r"^acc_toggle_share:(\d+)$"))
+@Client.on_callback_query(filters.regex(r"^acc_toggle_share:(\d+)(?::(\d+))?$"))
 async def acc_toggle_share_callback(client: Client, callback_query: CallbackQuery):
     target_aid = int(callback_query.matches[0].group(1))
+    page = int(callback_query.matches[0].group(2)) if callback_query.matches[0].group(2) else 1
     user_id = callback_query.from_user.id
     owner_filter = None if user_id in ADMIN_IDS else user_id
 
@@ -387,16 +417,17 @@ async def acc_toggle_share_callback(client: Client, callback_query: CallbackQuer
 
     mode_label = "⚡ Shared Worker Pool" if new_val == 1 else "🛡️ Personal Only"
     await callback_query.answer(f"Account mode set to: {mode_label}", show_alert=True)
-    text, markup = await render_accounts_cockpit(user_id)
+    text, markup = await render_accounts_cockpit(user_id, page=page)
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
         pass
 
 
-@Client.on_callback_query(filters.regex(r"^acc_toggle_prem:(\d+)$"))
+@Client.on_callback_query(filters.regex(r"^acc_toggle_prem:(\d+)(?::(\d+))?$"))
 async def acc_toggle_prem_callback(client: Client, callback_query: CallbackQuery):
     target_aid = int(callback_query.matches[0].group(1))
+    page = int(callback_query.matches[0].group(2)) if callback_query.matches[0].group(2) else 1
     user_id = callback_query.from_user.id
     if user_id not in ADMIN_IDS:
         await callback_query.answer("⚠️ Only Bot Admins can designate VIP Turbo accounts.", show_alert=True)
@@ -409,24 +440,24 @@ async def acc_toggle_prem_callback(client: Client, callback_query: CallbackQuery
 
     status_str = "⭐ VIP Turbo ACTIVE (8 Parallel Streams Enabled)" if new_val == 1 else "⚪ VIP Turbo Deactivated (Standard Mode)"
     await callback_query.answer(f"Account {target_aid}: {status_str}", show_alert=True)
-    text, markup = await render_accounts_cockpit(user_id)
+    text, markup = await render_accounts_cockpit(user_id, page=page)
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
         pass
 
 
-
-@Client.on_callback_query(filters.regex(r"^acc_del_confirm:(\d+)$"))
+@Client.on_callback_query(filters.regex(r"^acc_del_confirm:(\d+)(?::(\d+))?$"))
 async def acc_del_confirm_callback(client: Client, callback_query: CallbackQuery):
     target_aid = int(callback_query.matches[0].group(1))
+    page = int(callback_query.matches[0].group(2)) if callback_query.matches[0].group(2) else 1
     user_id = callback_query.from_user.id
     rec = await db.get_bot_account_by_id(target_aid)
     uname = f"@{rec['username']}" if rec and rec.get("username") else (rec.get("first_name") if rec else str(target_aid))
 
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🗑️ Yes, Remove Account", callback_data=f"acc_del:{target_aid}")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="view_my_accounts")],
+        [InlineKeyboardButton("🗑️ Yes, Remove Account", callback_data=f"acc_del:{target_aid}:{page}")],
+        [InlineKeyboardButton("❌ Cancel", callback_data=f"accounts_page:{page}")],
     ])
     await callback_query.answer()
     try:
@@ -439,9 +470,10 @@ async def acc_del_confirm_callback(client: Client, callback_query: CallbackQuery
         pass
 
 
-@Client.on_callback_query(filters.regex(r"^acc_del:(\d+)$"))
+@Client.on_callback_query(filters.regex(r"^acc_del:(\d+)(?::(\d+))?$"))
 async def acc_del_callback(client: Client, callback_query: CallbackQuery):
     target_aid = int(callback_query.matches[0].group(1))
+    page = int(callback_query.matches[0].group(2)) if callback_query.matches[0].group(2) else 1
     user_id = callback_query.from_user.id
     owner_filter = None if user_id in ADMIN_IDS else user_id
 
@@ -451,11 +483,12 @@ async def acc_del_callback(client: Client, callback_query: CallbackQuery):
     else:
         await callback_query.answer("⚠️ Could not remove account.", show_alert=True)
 
-    text, markup = await render_accounts_cockpit(user_id)
+    text, markup = await render_accounts_cockpit(user_id, page=page)
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:
         pass
+
 
 
 @Client.on_message(filters.command("login") & filters.private)

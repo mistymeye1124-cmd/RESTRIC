@@ -255,15 +255,25 @@ async def render_start_card(client: Client, user_id: int, first_name: str):
         )
         action_btn = InlineKeyboardButton("🧪 Switch Test Mode", callback_data="adm_view_mode_menu")
     elif user_id in ADMIN_IDS:
+        stats = await db.get_business_stats()
+        total_users = stats.get("total_users", 0)
+        prem_users = stats.get("premium_users", 0)
+        pool_accs = await db.get_bot_accounts()
+        now_ts = time.time()
+        healthy_w = sum(1 for a in pool_accs if a.get("is_active") and a.get("status") == "healthy" and a.get("flood_wait_until", 0) <= now_ts)
+        total_w = len(pool_accs)
+        total_dl = stats.get("total_downloads", 0)
         status_banner = (
             "╭── 👑 **[ARM SQUAD] SUPREME COMMANDER** ───╮\n"
             "│ • Clearance Level : `Master Architect (God Mode)`\n"
-            "│ • Daily Quota     : `🟧🟧🟧🟧🟧🟧🟧🟧 Unrestricted ⚡`\n"
+            f"│ • 👥 Total Users  : `{total_users} Registered Accounts`\n"
+            f"│ • 💎 VIP Members  : `{prem_users} Active Subscribers`\n"
+            f"│ • ⚡ Worker Fleet : `🟢 {healthy_w}/{total_w} Online ({max(1, healthy_w)}x Speed)`\n"
+            f"│ • 📦 Delivered    : `{total_dl} Files Transferred`\n"
             f"│ • Cloud Uplink    : `{login_status}`\n"
-            "│ • Engine Core     : `🟢 36 Assault Workers Online`\n"
             "╰───────────────────────────────────────────╯"
         )
-        action_btn = InlineKeyboardButton("👑 Master Admin Command Center", callback_data="adm_open_panel")
+        action_btn = InlineKeyboardButton(f"👑 Master Admin Command Center ({total_users} Users)", callback_data="adm_open_panel")
     elif is_prem:
         user_info = await db.get_user(user_id)
         expiry = user_info.get("premium_expiry") or "Lifetime Access" if user_info else "Lifetime Access"
@@ -337,9 +347,14 @@ async def render_start_card(client: Client, user_id: int, first_name: str):
     ]
 
     if user_id in ADMIN_IDS:
+        stats = await db.get_business_stats()
+        total_users = stats.get("total_users", 0)
+        pool_accs = await db.get_bot_accounts()
+        now_ts = time.time()
+        healthy_w = sum(1 for a in pool_accs if a.get("is_active") and a.get("status") == "healthy" and a.get("flood_wait_until", 0) <= now_ts)
         markup_buttons.append([
-            InlineKeyboardButton("⚡ 👥 Worker Accounts", callback_data="view_my_accounts"),
-            InlineKeyboardButton("👑 Master Admin Panel", callback_data="adm_open_panel"),
+            InlineKeyboardButton(f"⚡ 👥 Workers ({healthy_w}/{len(pool_accs)})", callback_data="view_my_accounts"),
+            InlineKeyboardButton(f"👑 Admin Panel ({total_users} Users)", callback_data="adm_open_panel"),
         ])
         markup_buttons.append([
             InlineKeyboardButton("🔄 Switch Test Mode", callback_data="adm_view_mode_menu"),

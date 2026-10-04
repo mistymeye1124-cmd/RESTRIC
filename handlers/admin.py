@@ -683,32 +683,50 @@ async def viplist_command(client: Client, message: Message):
 # =====================================================================
 
 async def render_users_menu():
-    text = (
-        "👥 **USER MANAGEMENT & VIP SUBSCRIPTIONS**\n\n"
-        "Manage user accounts, grant/revoke VIP premium, view user dossiers, "
-        "ban abusive accounts, or reset daily download quotas.\n\n"
-        "**Available Commands:**\n"
-        "• `/addpremium <user_id> <days>` — Grant VIP subscription\n"
-        "• `/removepremium <user_id>` — Revoke VIP status\n"
-        "• `/userinfo <user_id>` — Search user profile & stats\n"
-        "• `/resetuserquota <user_id>` — Reset user's daily download count\n"
-        "• `/ban <user_id>` — Ban user from the bot\n"
-        "• `/unban <user_id>` — Unban user\n\n"
-        "👉 _Select an action below for interactive one-tap control:_"
-    )
+    stats = await db.get_business_stats()
+    total_users = stats.get("total_users", 0)
+    prem_users = stats.get("premium_users", 0)
+    
+    # Grab latest 5 active users for immediate preview
+    sample_users, _ = await db.get_users_page(page=1, per_page=5)
+    
+    lines = [
+        "👥 **USER DIRECTORY & VIP MANAGEMENT** 👥",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "📊 **LIVE USER DIRECTORY TELEMETRY:**",
+        f"• **Total Registered Users:** `{total_users} Accounts`",
+        f"• **Active VIP Subscribers:** `{prem_users} Members`",
+        f"• **Free Users:** `{max(0, total_users - prem_users)} Accounts`",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "⚡ **RECENTLY ACTIVE USERS:**",
+    ]
+    if sample_users:
+        for idx, u in enumerate(sample_users, 1):
+            uid = u["user_id"]
+            uname = f"@{u['username']}" if u.get("username") else (u.get("first_name") or f"ID:{uid}")
+            badge = "💎 VIP" if u.get("is_premium") else "⚪ Free"
+            dl_cnt = u.get("total_downloads", 0)
+            lines.append(f"{idx}. {badge} **{uname}** (`{uid}`) — `{dl_cnt}` dl")
+    else:
+        lines.append("_(No users registered yet)_")
+        
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("👉 _Tap below to browse the full directory or manage permissions:_")
+
+    text = "\n".join(lines)
     markup = InlineKeyboardMarkup(
         [
+            [
+                InlineKeyboardButton(f"📋 Browse All Users ({total_users})", callback_data="adm_users_list:1"),
+                InlineKeyboardButton("🔍 Search User Info", callback_data="adm_btn_find_user"),
+            ],
             [
                 InlineKeyboardButton("➕ Grant VIP", callback_data="adm_btn_add_prem"),
                 InlineKeyboardButton("➖ Revoke VIP", callback_data="adm_btn_rem_prem"),
             ],
             [
-                InlineKeyboardButton("🔍 Search User Info", callback_data="adm_btn_find_user"),
                 InlineKeyboardButton("🔄 Reset User Quota", callback_data="adm_btn_reset_quota"),
-            ],
-            [
                 InlineKeyboardButton("🚫 Ban User", callback_data="adm_btn_ban_user"),
-                InlineKeyboardButton("🟢 Unban User", callback_data="adm_btn_unban_user"),
             ],
             [
                 InlineKeyboardButton("🔙 Back to Admin Dashboard", callback_data="adm_open_panel"),
@@ -719,6 +737,56 @@ async def render_users_menu():
     return text, markup
 
 
+async def render_users_list_view(page: int = 1, per_page: int = 8):
+    users, total = await db.get_users_page(page=page, per_page=per_page)
+    import math
+    total_pages = max(1, math.ceil(total / per_page))
+    page = max(1, min(page, total_pages))
+
+    lines = [
+        "👥 **REGISTERED USERS DIRECTORY** 👥",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"📊 Total Users: `{total}` | 📄 Page: `{page}/{total_pages}`\n",
+    ]
+    if users:
+        start_num = (page - 1) * per_page
+        for i, u in enumerate(users, 1):
+            num = start_num + i
+            uid = u["user_id"]
+            uname = f"@{u['username']}" if u.get("username") else (u.get("first_name") or f"ID:{uid}")
+            prem = "💎 VIP" if u.get("is_premium") else "⚪ Free"
+            total_dl = u.get("total_downloads", 0)
+            joined = str(u.get("connected_at") or "")[:10]
+            lines.append(f"**{num}.** {prem} **{uname}** (`{uid}`)")
+            lines.append(f"   📅 Joined: `{joined}` | 📦 Total DL: `{total_dl}`\n")
+    else:
+        lines.append("_(No users found on this page)_")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+    buttons = []
+    # Pagination
+    if total_pages > 1:
+        nav = []
+        if page > 1:
+            nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"adm_users_list:{page-1}"))
+        nav.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop_click"))
+        if page < total_pages:
+            nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"adm_users_list:{page+1}"))
+        buttons.append(nav)
+
+    buttons.append([
+        InlineKeyboardButton("🔍 Search User ID", callback_data="adm_btn_find_user"),
+        InlineKeyboardButton("🔙 User Menu", callback_data="adm_view_users"),
+    ])
+    buttons.append([
+        InlineKeyboardButton("🔙 Admin Dashboard", callback_data="adm_open_panel"),
+        InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main"),
+    ])
+
+    return "\n".join(lines), InlineKeyboardMarkup(buttons)
+
+
 @Client.on_callback_query(filters.regex(r"^adm_view_users$"))
 async def adm_view_users_callback(client: Client, callback_query: CallbackQuery):
     if not is_admin(callback_query.from_user.id):
@@ -726,6 +794,20 @@ async def adm_view_users_callback(client: Client, callback_query: CallbackQuery)
         return
     await callback_query.answer()
     text, markup = await render_users_menu()
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await callback_query.message.reply_text(text, reply_markup=markup)
+
+
+@Client.on_callback_query(filters.regex(r"^adm_users_list:(\d+)$"))
+async def adm_users_list_callback(client: Client, callback_query: CallbackQuery):
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("⛔ Admin access only.", show_alert=True)
+        return
+    await callback_query.answer()
+    page = int(callback_query.matches[0].group(1))
+    text, markup = await render_users_list_view(page=page)
     try:
         await callback_query.message.edit_text(text, reply_markup=markup)
     except Exception:

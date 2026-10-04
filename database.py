@@ -636,6 +636,23 @@ class Database:
             _cache_set(("get_user", user_id), result)
             return result
 
+    async def get_users_page(self, page: int = 1, per_page: int = 8) -> Tuple[List[Dict[str, Any]], int]:
+        """Returns (users_list, total_count) for real registered users with pagination."""
+        async with aiosqlite.connect(self.db_file) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT COUNT(*) FROM users WHERE user_id > 0")
+            total = (await cur.fetchone())[0]
+
+            offset = (page - 1) * per_page
+            cur = await db.execute(
+                "SELECT user_id, first_name, username, is_premium, premium_expiry, daily_downloads_used, total_downloads, connected_at "
+                "FROM users WHERE user_id > 0 "
+                "ORDER BY rowid DESC LIMIT ? OFFSET ?",
+                (per_page, offset)
+            )
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows], total
+
     async def is_user_premium(self, user_id: int) -> bool:
         """Checks if user has active premium status and validates expiration date. Admins default to VIP unless testing Free mode."""
         from config import ADMIN_IDS

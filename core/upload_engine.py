@@ -779,3 +779,8 @@ async def upload_unlocked_media(
         return success_all
     finally:
         active_jobs.pop(job_id, None)
+        try:
+            from core.storage_shield import cleanup_job_files
+            cleanup_job_files(job_id, file_path)
+        except Exception:
+            pass

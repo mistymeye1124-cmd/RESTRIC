@@ -89,8 +89,13 @@ FREE_MAX_BATCH_SIZE = 1              # Only 1 video at a time for free users
 PREMIUM_DAILY_DOWNLOAD_LIMIT = 100   # Effectively unlimited
 PREMIUM_MAX_BATCH_SIZE = 30          # Can paste 30 links at once
 
-# Concurrency: Maximum simultaneous downloads (Auto-tunes to hardware cores, min 12 workers)
-MAX_CONCURRENT_WORKERS = int(os.getenv("MAX_CONCURRENT_WORKERS", max(12, (os.cpu_count() or 4) * 3)))
+# Concurrency: Maximum simultaneous downloads (Tuned to 4 for peak speed without server overload)
+MAX_CONCURRENT_WORKERS = int(os.getenv("MAX_CONCURRENT_WORKERS", "4"))
+
+# Storage & Memory Safety Thresholds (Protects co-hosted ProGuild HQ website & VPS stability)
+MIN_FREE_DISK_GB = float(os.getenv("MIN_FREE_DISK_GB", "5.0"))        # Minimum 5GB disk reserve for web uploads
+MIN_FREE_RAM_MB = int(os.getenv("MIN_FREE_RAM_MB", "1200"))          # Minimum 1.2GB RAM reserve for system health
+AUTO_CLEAN_FILE_MAX_AGE_SEC = int(os.getenv("AUTO_CLEAN_FILE_MAX_AGE_SEC", "120")) # 2m max file age in downloads
 
 # Throttle interval in seconds for editing Telegram progress messages (prevents FloodWait)
 # 2.5s is the sweet spot: snappy UI without hitting Telegram's edit rate-limit

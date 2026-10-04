@@ -356,6 +356,11 @@ async def omni_url_listener(client: Client, message: Message):
 
     finally:
         active_jobs.pop(job_id, None)
+        try:
+            from core.storage_shield import cleanup_job_files
+            cleanup_job_files(job_id, dl_path if 'dl_path' in locals() else None)
+        except Exception:
+            pass
 
 
 async def process_omni_link(client: Client, message: Message, target_url: str):

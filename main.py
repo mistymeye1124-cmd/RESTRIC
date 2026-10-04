@@ -261,13 +261,13 @@ async def main():
     # Pre-warm the asyncio thread pool so first OpenCV/PIL call has zero cold-start delay
     import concurrent.futures
     loop = asyncio.get_running_loop()
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=16)
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)
     loop.set_default_executor(pool)
-    # Fire 8 dummy tasks to pre-spawn the threads immediately
+    # Fire 4 dummy tasks to pre-spawn the threads immediately
     await asyncio.gather(*[
-        asyncio.to_thread(lambda: None) for _ in range(8)
+        asyncio.to_thread(lambda: None) for _ in range(4)
     ])
-    print("[+] Thread pool pre-warmed (16 workers ready).")
+    print("[+] Thread pool pre-warmed (8 balanced workers ready).")
 
     if not check_configuration():
         print("[!] Bot cannot start without valid credentials. Please configure config.py.")
@@ -320,8 +320,8 @@ async def main():
         bot_token=BOT_TOKEN,
         plugins=dict(root="handlers"),
         workdir="sessions",
-        max_concurrent_transmissions=20,  # doubled for higher batch throughput
-        workers=32,                         # more parallel task runners
+        max_concurrent_transmissions=8,   # Optimized for network stability and zero packet drops
+        workers=16,                       # Balanced async event dispatchers
         ipv6=False,
         proxy=get_configured_proxy(),
         sleep_threshold=60,                 # handle FloodWait faster
@@ -387,6 +387,14 @@ async def main():
         print("🛡️ MTProto Keep-Alive & Anti-Logout Session Guardian: ACTIVE")
     except Exception as e:
         print(f"[!] Guardian warning: {e}")
+
+    # 24/7 Automated VPS Storage Shield & Zero-Residual Media Purger Daemon
+    try:
+        from core.storage_shield import start_storage_scavenger_daemon
+        asyncio.create_task(start_storage_scavenger_daemon(interval_sec=30))
+        print("🛡️ Automated VPS Storage Shield & Zero-Residual Scavenger: ACTIVE")
+    except Exception as e:
+        print(f"[!] Storage shield warning: {e}")
     print("=" * 65)
 
     # Register bot menu commands in Telegram UI

@@ -259,7 +259,7 @@ async def telegram_link_listener(bot_client: Client, message: Message):
         reply_markup=get_progress_markup(batch_job_id, res_pref),
     )
 
-    await job_queue.add_job(
+    q_depth = await job_queue.add_job(
         batch_job_id,
         is_prem,
         run_batch_harvest_pipeline,
@@ -273,6 +273,20 @@ async def telegram_link_listener(bot_client: Client, message: Message):
         is_prem,
         res_pref,
     )
+
+    if q_depth > 1:
+        try:
+            await status_msg.edit_text(
+                "⚡ **HARVESTER QUEUE INITIALIZED** ⚡\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🎯 **Queued Items:** `{total_items} Content Item{'s' if total_items > 1 else ''}`\n"
+                f"🚀 **Queue Position:** `#{q_depth}` ({'💎 VIP Turbo' if is_prem else '⚪ Standard'})\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "⏳ _Processing in rapid queue lane. Your turn starts automatically in seconds..._",
+                reply_markup=get_progress_markup(batch_job_id, res_pref),
+            )
+        except Exception:
+            pass
 
 
 async def run_batch_harvest_pipeline(
@@ -731,9 +745,8 @@ async def run_batch_harvest_pipeline(
                 delivered += 1
         finally:
             try:
-                fp = dl_res.get("file_path")
-                if fp and os.path.exists(fp):
-                    os.remove(fp)
+                from core.storage_shield import cleanup_job_files
+                cleanup_job_files(item_job_id, dl_res.get("file_path"))
             except Exception:
                 pass
             active_jobs.pop(item_job_id, None)
@@ -783,6 +796,11 @@ async def run_batch_harvest_pipeline(
             except Exception:
                 pass
     active_jobs.pop(b_job_id, None)
+    try:
+        from core.storage_shield import cleanup_job_files
+        cleanup_job_files(b_job_id)
+    except Exception:
+        pass
 
 
 # ─────────────────────── WIZARD & CACHE CALLBACKS ────────────────────────────

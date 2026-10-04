@@ -46,12 +46,12 @@ async def _safe_get_peer_by_id(self, peer_id: int):
     try:
         return await _orig_get_peer_by_id(self, peer_id)
     except KeyError:
-        s = str(peer_id)
-        if s.startswith("-100"):
-            alt_id = int(s[4:])
-        else:
-            alt_id = -int(f"100{abs(peer_id)}")
-        return await _orig_get_peer_by_id(self, alt_id)
+        try:
+            numeric_id = int(str(peer_id).replace("-100", "").lstrip("-"))
+            alt_id = -int(f"100{numeric_id}")
+            return await _orig_get_peer_by_id(self, alt_id)
+        except Exception:
+            raise KeyError(peer_id)
 
 SQLiteStorage.get_peer_by_id = _safe_get_peer_by_id
 from pyrogram import Client, idle

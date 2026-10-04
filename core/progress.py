@@ -256,16 +256,16 @@ async def live_pulse(
     subtitle: str = "",
     start_pct: float = 60.0,
     end_pct: float = 95.0,
-    interval: float = 3.0,
+    interval: float = 3.5,
     estimated_seconds: int = 60,
 ):
     """
     Async context manager — animated heartbeat during silent FFmpeg phases.
 
     - Fires IMMEDIATELY at t=0 (no gap after download 100% card)
-    - Shows a visible countdown: "~45s remaining" ticking down every 3s
+    - Shows a visible countdown: "~45s remaining" ticking down every 3.5s
     - Bar advances from start_pct -> end_pct over estimated_seconds
-    - FloodWait-aware: skips silently if Telegram rate-limits an edit
+    - FloodWait-immune: wraps edit in wait_for to prevent Pyrogram internal sleep
 
     Usage::
 
@@ -317,7 +317,8 @@ async def live_pulse(
                 elapsed = time.time() - _start
                 text = _build_text(elapsed)
                 try:
-                    await status_message.edit_text(text)
+                    # Timeout prevents Pyrogram internal sleep_threshold from locking this coroutine
+                    await asyncio.wait_for(status_message.edit_text(text), timeout=1.8)
                 except Exception:
                     pass  # FloodWait / message not modified — skip silently
                 _tick[0] += 1

@@ -186,6 +186,7 @@ async def apply_video_watermark(
     input_path: str,
     output_path: str,
     watermark_config: Dict[str, Any],
+    timeout: Optional[float] = None,
 ) -> Optional[str]:
     """
     Applies text watermark, logo image overlay, headline banner,
@@ -402,6 +403,13 @@ async def apply_video_watermark(
                 intermediate_output,
             ])
 
+            # Strict, bounded encoding deadline (prevents dead stalls)
+            if timeout is None:
+                f_size_mb = (os.path.getsize(input_path) / (1024 * 1024)) if os.path.exists(input_path) else 50.0
+                effective_timeout = max(20.0, min(60.0, f_size_mb * 0.25))
+            else:
+                effective_timeout = float(timeout)
+
             try:
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -409,9 +417,9 @@ async def apply_video_watermark(
                     stderr=asyncio.subprocess.PIPE,
                 )
                 try:
-                    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=180.0)
+                    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=effective_timeout)
                 except asyncio.TimeoutError:
-                    print(f"[!] Watermark burn timed out after 180s for {input_path}. Terminating FFmpeg...")
+                    print(f"[!] Watermark burn reached strict {effective_timeout:.0f}s deadline for {input_path}. Terminating FFmpeg & proceeding immediately...")
                     try:
                         process.kill()
                     except Exception:
@@ -515,6 +523,7 @@ async def apply_dual_video_watermark(
     global_config: Optional[Dict[str, Any]] = None,
     user_config: Optional[Dict[str, Any]] = None,
     is_vip: bool = False,
+    timeout: Optional[float] = None,
 ) -> Optional[str]:
     """
     Dual-Layer Branding & Watermarking Architecture:
@@ -571,21 +580,21 @@ async def apply_dual_video_watermark(
     # Single-layer cases:
     if has_owner and not has_user:
         cfg = {**global_config, "duration_limit": owner_dur_limit}
-        return await apply_video_watermark(input_path, output_path, cfg)
+        return await apply_video_watermark(input_path, output_path, cfg, timeout=timeout)
 
     if has_user and not has_owner:
-        return await apply_video_watermark(input_path, output_path, user_config)
+        return await apply_video_watermark(input_path, output_path, user_config, timeout=timeout)
 
     # 3. Dual-Layer Composite Case: Both Owner Watermark AND VIP User Watermark are active!
     # Layer 1: Apply Owner Watermark (e.g. first 50% of video)
     temp_stage1 = f"{output_path}_owner_wm.mp4"
     owner_cfg = {**global_config, "duration_limit": owner_dur_limit}
-    stage1_res = await apply_video_watermark(input_path, temp_stage1, owner_cfg)
+    stage1_res = await apply_video_watermark(input_path, temp_stage1, owner_cfg, timeout=timeout)
     if not stage1_res or not os.path.exists(stage1_res):
         stage1_res = input_path
 
     # Layer 2: Apply VIP User's Custom Watermark & Clips
-    final_res = await apply_video_watermark(stage1_res, output_path, user_config)
+    final_res = await apply_video_watermark(stage1_res, output_path, user_config, timeout=timeout)
 
     # Cleanup intermediate file
     try:
@@ -605,6 +614,7 @@ async def apply_video_delogo(
     input_path: str,
     output_path: str,
     delogo_config: Dict[str, Any],
+    timeout: Optional[float] = None,
 ) -> str:
     """
     World-Class 100% Watermark Removal Engine (FFmpeg Delogo & Neural Blending).
@@ -693,15 +703,22 @@ async def apply_video_delogo(
             output_path,
         ]
 
+        # Strict delogo timeout cap
+        if timeout is None:
+            f_size_mb = (os.path.getsize(input_path) / (1024 * 1024)) if os.path.exists(input_path) else 50.0
+            effective_timeout = max(15.0, min(50.0, f_size_mb * 0.20))
+        else:
+            effective_timeout = float(timeout)
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=180.0)
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=effective_timeout)
         except asyncio.TimeoutError:
-            print(f"[!] Delogo timed out after 180s for {input_path}. Terminating FFmpeg...")
+            print(f"[!] Delogo reached strict {effective_timeout:.0f}s deadline for {input_path}. Terminating FFmpeg & proceeding immediately...")
             try:
                 proc.kill()
             except Exception:

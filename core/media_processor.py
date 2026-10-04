@@ -171,6 +171,7 @@ async def compress_or_rescale_video(
     input_path: str,
     output_path: str,
     target_height: int = 720,
+    timeout: Optional[float] = None,
 ) -> str:
     """
     Compresses or rescales video to target resolution (e.g. 720p or 480p) using ultrafast H.264.
@@ -208,6 +209,12 @@ async def compress_or_rescale_video(
         output_path,
     ]
 
+    if timeout is None:
+        f_size_mb = (os.path.getsize(input_path) / (1024 * 1024)) if os.path.exists(input_path) else 50.0
+        effective_timeout = max(20.0, min(50.0, f_size_mb * 0.25))
+    else:
+        effective_timeout = float(timeout)
+
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -215,10 +222,11 @@ async def compress_or_rescale_video(
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            await asyncio.wait_for(proc.communicate(), timeout=600.0)
+            await asyncio.wait_for(proc.communicate(), timeout=effective_timeout)
         except asyncio.TimeoutError:
             proc.kill()
-            raise RuntimeError("FFmpeg compress timed out (600s)")
+            print(f"[!] Video rescale reached {effective_timeout:.0f}s deadline for {input_path}. Falling back to original.")
+            return input_path
         if proc.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
             try:
                 if input_path != output_path and os.path.exists(input_path):

@@ -557,94 +557,101 @@ async def run_batch_harvest_pipeline(
             current_settings = await db.get_settings(user_id)
             effective_res = current_settings.get("resolution", res_pref)
             if delivery_fmt != "audio" and effective_res.isdigit() and int(effective_res) < 1080 and original_path and original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm")):
-                scaled_path = f"{original_path}_scaled.mp4"
-                _est_rescale = max(20, int(os.path.getsize(original_path) / (1024 * 1024) * 0.35)) if os.path.exists(original_path) else 60
-                async with live_pulse(
-                    s_msg,
-                    f"🎬 {prefix_label}Optimizing Video Quality",
-                    f"Re-encoding to {effective_res}p — FFmpeg ultra-fast preset",
-                    start_pct=45.0, end_pct=75.0,
-                    estimated_seconds=_est_rescale,
-                ):
-                    original_path = await compress_or_rescale_video(original_path, scaled_path, int(effective_res))
-                dl_res["file_path"] = original_path
+                f_size_mb_pre = (os.path.getsize(original_path) / (1024 * 1024)) if os.path.exists(original_path) else 0
+                if f_size_mb_pre <= 250:
+                    scaled_path = f"{original_path}_scaled.mp4"
+                    _est_rescale = min(45, max(15, int(f_size_mb_pre * 0.20)))
+                    async with live_pulse(
+                        s_msg,
+                        f"🎬 {prefix_label}Optimizing Video Quality",
+                        f"Re-encoding to {effective_res}p — FFmpeg ultra-fast preset",
+                        start_pct=45.0, end_pct=75.0,
+                        estimated_seconds=_est_rescale,
+                    ):
+                        original_path = await compress_or_rescale_video(original_path, scaled_path, int(effective_res))
+                    dl_res["file_path"] = original_path
 
             # Step C: 100% Watermark Removal & Dual-Layer Branding Engine
             is_video_candidate = original_path and (original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".flv")) or dl_res.get("media_type") == "video")
             if is_video_candidate and original_path and os.path.exists(original_path):
-                global_wm = await db.get_global_watermark_config()
-                user_wm = await db.get_watermark_settings(user_id) if is_prem else None
+                f_size_mb = os.path.getsize(original_path) / (1024 * 1024)
+                if f_size_mb > 250:
+                    logger.info("[Pipeline] Video is %.1fMB (>250MB) — bypassing CPU transcode for zero-stall instant delivery", f_size_mb)
+                else:
+                    global_wm = await db.get_global_watermark_config()
+                    user_wm = await db.get_watermark_settings(user_id) if is_prem else None
 
-                can_clean, _ = await db.can_user_access_feature(user_id, "clean_video")
-                if not is_prem and can_clean:
-                    global_wm = None
+                    can_clean, _ = await db.can_user_access_feature(user_id, "clean_video")
+                    if not is_prem and can_clean:
+                        global_wm = None
 
-                # Sub-step C.1: 100% Video Delogo (Erase burned-in logos/watermarks)
-                if is_prem and user_wm and user_wm.get("delogo_enabled"):
+                    # Sub-step C.1: 100% Video Delogo (Erase burned-in logos/watermarks)
+                    if is_prem and user_wm and user_wm.get("delogo_enabled"):
+                        ext = os.path.splitext(original_path)[1] or ".mp4"
+                        delogo_out = f"{original_path}_delogo{ext}"
+                        _est_delogo = min(40, max(15, int(f_size_mb * 0.15)))
+                        async with live_pulse(
+                            s_msg,
+                            f"🧹 {prefix_label}Erasing Original Watermark & Logo",
+                            "Neural pixel interpolation — delogo engine active",
+                            start_pct=50.0, end_pct=78.0,
+                            estimated_seconds=_est_delogo,
+                        ):
+                            delogo_res = await apply_video_delogo(original_path, delogo_out, user_wm, timeout=_est_delogo + 5)
+                        if delogo_res and delogo_res != original_path and os.path.exists(delogo_res):
+                            try:
+                                if os.path.exists(original_path):
+                                    os.remove(original_path)
+                            except Exception:
+                                pass
+                            original_path = delogo_res
+                            dl_res["file_path"] = delogo_res
+
+                    # Sub-step C.2: Dual-Layer Watermarking & Branding Engine
                     ext = os.path.splitext(original_path)[1] or ".mp4"
-                    delogo_out = f"{original_path}_delogo{ext}"
-                    _est_delogo = max(15, int(os.path.getsize(original_path) / (1024 * 1024) * 0.2)) if os.path.exists(original_path) else 45
+                    wm_path = f"{original_path}_brand{ext}"
+
+                    # Determine subtitle for the pulse card
+                    has_actual_wm = False
+                    _wm_subtitle = "Brand watermark encoding — ultra-fast preset"
+                    if is_prem and user_wm and user_wm.get("enabled"):
+                        if any([
+                            str(user_wm.get("watermark_text") or "").strip(),
+                            str(user_wm.get("headline_text") or "").strip(),
+                            str(user_wm.get("logo_path") or "").strip(),
+                            str(user_wm.get("intro_clip_path") or "").strip(),
+                            str(user_wm.get("outro_clip_path") or "").strip(),
+                        ]):
+                            has_actual_wm = True
+                            _wm_subtitle = "Applying VIP custom brand — encoding zero-loss stream"
+                    elif global_wm and global_wm.get("enabled") and not is_prem:
+                        has_actual_wm = True
+
+                    # Estimate watermark time from file size (bounded strictly to 15-45s)
+                    _est_wm = min(45, max(15, int(f_size_mb * 0.18)))
                     async with live_pulse(
                         s_msg,
-                        f"🧹 {prefix_label}Erasing Original Watermark & Logo",
-                        "Neural pixel interpolation — delogo engine active",
-                        start_pct=50.0, end_pct=78.0,
-                        estimated_seconds=_est_delogo,
+                        f"🎬 {prefix_label}Applying Watermark & Branding",
+                        _wm_subtitle,
+                        start_pct=65.0, end_pct=93.0,
+                        estimated_seconds=_est_wm,
                     ):
-                        delogo_res = await apply_video_delogo(original_path, delogo_out, user_wm)
-                    if delogo_res and delogo_res != original_path and os.path.exists(delogo_res):
+                        final_path = await apply_dual_video_watermark(
+                            input_path=original_path,
+                            output_path=wm_path,
+                            global_config=global_wm,
+                            user_config=user_wm,
+                            is_vip=is_prem,
+                            timeout=_est_wm + 5,
+                        )
+                    if final_path and final_path != original_path and os.path.exists(final_path):
                         try:
                             if os.path.exists(original_path):
                                 os.remove(original_path)
                         except Exception:
                             pass
-                        original_path = delogo_res
-                        dl_res["file_path"] = delogo_res
-
-                # Sub-step C.2: Dual-Layer Watermarking & Branding Engine
-                ext = os.path.splitext(original_path)[1] or ".mp4"
-                wm_path = f"{original_path}_brand{ext}"
-
-                # Determine subtitle for the pulse card
-                has_actual_wm = False
-                _wm_subtitle = "Brand watermark encoding — ultra-fast preset"
-                if is_prem and user_wm and user_wm.get("enabled"):
-                    if any([
-                        str(user_wm.get("watermark_text") or "").strip(),
-                        str(user_wm.get("headline_text") or "").strip(),
-                        str(user_wm.get("logo_path") or "").strip(),
-                        str(user_wm.get("intro_clip_path") or "").strip(),
-                        str(user_wm.get("outro_clip_path") or "").strip(),
-                    ]):
-                        has_actual_wm = True
-                        _wm_subtitle = "Applying VIP custom brand — encoding zero-loss stream"
-                elif global_wm and global_wm.get("enabled") and not is_prem:
-                    has_actual_wm = True
-
-                # Estimate watermark time from file size (ultrafast preset: ~0.2s per MB)
-                _est_wm = max(15, int(os.path.getsize(original_path) / (1024 * 1024) * 0.20)) if os.path.exists(original_path) else 60
-                async with live_pulse(
-                    s_msg,
-                    f"🎬 {prefix_label}Applying Watermark & Branding",
-                    _wm_subtitle,
-                    start_pct=65.0, end_pct=93.0,
-                    estimated_seconds=_est_wm,
-                ):
-                    final_path = await apply_dual_video_watermark(
-                        input_path=original_path,
-                        output_path=wm_path,
-                        global_config=global_wm,
-                        user_config=user_wm,
-                        is_vip=is_prem,
-                    )
-                if final_path and final_path != original_path and os.path.exists(final_path):
-                    try:
-                        if os.path.exists(original_path):
-                            os.remove(original_path)
-                    except Exception:
-                        pass
-                    dl_res["file_path"] = final_path
-                    original_path = final_path
+                        dl_res["file_path"] = final_path
+                        original_path = final_path
 
             # Step D.1: Stealth Metadata Anonymizer (Zero-Trace Digital Sanitizer)
             ghost_mode_active = bool(user_settings.get("ghost_mode", 1))

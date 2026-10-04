@@ -116,11 +116,13 @@ async def turbo_parallel_download(
         chunk_size = 512 * 1024
     elif total_size < 75 * 1024 * 1024:
         num_workers = 4
-        chunk_size = 1024 * 1024
+        chunk_size = 512 * 1024
     else:
-        # Large files (75MB - 4GB): 6 to 8 balanced MTProto streams push DC wire speed to 40-70 MB/s without socket resets
-        num_workers = 8 if is_prem else (6 if cpu_count >= 4 else 4)
-        chunk_size = 1024 * 1024
+        # Large files (75MB - 4GB):
+        # Premium accounts: 6 streams with 1024KB chunks (Telegram Premium unlocks 4x DC pipe bandwidth)
+        # Standard accounts: 4 streams with 512KB chunks (prevents Telegram DC TCP throttling & socket freezes)
+        num_workers = 6 if is_prem else 4
+        chunk_size = 1024 * 1024 if is_prem else 512 * 1024
 
     fid = FileId.decode(target.file_id)
     dc_id = fid.dc_id
@@ -237,9 +239,10 @@ async def turbo_parallel_download(
                                 offset=offset,
                                 limit=chunk_size,
                             ),
-                            timeout=18.0,
+                            retries=2,
+                            timeout=12.0,
                         ),
-                        timeout=22.0,
+                        timeout=16.0,
                     )
 
                     if isinstance(r, raw.types.upload.File):
@@ -329,12 +332,12 @@ async def turbo_parallel_download(
             await asyncio.sleep(1.0)
             if downloaded_bytes >= total_size or abort_event.is_set():
                 break
-            if time.time() - last_progress_time > 30.0:
+            if time.time() - last_progress_time > 45.0:
                 logger.warning(
-                    "[TurboDownloader] Stall detected! No bytes received for 30.0s (transferred: %d/%d). Auto-recovering to fallback...",
+                    "[TurboDownloader] Stall detected! No bytes received for 45.0s (transferred: %d/%d). Auto-recovering to fallback...",
                     downloaded_bytes, total_size
                 )
-                abort_reason = "Stall detected (no bytes for 30s)"
+                abort_reason = "Stall detected (no bytes for 45s)"
                 abort_event.set()
                 for w in workers:
                     w.cancel()

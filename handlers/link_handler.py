@@ -671,28 +671,26 @@ async def run_batch_harvest_pipeline(
                             dl_res["file_path"] = final_path
                             original_path = final_path
 
-            # Step D.1: Stealth Metadata Anonymizer (Zero-Trace Digital Sanitizer)
-            ghost_mode_active = bool(user_settings.get("ghost_mode", 1))
+            # Step D.1: Stealth Metadata Anonymizer (Fast Zero-Delay Mode)
+            ghost_mode_active = bool(user_settings.get("ghost_mode", 0))
             if ghost_mode_active and original_path and os.path.exists(original_path):
                 ext = os.path.splitext(original_path)[1].lower() or ".mp4"
                 clean_meta_path = f"{os.path.splitext(original_path)[0]}_ghost{ext}"
-                async with live_pulse(
-                    s_msg,
-                    "🕵️ Ghost Mode — Anonymizing File",
-                    "Stripping all metadata traces — zero digital footprint",
-                    start_pct=93.0, end_pct=98.0,
-                    interval=2.5,
-                    estimated_seconds=20,
-                ):
-                    anonymized = await strip_video_metadata(original_path, clean_meta_path)
-                if anonymized and anonymized != original_path and os.path.exists(anonymized):
-                    try:
-                        if os.path.exists(original_path):
-                            os.remove(original_path)
-                    except Exception:
-                        pass
-                    original_path = anonymized
-                    dl_res["file_path"] = anonymized
+                try:
+                    anonymized = await asyncio.wait_for(
+                        strip_video_metadata(original_path, clean_meta_path),
+                        timeout=5.0,
+                    )
+                    if anonymized and anonymized != original_path and os.path.exists(anonymized):
+                        try:
+                            if os.path.exists(original_path):
+                                os.remove(original_path)
+                        except Exception:
+                            pass
+                        original_path = anonymized
+                        dl_res["file_path"] = anonymized
+                except Exception:
+                    pass
 
             # Step E: Format Caption with Smart Ad-Stripper & Custom Template
             raw_caption = dl_res.get("caption") or ""

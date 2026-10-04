@@ -234,10 +234,24 @@ async def _turbo_save_file_impl(
                 raise worker_error[0]
             raise StopTransmission()
 
-        # Wait for all chunks to be processed
-        await queue.join()
+        # Wait for all chunks to be processed with zero-freeze timeout guard
+        while not error_event.is_set() and queue.unfinished_tasks > 0:
+            if all(t.done() for t in tasks):
+                # All workers exited; break out immediately
+                break
+            try:
+                await asyncio.wait_for(queue.join(), timeout=1.0)
+                break
+            except asyncio.TimeoutError:
+                pass
 
         if error_event.is_set():
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                    queue.task_done()
+                except Exception:
+                    break
             if worker_error:
                 raise worker_error[0]
             raise StopTransmission()

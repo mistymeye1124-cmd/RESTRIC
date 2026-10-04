@@ -90,35 +90,42 @@ class QueueManager:
         if not self.is_running or self.queue.empty():
             return
 
-        try:
-            job: PrioritizedJob = self.queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return
+        while self.is_running and not self.queue.empty():
+            # Check RAM headroom: preserve minimum 3200MB for proguildhq.com & OS stability
+            free_ram = get_free_ram_mb()
+            if free_ram < 3200:
+                logger.info("[QueueManager] Burst Worker-%d scaling down: RAM buffer preserved for website.", burst_id)
+                break
 
-        self.active_count += 1
-        logger.info("[QueueManager] Elastic Burst Worker-%d activated (RAM: plenty, high load).", burst_id)
-        try:
-            for _ in range(3):
-                is_safe, reason, _ = check_storage_safety()
-                if is_safe:
-                    break
-                await asyncio.sleep(2.0)
+            try:
+                job: PrioritizedJob = self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
-            await job.handler(*job.args)
-        except Exception as e:
-            logger.error("[!] Burst Worker-%d job %s error: %s", burst_id, job.job_id, e)
-        finally:
-            self.active_count = max(0, self.active_count - 1)
+            self.active_count += 1
+            logger.info("[QueueManager] Elastic Burst Worker-%d active (RAM: %.0f MB free, scale: %d/%d).", burst_id, free_ram, self.active_count, 16)
             try:
-                from core.download_engine import active_jobs
-                active_jobs.pop(job.job_id, None)
-            except Exception:
-                pass
-            try:
-                cleanup_job_files(job.job_id)
-            except Exception:
-                pass
-            self.queue.task_done()
+                for _ in range(3):
+                    is_safe, reason, _ = check_storage_safety()
+                    if is_safe:
+                        break
+                    await asyncio.sleep(2.0)
+
+                await job.handler(*job.args)
+            except Exception as e:
+                logger.error("[!] Burst Worker-%d job %s error: %s", burst_id, job.job_id, e)
+            finally:
+                self.active_count = max(0, self.active_count - 1)
+                try:
+                    from core.download_engine import active_jobs
+                    active_jobs.pop(job.job_id, None)
+                except Exception:
+                    pass
+                try:
+                    cleanup_job_files(job.job_id)
+                except Exception:
+                    pass
+                self.queue.task_done()
 
     async def add_job(self, job_id: str, is_premium: bool, handler: Callable, *args) -> int:
         """Adds a job with priority. Dynamically spawns elastic burst workers when RAM allows."""
@@ -134,12 +141,12 @@ class QueueManager:
         q_size = self.queue.qsize()
 
         # Dynamic Elastic Worker Scaling:
-        # If queue has waiting jobs and plenty of RAM is available (> 5000 MB free),
-        # dynamically spawn temporary burst workers (up to max 10 parallel workers total)
+        # If queue has waiting jobs and plenty of RAM is available (> 3500 MB free),
+        # dynamically spawn temporary burst workers (up to max 16 parallel workers total)
         # to process user requests immediately without queue wait times!
         try:
             free_ram = get_free_ram_mb()
-            if free_ram > 5000 and self.active_count >= self.num_workers and self.active_count < 10:
+            if free_ram > 3500 and self.active_count >= self.num_workers and self.active_count < 16:
                 burst_id = 100 + self.active_count
                 asyncio.create_task(self._burst_worker(burst_id))
         except Exception:

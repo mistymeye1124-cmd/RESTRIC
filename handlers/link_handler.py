@@ -558,11 +558,13 @@ async def run_batch_harvest_pipeline(
             effective_res = current_settings.get("resolution", res_pref)
             if delivery_fmt != "audio" and effective_res.isdigit() and int(effective_res) < 1080 and original_path and original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm")):
                 scaled_path = f"{original_path}_scaled.mp4"
+                _est_rescale = max(20, int(os.path.getsize(original_path) / (1024 * 1024) * 0.35)) if os.path.exists(original_path) else 60
                 async with live_pulse(
                     s_msg,
                     f"🎬 {prefix_label}Optimizing Video Quality",
                     f"Re-encoding to {effective_res}p — FFmpeg ultra-fast preset",
                     start_pct=45.0, end_pct=75.0,
+                    estimated_seconds=_est_rescale,
                 ):
                     original_path = await compress_or_rescale_video(original_path, scaled_path, int(effective_res))
                 dl_res["file_path"] = original_path
@@ -581,11 +583,13 @@ async def run_batch_harvest_pipeline(
                 if is_prem and user_wm and user_wm.get("delogo_enabled"):
                     ext = os.path.splitext(original_path)[1] or ".mp4"
                     delogo_out = f"{original_path}_delogo{ext}"
+                    _est_delogo = max(15, int(os.path.getsize(original_path) / (1024 * 1024) * 0.2)) if os.path.exists(original_path) else 45
                     async with live_pulse(
                         s_msg,
                         f"🧹 {prefix_label}Erasing Original Watermark & Logo",
                         "Neural pixel interpolation — delogo engine active",
                         start_pct=50.0, end_pct=78.0,
+                        estimated_seconds=_est_delogo,
                     ):
                         delogo_res = await apply_video_delogo(original_path, delogo_out, user_wm)
                     if delogo_res and delogo_res != original_path and os.path.exists(delogo_res):
@@ -617,11 +621,14 @@ async def run_batch_harvest_pipeline(
                 elif global_wm and global_wm.get("enabled") and not is_prem:
                     has_actual_wm = True
 
+                # Estimate watermark time from file size (ultrafast preset: ~0.2s per MB)
+                _est_wm = max(15, int(os.path.getsize(original_path) / (1024 * 1024) * 0.20)) if os.path.exists(original_path) else 60
                 async with live_pulse(
                     s_msg,
                     f"🎬 {prefix_label}Applying Watermark & Branding",
                     _wm_subtitle,
                     start_pct=65.0, end_pct=93.0,
+                    estimated_seconds=_est_wm,
                 ):
                     final_path = await apply_dual_video_watermark(
                         input_path=original_path,
@@ -650,6 +657,7 @@ async def run_batch_harvest_pipeline(
                     "Stripping all metadata traces — zero digital footprint",
                     start_pct=93.0, end_pct=98.0,
                     interval=2.5,
+                    estimated_seconds=20,
                 ):
                     anonymized = await strip_video_metadata(original_path, clean_meta_path)
                 if anonymized and anonymized != original_path and os.path.exists(anonymized):

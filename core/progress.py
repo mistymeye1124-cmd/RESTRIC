@@ -257,54 +257,75 @@ async def live_pulse(
     start_pct: float = 60.0,
     end_pct: float = 95.0,
     interval: float = 3.0,
+    estimated_seconds: int = 60,
 ):
     """
-    Async context manager — runs an animated heartbeat task while a
-    blocking FFmpeg / CPU operation awaits in the event loop.
+    Async context manager — animated heartbeat during silent FFmpeg phases.
+
+    - Fires IMMEDIATELY at t=0 (no gap after download 100% card)
+    - Shows a visible countdown: "~45s remaining" ticking down every 3s
+    - Bar advances from start_pct -> end_pct over estimated_seconds
+    - FloodWait-aware: skips silently if Telegram rate-limits an edit
 
     Usage::
 
-        async with live_pulse(s_msg, "Applying Watermark", "Encoding..."):
+        async with live_pulse(s_msg, "Applying Watermark", "Encoding...",
+                              estimated_seconds=60):
             result = await apply_dual_video_watermark(...)
-
-    Updates the message every `interval` seconds so users never see a stall.
-    Bar advances from start_pct -> end_pct smoothly over 120 s max.
     """
     _stopped = asyncio.Event()
     _tick = [0]
     _start = time.time()
 
+    def _build_text(elapsed: float) -> str:
+        progress_range = end_pct - start_pct
+        # Bar advances over estimated_seconds; clamp at end_pct
+        pct = min(end_pct, start_pct + (progress_range * elapsed / max(estimated_seconds, 1)))
+        spin = _PULSE_ANIM[_tick[0] % len(_PULSE_ANIM)]
+        dots = _PULSE_DOTS[_tick[0] % len(_PULSE_DOTS)]
+        bar = generate_blocks(pct, total_blocks=10, filled_char="🟧", empty_char="⬜")
+        elapsed_str = format_duration(elapsed)
+
+        # Countdown: how many seconds remain before estimated completion
+        countdown_s = max(0, int(estimated_seconds - elapsed))
+        if countdown_s > 60:
+            countdown_str = f"~{countdown_s // 60}m {countdown_s % 60}s"
+        elif countdown_s > 0:
+            countdown_str = f"~{countdown_s}s"
+        else:
+            countdown_str = "finishing..."
+
+        sub = subtitle or "Processing - please wait..."
+
+        return (
+            f"{spin} **{title}**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 **Progress:**\n"
+            f"{bar}  **{pct:.0f}%** {spin}\n"
+            f"⏳ **Complete in:** `{countdown_str}` {dots}\n\n"
+            f"╭── 🎛️ **ENGINE STATUS** ────────────────\n"
+            f"│ ⏱️ **Running:** `{elapsed_str}` | 🔄 `Active`\n"
+            f"│ 🛡️ **Core:** `FFmpeg Ultra-Fast Encoder`\n"
+            f"╰────────────────────────────────────────╯\n"
+            f"⚡ _{sub}_"
+        )
+
     async def _pulse_loop():
+        # Fire IMMEDIATELY at tick 0 — closes the gap after download 100% card
         while not _stopped.is_set():
             try:
                 elapsed = time.time() - _start
-                progress_range = end_pct - start_pct
-                pct = min(end_pct, start_pct + (progress_range * elapsed / 120.0))
-                spin = _PULSE_ANIM[_tick[0] % len(_PULSE_ANIM)]
-                dots = _PULSE_DOTS[_tick[0] % len(_PULSE_DOTS)]
-                bar = generate_blocks(pct, total_blocks=10, filled_char="🟧", empty_char="⬜")
-                rem = max(0.0, 100.0 - pct)
-                elapsed_str = format_duration(elapsed)
-                sub = subtitle or "Processing - please wait..."
-
-                text = (
-                    f"{spin} **{title}**\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📊 **Progress:**\n"
-                    f"{bar}  **{pct:.0f}%** {spin}\n"
-                    f"⏳ **Remaining:** `{rem:.0f}% Left`\n\n"
-                    f"╭── 🎛️ **ENGINE STATUS** ────────────────\n"
-                    f"│ ⏱️ **Elapsed:** `{elapsed_str}` | 🔄 `Active{dots}`\n"
-                    f"│ 🛡️ **Core:** `FFmpeg Ultra-Fast Encoder`\n"
-                    f"╰────────────────────────────────────────╯\n"
-                    f"⚡ _{sub}_"
-                )
+                text = _build_text(elapsed)
                 try:
                     await status_message.edit_text(text)
                 except Exception:
-                    pass
+                    pass  # FloodWait / message not modified — skip silently
                 _tick[0] += 1
-                await asyncio.sleep(interval)
+                # Wait interval, but wake immediately if stopped
+                try:
+                    await asyncio.wait_for(_stopped.wait(), timeout=interval)
+                except asyncio.TimeoutError:
+                    pass
             except asyncio.CancelledError:
                 break
             except Exception:

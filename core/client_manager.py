@@ -219,7 +219,7 @@ async def load_bot_account_client(account_record: Dict[str, Any]) -> Optional[Cl
         "workers": 32,
         "ipv6": False,
         "no_updates": True,
-        "sleep_threshold": 5,
+        "sleep_threshold": 60,
         **fingerprint,
     }
     if proxy:
@@ -745,7 +745,7 @@ async def initialize_admin_pool(sessions: List[str]):
                 "workers": 32,
                 "ipv6": False,
                 "no_updates": True,
-                "sleep_threshold": 5,
+                "sleep_threshold": 60,
                 **fingerprint,
             }
             if proxy:

@@ -982,50 +982,15 @@ async def download_restricted_media(
                     except Exception:
                         pass
 
-                # High-speed Turbo Parallel MTProto Downloader (concurrent MTProto workers, pipelining)
-                media_obj = (
-                    source_msg.video
-                    or source_msg.document
-                    or source_msg.audio
-                    or source_msg.video_note
+                # High-speed native Pyrogram download with streaming chunk pipeline
+                downloaded_file = await asyncio.wait_for(
+                    current_client.download_media(
+                        message=source_msg,
+                        file_name=target_file_path,
+                        progress=pyrogram_progress,
+                    ),
+                    timeout=900.0,
                 )
-                media_size = getattr(media_obj, "file_size", 0) if media_obj else 0
-                is_parallel_candidate = bool(media_obj and media_size >= 5 * 1024 * 1024)
-                if is_parallel_candidate:
-                    try:
-                        from core.parallel_downloader import turbo_parallel_download
-                        downloaded_file = await turbo_parallel_download(
-                            client=current_client,
-                            msg=source_msg,
-                            out_path=target_file_path,
-                            progress_callback=pyrogram_progress,
-                            job_id=job_id,
-                            active_jobs=active_jobs,
-                        )
-                    except Exception as turbo_err:
-                        logger.warning("[TurboDownloader] Parallel stream failed (%s), falling back to standard download_media", turbo_err)
-                        if os.path.exists(target_file_path):
-                            try:
-                                os.remove(target_file_path)
-                            except Exception:
-                                pass
-                        downloaded_file = await asyncio.wait_for(
-                            current_client.download_media(
-                                message=source_msg,
-                                file_name=target_file_path,
-                                progress=pyrogram_progress,
-                            ),
-                            timeout=600.0,
-                        )
-                else:
-                    downloaded_file = await asyncio.wait_for(
-                        current_client.download_media(
-                            message=source_msg,
-                            file_name=target_file_path,
-                            progress=pyrogram_progress,
-                        ),
-                        timeout=600.0,
-                    )
                 limiter.on_success()
                 try:
                     cname = getattr(current_client, "name", "")
@@ -1036,6 +1001,7 @@ async def download_restricted_media(
                 except Exception:
                     pass
                 break
+
 
             except FloodWait as e:
                 wait_sec = e.value + random_extra(5, 10)
@@ -1107,13 +1073,29 @@ async def download_restricted_media(
             except Exception as e:
                 if active_jobs.get(job_id, {}).get("cancelled"):
                     break
-                logger.error("[Download] Download attempt %d failed: %s", dl_attempt, e)
+                logger.error("[Download] Download attempt %d failed on client %s: %s", dl_attempt, getattr(current_client, "name", "client"), e)
+                # Auto hot-swap to another healthy pool account
+                alt_client = get_next_available_pool_client(exclude_client=current_client)
+                if alt_client:
+                    logger.info("[Download] Error encountered — hot-swapping to backup client %s", alt_client.name)
+                    current_client = alt_client
+                    session_key = _session_key_from_client(current_client)
+                    limiter = rate_registry.get_sync(session_key)
+                    active_jobs[job_id]["current_client"] = current_client
+                    try:
+                        await status_message.edit_text("🔄 Switching to backup session to continue download...")
+                    except Exception:
+                        pass
+                    await asyncio.sleep(1)
+                    continue
+
                 if dl_attempt < 3:
-                    await asyncio.sleep(3 * dl_attempt)
+                    await asyncio.sleep(2 * dl_attempt)
                 else:
                     await status_message.edit_text(f"❌ Download failed after {dl_attempt} attempts: {str(e)}")
                     active_jobs.pop(job_id, None)
                     return None
+
 
         if active_jobs.get(job_id, {}).get("cancelled"):
             if downloaded_file and os.path.exists(str(downloaded_file)):

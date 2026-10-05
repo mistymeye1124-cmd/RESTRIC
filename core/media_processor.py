@@ -167,11 +167,15 @@ async def strip_video_metadata(input_path: str, output_path: str) -> str:
 strip_media_metadata = strip_video_metadata
 
 
+# Global semaphore to strictly limit concurrent FFmpeg CPU hogs on VPS
+_cpu_semaphore = asyncio.Semaphore(2)
+
 async def compress_or_rescale_video(
     input_path: str,
     output_path: str,
     target_height: int = 720,
     timeout: Optional[float] = None,
+    source_height: int = 0,
 ) -> str:
     """
     Compresses or rescales video to target resolution (e.g. 720p or 480p) using ultrafast H.264.
@@ -184,9 +188,12 @@ async def compress_or_rescale_video(
     if not target_height or target_height >= 1080:
         return input_path
 
-    # Check source video height first!
-    meta = inspect_video(input_path)
-    current_height = meta.get("height", 0)
+    # Use provided source_height if available to bypass cv2 inspection
+    current_height = source_height
+    if current_height <= 0:
+        meta = await inspect_video_async(input_path)
+        current_height = meta.get("height", 0)
+        
     # If source video is already smaller than or equal to target height, DO NOT TRANSCODE!
     if 0 < current_height <= target_height:
         return input_path
@@ -219,28 +226,29 @@ async def compress_or_rescale_video(
     ]
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            await asyncio.wait_for(proc.communicate(), timeout=effective_timeout)
-        except asyncio.TimeoutError:
+        async with _cpu_semaphore:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
             try:
-                proc.kill()
-            except Exception:
-                pass
-            print(f"[!] Video rescale reached {effective_timeout:.0f}s deadline for {input_path}. Falling back to original.")
-            return input_path
+                await asyncio.wait_for(proc.communicate(), timeout=effective_timeout)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                print(f"[!] Video rescale reached {effective_timeout:.0f}s deadline for {input_path}. Falling back to original.")
+                return input_path
 
-        if proc.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
-            try:
-                if input_path != output_path and os.path.exists(input_path):
-                    os.remove(input_path)
-            except Exception:
-                pass
-            return output_path
+            if proc.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
+                try:
+                    if input_path != output_path and os.path.exists(input_path):
+                        os.remove(input_path)
+                except Exception:
+                    pass
+                return output_path
     except Exception as e:
         print(f"[!] Fast compression error: {e}")
 
@@ -263,28 +271,29 @@ async def compress_or_rescale_video(
         output_path,
     ]
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd_fallback,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            await asyncio.wait_for(proc.communicate(), timeout=fallback_timeout)
-        except asyncio.TimeoutError:
+        async with _cpu_semaphore:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd_fallback,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
             try:
-                proc.kill()
-            except Exception:
-                pass
-            print(f"[!] Video rescale fallback reached {fallback_timeout:.0f}s deadline. Falling back to original.")
-            return input_path
+                await asyncio.wait_for(proc.communicate(), timeout=fallback_timeout)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                print(f"[!] Video rescale fallback reached {fallback_timeout:.0f}s deadline. Falling back to original.")
+                return input_path
 
-        if proc.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
-            try:
-                if input_path != output_path and os.path.exists(input_path):
-                    os.remove(input_path)
-            except Exception:
-                pass
-            return output_path
+            if proc.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
+                try:
+                    if input_path != output_path and os.path.exists(input_path):
+                        os.remove(input_path)
+                except Exception:
+                    pass
+                return output_path
     except Exception as e:
         print(f"[!] Fallback compression error: {e}")
 

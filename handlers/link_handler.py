@@ -611,7 +611,9 @@ async def run_batch_harvest_pipeline(
                     f_size_mb_pre = (os.path.getsize(original_path) / (1024 * 1024)) if os.path.exists(original_path) else 0
                     if f_size_mb_pre <= 150:
                         scaled_path = f"{original_path}_scaled.mp4"
-                        _est_rescale = min(20, max(8, int(f_size_mb_pre * 0.12)))
+                        # Increase timeout to allow FFmpeg time to finish on typical VPS CPU (up to 45 seconds for 150MB)
+                        _est_rescale = min(45, max(15, int(f_size_mb_pre * 0.3)))
+                        s_height = int(dl_res.get("media_height", 0))
                         async with live_pulse(
                             s_msg,
                             f"🎬 {prefix_label}Optimizing Video Quality",
@@ -619,7 +621,13 @@ async def run_batch_harvest_pipeline(
                             start_pct=45.0, end_pct=75.0,
                             estimated_seconds=_est_rescale,
                         ):
-                            original_path = await compress_or_rescale_video(original_path, scaled_path, int(effective_res), timeout=_est_rescale)
+                            original_path = await compress_or_rescale_video(
+                                original_path, 
+                                scaled_path, 
+                                int(effective_res), 
+                                timeout=_est_rescale,
+                                source_height=s_height
+                            )
                         dl_res["file_path"] = original_path
 
                 # Step C: 100% Watermark Removal & Dual-Layer Branding Engine

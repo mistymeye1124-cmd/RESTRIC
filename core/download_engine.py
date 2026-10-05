@@ -49,7 +49,7 @@ from pyrogram.storage.sqlite_storage import SQLiteStorage
 from pyrogram.parser import Parser
 
 from telethon import TelegramClient
-from telethon.sessions import MemorySession
+from telethon.sessions import StringSession
 from telethon.crypto import AuthKey as TeleAuthKey
 from telethon.extensions import markdown as tele_md
 from telethon.tl.types import (
@@ -131,7 +131,7 @@ _TELE_DC_IPS = {
     1: "149.154.175.53",
     2: "149.154.167.51",
     3: "149.154.175.100",
-    4: "149.154.167.92",
+    4: "149.154.167.91",
     5: "91.108.56.130",
 }
 
@@ -147,9 +147,10 @@ def _pyro_session_to_telethon(pyro_b64: str) -> str:
     raw = base64.urlsafe_b64decode(pyro_b64 + "=" * (-len(pyro_b64) % 4))
     dc_id = raw[0]
     auth_key = raw[6:262]  # 256-byte auth key
-    ip_packed = ipaddress.ip_address(_TELE_DC_IPS[dc_id]).packed  # 4 bytes for IPv4
+    dc_ip = _TELE_DC_IPS.get(dc_id, "149.154.167.51")
+    ip_packed = ipaddress.ip_address(dc_ip).packed  # 4 bytes for IPv4
     packed = struct.pack(f">B{len(ip_packed)}sH256s", dc_id, ip_packed, 443, auth_key)
-    return "1" + base64.urlsafe_b64encode(packed).decode().rstrip("=")
+    return "1" + StringSession.encode(packed)
 
 
 def extract_formatted_text(msg) -> str:
@@ -256,25 +257,18 @@ async def _telethon_fallback_download(
     Uses Telethon (MTProto Layer 229) to download media with turbo-speed 1MB buffered streaming.
     Bypasses Pyrogram MessageMediaUnsupported on newer / edited Telegram posts.
     """
+    client = None
     try:
-        raw_b64 = pyro_session_str.strip()
-        raw = base64.urlsafe_b64decode(raw_b64 + "=" * (-len(raw_b64) % 4))
-        dc_id = raw[0]
-        auth_key_bytes = raw[6:262]
-
-        session = MemorySession()
-        session.set_dc(dc_id, _TELE_DC_IPS.get(dc_id, "91.108.56.130"), 443)
-        session.auth_key = TeleAuthKey(auth_key_bytes)
-
+        tele_str = _pyro_session_to_telethon(pyro_session_str)
         client = TelegramClient(
-            session,
+            StringSession(tele_str),
             int(API_ID),
             API_HASH,
+            receive_updates=False,
         )
         await client.connect()
         if not await client.is_user_authorized():
             logger.error("[TelethonFallback] Session not authorized after conversion")
-            await client.disconnect()
             return None
 
         # VIP Protection Gate inside Telethon Engine
@@ -290,13 +284,11 @@ async def _telethon_fallback_download(
             try:
                 await _check_vip_channel_access(user_id, chat_id, title=ch_title, username=ch_uname)
             except PermissionError:
-                await client.disconnect()
                 raise
 
         msg = await client.get_messages(chat_id, ids=message_id)
         if msg is None or msg.media is None:
             logger.warning("[TelethonFallback] Message %d has no media even in Telethon", message_id)
-            await client.disconnect()
             return None
 
         # Determine safe file extension and metadata from Telethon document attributes
@@ -352,9 +344,8 @@ async def _telethon_fallback_download(
                 _last_cb_time[0] = now
 
         logger.info(
-            "[TelethonFallback] Turbo-downloading msg %d via Telethon (DC%d, %.1f MB)",
+            "[TelethonFallback] Turbo-downloading msg %d via Telethon (%.1f MB)",
             message_id,
-            dc_id,
             total_size / (1024 * 1024) if total_size else 0,
         )
         os.makedirs(os.path.dirname(out_path) if os.path.dirname(out_path) else ".", exist_ok=True)
@@ -384,8 +375,6 @@ async def _telethon_fallback_download(
             if result_path and os.path.exists(str(result_path)) and os.path.getsize(str(result_path)) > 0:
                 download_ok = True
 
-        await client.disconnect()
-
         if download_ok and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
             logger.info("[TelethonFallback] ✅ Downloaded %s (%d bytes)", out_path, os.path.getsize(out_path))
             return {
@@ -405,6 +394,12 @@ async def _telethon_fallback_download(
     except Exception as e:
         logger.error("[TelethonFallback] Exception: %s", e)
         return None
+    finally:
+        if client:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
 
 
 # Active job tracker for handling cancellation and alert popups
@@ -536,7 +531,7 @@ async def _safe_get_messages(
                 count = 0
                 async for dialog in client.get_dialogs(limit=250):
                     count += 1
-                    if dialog.chat:
+                    if dialog and getattr(dialog, "chat", None):
                         d_id = dialog.chat.id
                         d_raw = None
                         try:
@@ -640,12 +635,7 @@ async def download_restricted_media(
     async def _progress_callback(current: int, total: int):
         nonlocal _last_edit_task
         if active_jobs.get(job_id, {}).get("cancelled"):
-            active_client = active_jobs.get(job_id, {}).get("current_client", current_client)
-            try:
-                active_client.stop_transmission()
-            except Exception:
-                pass
-            return
+            raise pyrogram.StopTransmission
 
         should_edit, card_text = tracker.update(current, total)
         if should_edit:
@@ -830,7 +820,6 @@ async def download_restricted_media(
                 or getattr(source_msg.web_page, "document", None)
                 or getattr(source_msg.web_page, "photo", None)
             ))
-            or (getattr(source_msg, "media", None) is not None)
         )
 
         # ── Telethon Fallback for Layer 170+ / Edited Media ────────────────────
@@ -1112,13 +1101,16 @@ async def download_restricted_media(
                     try:
                         from core.parallel_downloader import turbo_parallel_download
                         logger.info("[DownloadEngine] Attempting Turbo Parallel download for %d MB file...", media_file_size // (1024 * 1024))
-                        downloaded_file = await turbo_parallel_download(
-                            client=current_client,
-                            msg=source_msg,
-                            out_path=target_file_path,
-                            progress_callback=pyrogram_progress,
-                            job_id=job_id,
-                            active_jobs=active_jobs,
+                        downloaded_file = await asyncio.wait_for(
+                            turbo_parallel_download(
+                                client=current_client,
+                                msg=source_msg,
+                                out_path=target_file_path,
+                                progress_callback=pyrogram_progress,
+                                job_id=job_id,
+                                active_jobs=active_jobs,
+                            ),
+                            timeout=600.0,
                         )
                         if downloaded_file and os.path.exists(str(downloaded_file)) and os.path.getsize(str(downloaded_file)) > 0:
                             limiter.on_success()
@@ -1134,6 +1126,8 @@ async def download_restricted_media(
                 dl_done_event = asyncio.Event()
 
                 async def _stall_safe_progress(current: int, total: int):
+                    if active_jobs and job_id and active_jobs.get(job_id, {}).get("cancelled"):
+                        raise pyrogram.StopTransmission
                     last_progress_time[0] = time.time()
                     last_rx_bytes[0] = current
                     await pyrogram_progress(current, total)

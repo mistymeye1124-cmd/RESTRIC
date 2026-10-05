@@ -142,28 +142,28 @@ async def turbo_parallel_download(
         auth_key = await client.storage.auth_key()
         exported_auth = None
     else:
-        auth_key = await Auth(client, dc_id, is_test).create()
-        exported_auth = await client.invoke(
+        auth_key = await asyncio.wait_for(Auth(client, dc_id, is_test).create(), timeout=12.0)
+        exported_auth = await asyncio.wait_for(client.invoke(
             raw.functions.auth.ExportAuthorization(dc_id=dc_id)
-        )
+        ), timeout=12.0)
 
     # 2. Spin up parallel MTProto media sessions
     sessions: List[Session] = [
         Session(client, dc_id, auth_key, is_test, is_media=True)
         for _ in range(num_workers)
     ]
-    await asyncio.gather(*[s.start() for s in sessions])
+    await asyncio.wait_for(asyncio.gather(*[s.start() for s in sessions]), timeout=15.0)
 
     # Import authorization on target DC across all sessions if needed
     if exported_auth and sessions:
         for s in sessions:
             try:
-                await s.invoke(
+                await asyncio.wait_for(s.invoke(
                     raw.functions.auth.ImportAuthorization(
                         id=exported_auth.id,
                         bytes=exported_auth.bytes
                     )
-                )
+                ), timeout=8.0)
             except Exception as imp_err:
                 logger.debug("[TurboParallel] ImportAuthorization on DC %d: %s", dc_id, imp_err)
 
@@ -347,12 +347,12 @@ async def turbo_parallel_download(
             await asyncio.sleep(1.0)
             if downloaded_bytes >= total_size or abort_event.is_set() or completed_event.is_set():
                 break
-            if time.time() - last_progress_time > 25.0:
+            if time.time() - last_progress_time > 20.0:
                 logger.warning(
-                    "[TurboDownloader] Stall detected! No bytes received for 25.0s (transferred: %d/%d). Auto-recovering to fallback...",
+                    "[TurboDownloader] Stall detected! No bytes received for 20.0s (transferred: %d/%d). Auto-recovering to fallback...",
                     downloaded_bytes, total_size
                 )
-                abort_reason = "Stall detected (no bytes for 25s)"
+                abort_reason = "Stall detected (no bytes for 20s)"
                 abort_event.set()
                 for w in workers:
                     w.cancel()
@@ -378,7 +378,7 @@ async def turbo_parallel_download(
 
         for s in sessions:
             try:
-                await s.stop()
+                await asyncio.wait_for(s.stop(), timeout=3.0)
             except Exception:
                 pass
 

@@ -206,11 +206,11 @@ class ProgressTracker:
         is_first_chunk = (self.last_update_time == 0.0)
         is_done = (self.current_bytes >= self.total_bytes)
 
-        # Anti-Flood Protection: Enforce strict 2.0s floor between edits
+        # Anti-Flood Protection: Enforce strict 3.2s floor between edits to prevent Telegram FloodWait
         should_update = (
             is_first_chunk
             or is_done
-            or (elapsed_since_edit >= max(_PROG_INTERVAL, 2.0))
+            or (elapsed_since_edit >= max(_PROG_INTERVAL, 3.2))
         )
         if should_update:
             self.last_update_time = now

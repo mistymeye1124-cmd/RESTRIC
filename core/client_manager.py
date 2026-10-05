@@ -519,7 +519,7 @@ async def resolve_chat_access(client: Client, chat_id: Any) -> bool:
         count = 0
         async for dialog in client.get_dialogs(limit=50):
             count += 1
-            if dialog.chat:
+            if dialog and getattr(dialog, "chat", None):
                 d_id = dialog.chat.id
                 d_raw = None
                 try:

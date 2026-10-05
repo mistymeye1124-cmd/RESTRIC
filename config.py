@@ -100,8 +100,8 @@ MIN_FREE_RAM_MB = int(os.getenv("MIN_FREE_RAM_MB", "2500"))          # Minimum 2
 AUTO_CLEAN_FILE_MAX_AGE_SEC = int(os.getenv("AUTO_CLEAN_FILE_MAX_AGE_SEC", "120")) # 2m max file age in downloads
 
 # Throttle interval in seconds for editing Telegram progress messages (prevents FloodWait)
-# 2.5s is the sweet spot: snappy UI without hitting Telegram's edit rate-limit
-PROGRESS_UPDATE_INTERVAL = 2.5
+# 3.5s is the Telegram-compliant sweet spot: snappy UI without triggering messages.EditMessage FloodWait
+PROGRESS_UPDATE_INTERVAL = 3.5
 
 # Web Studio Dashboard & Mini App URL
 WEB_DASHBOARD_URL = os.getenv("WEB_DASHBOARD_URL", "http://127.0.0.1:8888")

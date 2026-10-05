@@ -377,11 +377,7 @@ async def upload_unlocked_media(
                 async def upload_progress(current: int, total: int):
                     nonlocal _last_upload_edit_task
                     if active_jobs.get(job_id, {}).get("cancelled"):
-                        try:
-                            bot_client.stop_transmission()
-                        except Exception:
-                            pass
-                        return
+                        raise pyrogram.StopTransmission
 
                     should_edit, card_text = tracker.update(current, total)
                     is_finishing = (current >= total) or (total > 0 and current / total >= 0.98)

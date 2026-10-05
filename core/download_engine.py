@@ -23,7 +23,7 @@ import random
 import struct
 import base64
 import ipaddress
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Union, Tuple
 
 from pyrogram import Client
 from pyrogram.types import Message

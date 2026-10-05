@@ -394,7 +394,14 @@ async def apply_video_watermark(
                 dur_limit = float(watermark_config.get("duration_limit") or 0)
                 logo_overlay_clause = f"{logo_coord}:enable='between(t,0,{dur_limit:.2f})'" if dur_limit > 0 else logo_coord
                 # Auto-scale logo up to max 18% width and apply alpha
-                logo_filter = f"[1:v]scale='min(iw,0.18*main_w)':-1,format=rgba,colorchannelmixer=aa={opacity:.2f}[logo]"
+                try:
+                    from core.media_processor import inspect_video
+                    v_meta = inspect_video(input_path)
+                    vid_w = int(v_meta.get("width") or 1280)
+                except Exception:
+                    vid_w = 1280
+                target_logo_w = max(40, min(int(vid_w * 0.18), 350))
+                logo_filter = f"[1:v]scale={target_logo_w}:-1,format=rgba,colorchannelmixer=aa={opacity:.2f}[logo]"
                 if vf_str:
                     complex_filter = f"[0:v]{vf_str}[v1];{logo_filter};[v1][logo]{logo_overlay_clause}[outv]"
                 else:

@@ -1382,9 +1382,12 @@ async def state_input_interceptor(client: Client, message: Message):
         return
 
 
-@Client.on_message((filters.photo | (filters.document & filters.private)), group=-1)
+@Client.on_message((filters.photo | filters.document) & filters.private, group=-1)
 async def logo_media_interceptor(client: Client, message: Message):
     """Captures uploaded PNG/JPG logos when in waiting_user_logo state."""
+    if not message.from_user:
+        message.continue_propagation()
+        return
     user_id = message.from_user.id
     state_info = get_user_state(user_id)
     if not state_info or state_info.get("state") != "waiting_user_logo":
@@ -1414,6 +1417,9 @@ async def logo_media_interceptor(client: Client, message: Message):
 @Client.on_message((filters.video | filters.document | filters.animation) & filters.private, group=-1)
 async def intro_outro_media_interceptor(client: Client, message: Message):
     """Captures uploaded Intro & Outro bumper video clips."""
+    if not message.from_user:
+        message.continue_propagation()
+        return
     user_id = message.from_user.id
     state_info = get_user_state(user_id)
     if not state_info:

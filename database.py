@@ -1555,6 +1555,8 @@ class Database:
             rows = await cur.fetchall()
             return [{"admin_id": r[0], "added_by": r[1], "title": r[2], "created_at": r[3]} for r in rows]
 
+    get_all_admins = get_dynamic_admins
+
     async def add_dynamic_admin(self, admin_id: int, added_by: int = 0, title: str = "Co-Admin") -> bool:
         """Adds a new co-admin ID to the database."""
         async with aiosqlite.connect(self.db_file) as db:

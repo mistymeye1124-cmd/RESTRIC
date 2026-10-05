@@ -378,7 +378,7 @@ async def upload_unlocked_media(
                     nonlocal _last_upload_edit_task
                     if active_jobs.get(job_id, {}).get("cancelled"):
                         try:
-                            await bot_client.stop_transmission()
+                            bot_client.stop_transmission()
                         except Exception:
                             pass
                         return

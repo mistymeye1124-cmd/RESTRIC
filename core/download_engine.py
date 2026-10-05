@@ -270,7 +270,6 @@ async def _telethon_fallback_download(
             session,
             int(API_ID),
             API_HASH,
-            receive_updates=False,
         )
         await client.connect()
         if not await client.is_user_authorized():
@@ -643,7 +642,7 @@ async def download_restricted_media(
         if active_jobs.get(job_id, {}).get("cancelled"):
             active_client = active_jobs.get(job_id, {}).get("current_client", current_client)
             try:
-                await active_client.stop_transmission()
+                active_client.stop_transmission()
             except Exception:
                 pass
             return
@@ -1139,36 +1138,50 @@ async def download_restricted_media(
                     last_rx_bytes[0] = current
                     await pyrogram_progress(current, total)
 
+                dl_task = asyncio.create_task(
+                    current_client.download_media(
+                        message=source_msg,
+                        file_name=target_file_path,
+                        progress=_stall_safe_progress,
+                    )
+                )
+
                 async def _anti_stall_watchdog():
                     """Actively detects socket stalls and breaks out of hanging transmission within 20s."""
                     while not dl_done_event.is_set():
-                        await asyncio.sleep(2.5)
+                        await asyncio.sleep(2.0)
                         if dl_done_event.is_set():
+                            break
+                        if active_jobs and job_id and active_jobs.get(job_id, {}).get("cancelled"):
+                            logger.info("[Anti-Stall Guardian] Job %s was cancelled by user. Terminating download task.", job_id)
+                            dl_task.cancel()
                             break
                         elapsed = time.time() - last_progress_time[0]
                         if elapsed >= 20.0:
                             logger.warning(
-                                "[Anti-Stall Guardian] Zero bytes received for %.1fs (stuck at %d/%d). Terminating frozen socket...",
+                                "[Anti-Stall Guardian] Zero bytes received for %.1fs (stuck at %d/%d). Terminating frozen socket task...",
                                 elapsed,
                                 last_rx_bytes[0],
                                 media_file_size,
                             )
-                            try:
-                                await current_client.stop_transmission()
-                            except Exception:
-                                pass
+                            dl_task.cancel()
                             break
 
                 watchdog_task = asyncio.create_task(_anti_stall_watchdog())
                 try:
-                    downloaded_file = await asyncio.wait_for(
-                        current_client.download_media(
-                            message=source_msg,
-                            file_name=target_file_path,
-                            progress=_stall_safe_progress,
-                        ),
-                        timeout=900.0,
-                    )
+                    downloaded_file = await asyncio.wait_for(dl_task, timeout=900.0)
+                except asyncio.CancelledError:
+                    if active_jobs and job_id and active_jobs.get(job_id, {}).get("cancelled"):
+                        raise
+                    logger.warning("[Anti-Stall Guardian] Download stalled on TCP socket. Reconnecting with backup session...")
+                    _safe_remove(target_file_path)
+                    alt_client = get_next_available_pool_client(exclude_client=current_client)
+                    if alt_client:
+                        current_client = alt_client
+                        session_key = _session_key_from_client(current_client)
+                        limiter = rate_registry.get_sync(session_key)
+                        active_jobs[job_id]["current_client"] = current_client
+                    continue
                 finally:
                     dl_done_event.set()
                     watchdog_task.cancel()

@@ -976,11 +976,17 @@ async def download_restricted_media(
         # Determine explicit, robust target file path, extension, and original file name
         ext = ""
         original_file_name = None
+        media_duration = 0
+        media_width = 0
+        media_height = 0
 
         if source_msg.video:
             ext = ".mp4"
             media_type = "video"
             original_file_name = getattr(source_msg.video, "file_name", None)
+            media_duration = getattr(source_msg.video, "duration", 0) or 0
+            media_width = getattr(source_msg.video, "width", 0) or 0
+            media_height = getattr(source_msg.video, "height", 0) or 0
             if not original_file_name:
                 original_file_name = f"video_{message_id}.mp4"
         elif source_msg.photo:
@@ -991,6 +997,7 @@ async def download_restricted_media(
             ext = ".mp3"
             media_type = "audio"
             original_file_name = getattr(source_msg.audio, "file_name", None) or f"audio_{message_id}.mp3"
+            media_duration = getattr(source_msg.audio, "duration", 0) or 0
         elif source_msg.voice:
             ext = ".ogg"
             media_type = "voice"
@@ -999,10 +1006,14 @@ async def download_restricted_media(
             ext = ".mp4"
             media_type = "video_note"
             original_file_name = f"video_note_{message_id}.mp4"
+            media_duration = getattr(source_msg.video_note, "duration", 0) or 0
         elif source_msg.animation:
             ext = ".mp4"
             media_type = "animation"
             original_file_name = getattr(source_msg.animation, "file_name", None) or f"animation_{message_id}.mp4"
+            media_duration = getattr(source_msg.animation, "duration", 0) or 0
+            media_width = getattr(source_msg.animation, "width", 0) or 0
+            media_height = getattr(source_msg.animation, "height", 0) or 0
         elif source_msg.sticker:
             ext = ".webp"
             if getattr(source_msg.sticker, "is_animated", False):
@@ -1096,11 +1107,12 @@ async def download_restricted_media(
                 # Clean leftover partial temp file from aborted attempts
                 _safe_remove(target_file_path + ".temp", target_file_path)
 
-                # Engine 1: Turbo Parallel Multi-Stream for large files (>= 5MB)
-                if dl_attempt == 1 and media_file_size >= 5 * 1024 * 1024 and getattr(media_target, "file_id", None):
+                # Engine 1: Turbo Parallel Multi-Stream for media files (>= 2MB)
+                if dl_attempt == 1 and media_file_size >= 2 * 1024 * 1024 and getattr(media_target, "file_id", None):
                     try:
                         from core.parallel_downloader import turbo_parallel_download
                         logger.info("[DownloadEngine] Attempting Turbo Parallel download for %d MB file...", media_file_size // (1024 * 1024))
+                        turbo_timeout = max(600.0, (media_file_size / (1024 * 1024)) * 1.5 + 300.0)
                         downloaded_file = await asyncio.wait_for(
                             turbo_parallel_download(
                                 client=current_client,
@@ -1110,7 +1122,7 @@ async def download_restricted_media(
                                 job_id=job_id,
                                 active_jobs=active_jobs,
                             ),
-                            timeout=600.0,
+                            timeout=turbo_timeout,
                         )
                         if downloaded_file and os.path.exists(str(downloaded_file)) and os.path.getsize(str(downloaded_file)) > 0:
                             limiter.on_success()
@@ -1329,6 +1341,9 @@ async def download_restricted_media(
             "caption": caption,
             "media_type": media_type,
             "source_msg": source_msg,
+            "duration": media_duration,
+            "width": media_width,
+            "height": media_height,
         }
 
     except Exception as e:

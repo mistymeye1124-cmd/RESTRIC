@@ -22,11 +22,11 @@ class SessionRateLimiter:
     """
 
     # Minimum gap between successive API calls from the same session (seconds)
-    # Tuned: 0.9s is still human-paced enough to avoid bans, but 2x faster throughput
-    MIN_INTERVAL: float = 0.9
+    # Tuned: 0.35s is human-paced enough to avoid bans, but 2.5x faster throughput
+    MIN_INTERVAL: float = 0.35
 
     # Maximum extra random jitter added on top of MIN_INTERVAL
-    JITTER_MAX: float = 0.5
+    JITTER_MAX: float = 0.2
 
     # After QUARANTINE_THRESHOLD PEER_FLOODs, session is quarantined for QUARANTINE_SECONDS
     QUARANTINE_THRESHOLD: int = 3
@@ -78,7 +78,7 @@ class SessionRateLimiter:
 
         now = time.monotonic()
         elapsed = now - self._last_call_at
-        jitter = random.uniform(0.05, 0.15)  # minimal jitter — looks human, stays fast
+        jitter = random.uniform(0.02, 0.08)  # minimal jitter — looks human, stays fast
         required = self.MIN_INTERVAL + jitter
 
         if elapsed < required:

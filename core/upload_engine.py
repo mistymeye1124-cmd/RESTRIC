@@ -431,65 +431,63 @@ async def upload_unlocked_media(
                     or orig_lower.endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".m4v", ".3gp"))
                 )
     
+                # 1. Fetch user's custom studio thumbnail once if active and not in raw mode
+                custom_thumb = None
+                if not is_raw_mode and thumb_user_id:
+                    try:
+                        from database import db
+                        custom_thumb = await db.get_custom_thumbnail(thumb_user_id, check_enabled=True)
+                    except Exception as th_fetch_err:
+                        print(f"[!] Error fetching custom thumbnail: {th_fetch_err}")
+
+                # 2. Determine video metadata (duration, width, height) and thumbnail
+                v_duration = int(download_result.get("duration") or 0)
+                v_width = int(download_result.get("width") or 0)
+                v_height = int(download_result.get("height") or 0)
+
+                # If metadata is missing or partial, inspect video once
+                if is_video and (v_duration <= 0 or v_width <= 0 or v_height <= 0):
+                    meta = await inspect_video_async(part_file)
+                    v_duration = v_duration or int(meta.get("duration") or 0)
+                    v_width = v_width or int(meta.get("width") or 0)
+                    v_height = v_height or int(meta.get("height") or 0)
+
+                # 3. Extract auto thumbnail only if custom thumb is not available
+                valid_thumb = None
+                if custom_thumb and os.path.exists(custom_thumb) and os.path.getsize(custom_thumb) > 100:
+                    valid_thumb = custom_thumb
+                elif is_video:
+                    thumb_target = f"{part_file}_thumb.jpg"
+                    thumb_path = await extract_thumbnail_async(part_file, thumb_target, seek_seconds=5)
+                    if thumb_path and os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 100:
+                        valid_thumb = thumb_path
+
+                # 4. Normalize thumbnail dimensions to <= 320px once
+                safe_thumb_path = None
+                if valid_thumb and os.path.exists(valid_thumb):
+                    try:
+                        def _norm_thumb(src: str, dst: str):
+                            from PIL import Image
+                            with Image.open(src) as t_img:
+                                t_img = t_img.convert("RGB")
+                                t_img.thumbnail((320, 320), Image.Resampling.LANCZOS)
+                                t_img.save(dst, "JPEG", quality=90)
+                        safe_thumb_path = f"{valid_thumb}_norm.jpg"
+                        await asyncio.to_thread(_norm_thumb, valid_thumb, safe_thumb_path)
+                        if os.path.exists(safe_thumb_path) and os.path.getsize(safe_thumb_path) > 100:
+                            valid_thumb = safe_thumb_path
+                        else:
+                            safe_thumb_path = None
+                    except Exception as th_err:
+                        print(f"[!] Thumbnail normalization skipped: {th_err}")
+                        safe_thumb_path = None
+
                 # Retry loop with FloodWait auto-backoff
                 retry_count = 0
-                thumb_path = None
-                safe_thumb_path = None
-                custom_thumb = None
-                valid_thumb = None
                 while retry_count < 3:
                     try:
                         sent_msg = None
                         if is_video:
-                            meta = await inspect_video_async(part_file)
-                            thumb_target = f"{part_file}_thumb.jpg"
-                            thumb_path = await extract_thumbnail_async(part_file, thumb_target, seek_seconds=5)
-                            
-                            # Prioritize user's Custom Studio Thumbnail if configured, active, and not in Raw Mode
-                            custom_thumb = None
-                            if not is_raw_mode:
-                                try:
-                                    from database import db
-                                    if thumb_user_id:
-                                        custom_thumb = await db.get_custom_thumbnail(thumb_user_id, check_enabled=True)
-                                except Exception as th_fetch_err:
-                                    print(f"[!] Error fetching custom thumbnail: {th_fetch_err}")
-    
-                            valid_thumb = (
-                                custom_thumb
-                                if custom_thumb and os.path.exists(custom_thumb) and os.path.getsize(custom_thumb) > 100
-                                else (
-                                    thumb_path 
-                                    if thumb_path and os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 100 
-                                    else None
-                                )
-                            )
-                            
-                            # Normalize thumbnail dimensions to <= 320px for strict Telegram Bot API compliance
-                            # Offloaded to thread pool so PIL doesn't block the event loop
-                            if valid_thumb and os.path.exists(valid_thumb):
-                                try:
-                                    def _norm_thumb(src: str, dst: str):
-                                        from PIL import Image
-                                        with Image.open(src) as t_img:
-                                            t_img = t_img.convert("RGB")
-                                            t_img.thumbnail((320, 320), Image.Resampling.LANCZOS)
-                                            t_img.save(dst, "JPEG", quality=90)
-                                    safe_thumb_path = f"{valid_thumb}_norm.jpg"
-                                    await asyncio.to_thread(_norm_thumb, valid_thumb, safe_thumb_path)
-                                    if os.path.exists(safe_thumb_path) and os.path.getsize(safe_thumb_path) > 100:
-                                        valid_thumb = safe_thumb_path
-                                    else:
-                                        safe_thumb_path = None
-                                except Exception as th_err:
-                                    print(f"[!] Thumbnail normalization skipped: {th_err}")
-                                    safe_thumb_path = None
-                            
-                            # Pyrogram send_video requires INTEGER duration, width, height — NEVER None!
-                            v_duration = int(download_result.get("duration") or meta.get("duration") or 0)
-                            v_width = int(download_result.get("width") or meta.get("width") or 0)
-                            v_height = int(download_result.get("height") or meta.get("height") or 0)
-    
                             try:
                                 sent_msg = await bot_client.send_video(
                                     chat_id=target_chat_id,

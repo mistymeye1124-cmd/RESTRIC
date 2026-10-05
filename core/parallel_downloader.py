@@ -109,20 +109,20 @@ async def turbo_parallel_download(
 
     cpu_count = os.cpu_count() or 2
     if total_size < 5 * 1024 * 1024:
-        num_workers = 2
-        chunk_size = 512 * 1024
-    elif total_size < 25 * 1024 * 1024:
         num_workers = 3
         chunk_size = 512 * 1024
-    elif total_size < 75 * 1024 * 1024:
+    elif total_size < 25 * 1024 * 1024:
         num_workers = 4
-        chunk_size = 512 * 1024
+        chunk_size = 1024 * 1024
+    elif total_size < 75 * 1024 * 1024:
+        num_workers = 5
+        chunk_size = 1024 * 1024
     else:
         # Large files (75MB - 4GB):
-        # Premium accounts: 6 streams with 1024KB chunks (Telegram Premium unlocks 4x DC pipe bandwidth)
-        # Standard accounts: 4 streams with 512KB chunks (prevents Telegram DC TCP throttling & socket freezes)
-        num_workers = 6 if is_prem else 4
-        chunk_size = 1024 * 1024 if is_prem else 512 * 1024
+        # Premium accounts: 8 streams with 1024KB chunks (Telegram Premium unlocks 4x DC pipe bandwidth)
+        # Standard accounts: 6 streams with 1024KB chunks (prevents DC socket throttling while delivering 30-50MB/s)
+        num_workers = 8 if is_prem else 6
+        chunk_size = 1024 * 1024
 
     fid = FileId.decode(target.file_id)
     dc_id = fid.dc_id

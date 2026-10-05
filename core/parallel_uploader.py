@@ -86,20 +86,20 @@ async def _turbo_save_file_impl(
     # Concurrency is scaled through multiple independent MTProto media sessions.
     part_size = 512 * 1024
     if not is_big:
-        workers_count = 3
-    elif file_size < 20 * 1024 * 1024:
         workers_count = 4
+    elif file_size < 30 * 1024 * 1024:
+        workers_count = 5
     elif file_size < 100 * 1024 * 1024:
-        workers_count = 5 if not is_prem else 6
+        workers_count = 6 if not is_prem else 7
     else:
-        workers_count = 6 if not is_prem else 8
+        workers_count = 7 if not is_prem else 8
 
     file_total_parts = int(math.ceil(file_size / part_size))
     is_missing_part = file_id is not None
     file_id = file_id or client.rnd_id()
     md5_sum = md5() if not is_big and not is_missing_part else None
 
-    # 2. Spin up independent concurrent MTProto media sessions
+    # 2. Spin up independent concurrent MTProto media sessions with 12s timeout guard
     dc_id = await client.storage.dc_id()
     auth_key = await client.storage.auth_key()
     test_mode = await client.storage.test_mode()
@@ -108,10 +108,10 @@ async def _turbo_save_file_impl(
         Session(client, dc_id, auth_key, test_mode, is_media=True)
         for _ in range(workers_count)
     ]
-    await asyncio.gather(*[s.start() for s in sessions])
+    await asyncio.wait_for(asyncio.gather(*[s.start() for s in sessions]), timeout=12.0)
 
     # Deep async queue prevents disk I/O from stalling network sockets
-    queue: asyncio.Queue = asyncio.Queue(maxsize=workers_count * 4)
+    queue: asyncio.Queue = asyncio.Queue(maxsize=workers_count * 6)
 
     uploaded_bytes = 0
     last_progress_time = [0.0]
@@ -138,7 +138,7 @@ async def _turbo_save_file_impl(
 
             while retry < 3 and not error_event.is_set():
                 try:
-                    await asyncio.wait_for(sess.invoke(rpc), timeout=25.0)
+                    await asyncio.wait_for(sess.invoke(rpc), timeout=15.0)
                     success = True
                     break
                 except RPCError as rpc_err:
@@ -149,7 +149,7 @@ async def _turbo_save_file_impl(
                         await sess.restart()
                     except Exception:
                         pass
-                    await asyncio.sleep(0.5 * retry)
+                    await asyncio.sleep(0.3 * retry)
                 except Exception as ex:
                     last_err = ex
                     retry += 1
@@ -158,7 +158,7 @@ async def _turbo_save_file_impl(
                         await sess.restart()
                     except Exception:
                         pass
-                    await asyncio.sleep(0.5 * retry)
+                    await asyncio.sleep(0.3 * retry)
 
             if not success:
                 if last_err:
@@ -190,9 +190,8 @@ async def _turbo_save_file_impl(
                 except Exception:
                     pass
 
-            # Adaptive micro-pacing smooths out token-bucket consumption and prevents Telegram flood pauses
-            pacing = 0.012 if workers_count >= 6 else 0.008
-            await asyncio.sleep(pacing)
+            # Micro-yield ensures the asyncio loop services progress events without throttling network wire speed
+            await asyncio.sleep(0.001)
             queue.task_done()
 
     # Launch concurrent worker tasks
@@ -243,6 +242,8 @@ async def _turbo_save_file_impl(
             raise StopTransmission()
 
         # Wait for all chunks to be processed with zero-freeze timeout guard
+        join_start = time.time()
+        max_join_time = max(90.0, (file_size / (1024 * 1024)) * 3.0)
         while not error_event.is_set():
             if all(t.done() for t in tasks):
                 # All workers exited; break out immediately
@@ -251,6 +252,10 @@ async def _turbo_save_file_impl(
                 await asyncio.wait_for(queue.join(), timeout=0.5)
                 break
             except asyncio.TimeoutError:
+                if time.time() - join_start > max_join_time:
+                    logger.error("[TurboUploader] Upload timed out waiting for chunks to finish (waited %.1fs)", time.time() - join_start)
+                    error_event.set()
+                    break
                 continue
 
         if error_event.is_set():
@@ -295,8 +300,11 @@ async def _turbo_save_file_impl(
                 t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Gracefully stop all MTProto sessions
-        await asyncio.gather(*[s.stop() for s in sessions], return_exceptions=True)
+        # Gracefully stop all MTProto sessions with strict timeout
+        try:
+            await asyncio.wait_for(asyncio.gather(*[s.stop() for s in sessions], return_exceptions=True), timeout=4.0)
+        except Exception:
+            pass
 
         if isinstance(path, (str, PurePath)):
             try:

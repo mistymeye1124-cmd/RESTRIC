@@ -395,8 +395,8 @@ async def apply_video_watermark(
                 logo_overlay_clause = f"{logo_coord}:enable='between(t,0,{dur_limit:.2f})'" if dur_limit > 0 else logo_coord
                 # Auto-scale logo up to max 18% width and apply alpha
                 try:
-                    from core.media_processor import inspect_video
-                    v_meta = inspect_video(input_path)
+                    from core.media_processor import inspect_video_async
+                    v_meta = await inspect_video_async(input_path)
                     vid_w = int(v_meta.get("width") or 1280)
                 except Exception:
                     vid_w = 1280
@@ -429,20 +429,27 @@ async def apply_video_watermark(
             else:
                 effective_timeout = min(25.0, float(timeout))
 
+            from core.media_processor import _cpu_semaphore
             try:
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
                 try:
-                    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=effective_timeout)
-                except asyncio.TimeoutError:
-                    print(f"[!] Watermark burn reached strict {effective_timeout:.0f}s deadline for {input_path}. Terminating FFmpeg & proceeding immediately...")
-                    try:
-                        process.kill()
-                    except Exception:
-                        pass
+                    async with asyncio.timeout(2.0):
+                        async with _cpu_semaphore:
+                            process = await asyncio.create_subprocess_exec(
+                                *cmd,
+                                stdout=asyncio.subprocess.PIPE,
+                                stderr=asyncio.subprocess.PIPE,
+                            )
+                            try:
+                                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=effective_timeout)
+                            except asyncio.TimeoutError:
+                                print(f"[!] Watermark burn reached strict {effective_timeout:.0f}s deadline for {input_path}. Terminating FFmpeg & proceeding immediately...")
+                                try:
+                                    process.kill()
+                                except Exception:
+                                    pass
+                                return input_path
+                except (asyncio.TimeoutError, TimeoutError):
+                    print(f"[!] CPU busy. Bypassing FFmpeg Watermark queue for {input_path} to prevent stalling users.")
                     return input_path
 
                 if process.returncode != 0 or not os.path.exists(intermediate_output):
@@ -559,8 +566,8 @@ async def apply_dual_video_watermark(
     # Inspect video duration for half-video calculation
     v_duration = 0
     try:
-        from core.media_processor import inspect_video
-        meta = inspect_video(input_path)
+        from core.media_processor import inspect_video_async
+        meta = await inspect_video_async(input_path)
         v_duration = meta.get("duration", 0)
     except Exception:
         pass

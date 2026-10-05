@@ -502,6 +502,8 @@ async def run_batch_harvest_pipeline(
                 res_pref=res_pref,
                 batch_info=batch_label,
                 user_id=user_id,
+                candidate_ids=getattr(l_link, "candidate_ids", None),
+                topic_id=getattr(l_link, "topic_id", None),
             )
         except PermissionError as pe:
             if "PROTECTED_VIP_CHANNEL" in str(pe):
@@ -555,16 +557,16 @@ async def run_batch_harvest_pipeline(
                 delivered += 1
                 continue
 
+            is_vid_check = dl_res.get("media_type") == "video" or (
+                original_path and original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".flv"))
+            )
+            is_doc_check = dl_res.get("media_type") == "document" or (
+                original_path and original_path.lower().endswith((".pdf", ".doc", ".docx", ".zip", ".rar", ".txt", ".apk"))
+            )
+
             # Batch Content Filter Gate (Only filters during bulk batch downloads)
             media_filt = user_settings.get("media_filter", "all")
             if total > 1 and media_filt != "all":
-                is_vid_check = dl_res.get("media_type") == "video" or (
-                    original_path and original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts"))
-                )
-                is_doc_check = dl_res.get("media_type") == "document" or (
-                    original_path and original_path.lower().endswith((".pdf", ".doc", ".docx", ".zip", ".rar", ".txt"))
-                )
-
                 if media_filt == "video" and not is_vid_check:
                     skipped += 1
                     continue
@@ -803,28 +805,40 @@ async def run_batch_harvest_pipeline(
                 await db.refund_quota(user_id)
             except Exception:
                 pass
-            try:
-                cur_text = getattr(s_msg, "text", "") or ""
-                suppress_keywords = [
-                    "CONTENT PROTECTED", "UNAUTHORIZED", "Could not retrieve", "Access Denied",
-                    "Empty or Deleted", "empty", "Switching", "Downloading", "Failed", "Error", "Exception"
-                ]
-                if not any(k in cur_text for k in suppress_keywords):
-                    has_session = bool(await db.get_session(user_id))
-                    if has_session:
-                        await s_msg.edit_text(
-                            "⚠️ **Non-Media or Deleted Message**\n\n"
-                            "The requested message does not contain any downloadable video or file (it may have been deleted by the channel owner or is an empty post).\n\n"
-                            "👉 **Please send the link of an actual video post in the channel (e.g. Message #17, #18, #19, #20).**"
-                        )
-                    else:
-                        await s_msg.edit_text(
-                            "⚠️ **Content Unavailable or Non-Media**\n\n"
-                            "The requested message does not contain downloadable media, "
-                            "has been deleted, or requires your account to be joined to that channel (`/login`)."
-                        )
-            except Exception:
-                pass
+            # Prevent overwriting if download_engine already edited status_message with exact details
+            is_final_already = False
+            for jid in (item_job_id, b_job_id):
+                if active_jobs.get(jid, {}).get("final_status_set"):
+                    is_final_already = True
+                    break
+            if not is_final_already:
+                try:
+                    cur_text = getattr(s_msg, "text", "") or ""
+                    suppress_keywords = [
+                        "CONTENT PROTECTED", "UNAUTHORIZED", "Could not retrieve", "Access Denied",
+                        "Empty or Deleted", "empty", "Switching", "Downloading", "Failed", "Error", "Exception",
+                        "System Event", "Locked", "Rate-limit", "rate-limit"
+                    ]
+                    if not any(k.lower() in cur_text.lower() for k in suppress_keywords):
+                        has_session = bool(await db.get_session(user_id))
+                        target_mid = getattr(links_list[0], "message_id", "Target") if links_list else "Target"
+                        target_cid = getattr(links_list[0], "chat_identifier", "Channel") if links_list else "Channel"
+                        if has_session:
+                            await s_msg.edit_text(
+                                "⚠️ **Message Could Not Be Retrieved**\n\n"
+                                f"Message `#{target_mid}` could not be retrieved from `{target_cid}`.\n\n"
+                                "• If this is a private channel, verify your connected account is an active member.\n"
+                                "• The post may have been deleted or is inside a topic/discussion thread.\n"
+                                "• Try sending the direct post link or topic post number."
+                            )
+                        else:
+                            await s_msg.edit_text(
+                                "⚠️ **Content Unavailable or Requires Login**\n\n"
+                                "The requested message could not be retrieved.\n"
+                                "If this is a private channel, connect your Telegram account via `/login` to access it."
+                            )
+                except Exception:
+                    pass
     active_jobs.pop(b_job_id, None)
     try:
         from core.storage_shield import cleanup_job_files

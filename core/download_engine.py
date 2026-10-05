@@ -427,11 +427,11 @@ async def _safe_get_messages(
     chat_id: Any,
     message_id: int,
     session_key: str,
-    max_retries: int = 4,
+    max_retries: int = 3,
 ) -> Optional[Message]:
     """
     Wraps client.get_messages with FLOOD_WAIT auto-sleep,
-    PEER_FLOOD quarantine, and session-error detection.
+    PEER_FLOOD quarantine, session-error detection, and deep peer resolution.
     """
     limiter = rate_registry.get_sync(session_key)
 
@@ -441,24 +441,33 @@ async def _safe_get_messages(
             logger.warning("[Download] Session %s quarantined — waiting %.0fs", session_key, wait_sec)
             await asyncio.sleep(min(wait_sec, 10))
         elif attempt > 1:
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.4)
 
         try:
             msg = await asyncio.wait_for(
                 client.get_messages(chat_id=chat_id, message_ids=message_id),
-                timeout=2.5,
+                timeout=15.0,
             )
-            limiter.on_success()
-            return msg
+            if msg and getattr(msg, "empty", False):
+                logger.info("[Download] Message %s in %s returned empty=True", message_id, chat_id)
+                return None
+            if msg:
+                limiter.on_success()
+                return msg
 
         except (asyncio.TimeoutError, TimeoutError):
             logger.warning(
-                "[Download] get_messages timed out on %s (attempt %d/%d) — MTProto Layer 170+ detected",
+                "[Download] get_messages timed out on %s (attempt %d/%d for msg %s in %s)",
                 session_key,
                 attempt,
                 max_retries,
+                message_id,
+                chat_id,
             )
-            return None
+            if attempt == max_retries:
+                return None
+            await asyncio.sleep(1.0)
+            continue
 
         except FloodWait as e:
             wait_sec = e.value + random_extra(4, 8)
@@ -503,17 +512,17 @@ async def _safe_get_messages(
             return None
 
         except (ChannelInvalid, PeerIdInvalid, KeyError, ValueError) as e:
-            logger.warning("[Download] Peer %s not resolved yet (%s). Direct resolving...", chat_id, e)
+            logger.warning("[Download] Peer %s not resolved yet (%s). Deep resolving...", chat_id, e)
             try:
                 try:
-                    await asyncio.wait_for(client.resolve_peer(chat_id), timeout=2.0)
+                    await asyncio.wait_for(client.resolve_peer(chat_id), timeout=8.0)
                 except Exception:
                     pass
                 msg = await asyncio.wait_for(
                     client.get_messages(chat_id=chat_id, message_ids=message_id),
-                    timeout=2.0,
+                    timeout=8.0,
                 )
-                if msg:
+                if msg and not getattr(msg, "empty", False):
                     limiter.on_success()
                     return msg
             except Exception:
@@ -526,7 +535,7 @@ async def _safe_get_messages(
                 except Exception:
                     pass
                 count = 0
-                async for dialog in client.get_dialogs(limit=50):
+                async for dialog in client.get_dialogs(limit=250):
                     count += 1
                     if dialog.chat:
                         d_id = dialog.chat.id
@@ -537,18 +546,19 @@ async def _safe_get_messages(
                             pass
                         if d_id == chat_id or (target_raw is not None and d_raw == target_raw):
                             break
-                    if count % 10 == 0:
+                    if count % 20 == 0:
                         await asyncio.sleep(0.05)
                 msg = await asyncio.wait_for(
                     client.get_messages(chat_id=chat_id, message_ids=message_id),
-                    timeout=2.0,
+                    timeout=10.0,
                 )
-                if msg:
+                if msg and not getattr(msg, "empty", False):
                     limiter.on_success()
                     return msg
             except Exception as e2:
                 logger.error("[Download] Dialog sync retry failed: %s", e2)
-                return None
+                if attempt == max_retries:
+                    return None
 
         except (ChannelPrivate, ChatForbidden, ChatAdminRequired) as e:
             logger.warning("[Download] Access denied to %s: %s", chat_id, e)
@@ -582,6 +592,8 @@ async def download_restricted_media(
     res_pref: str = "original",
     batch_info: Optional[str] = None,
     user_id: Optional[int] = None,
+    candidate_ids: Optional[List[int]] = None,
+    topic_id: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Downloads or extracts content from restricted Telegram message with live progress UI.
@@ -678,21 +690,39 @@ async def download_restricted_media(
         is_known_high_layer = str(chat_id) in _known_high_layer_peers or raw_cid in _known_high_layer_peers
         is_private_chat = str(chat_id).startswith("-100") or str(chat_id).startswith("-")
 
-        if is_known_high_layer:
-            logger.info("[Download] %s is known MTProto Layer 170+ peer — routing immediately to High-Layer Engine", chat_id)
-            source_msg = None
-        else:
-            source_msg = await _safe_get_messages(current_client, chat_id, message_id, session_key, max_retries=1)
+        # Compile list of candidate message IDs to probe (e.g. topic_id vs message_id in forum / comment threads)
+        probe_ids = [message_id]
+        if candidate_ids:
+            for cid in candidate_ids:
+                if cid and cid not in probe_ids:
+                    probe_ids.append(cid)
+        elif topic_id and topic_id != message_id:
+            probe_ids.append(topic_id)
 
-            if source_msg is None and user_id:
+        source_msg = None
+        resolved_mid = message_id
+
+        if not is_known_high_layer:
+            for p_mid in probe_ids:
+                source_msg = await _safe_get_messages(current_client, chat_id, p_mid, session_key, max_retries=2)
+                if source_msg and not getattr(source_msg, "empty", False):
+                    resolved_mid = p_mid
+                    break
+
+            if (source_msg is None or getattr(source_msg, "empty", False)) and user_id:
                 personal_c = await get_personal_user_client(user_id)
                 if personal_c and personal_c != current_client:
                     current_client = personal_c
                     session_key = _session_key_from_client(current_client)
-                    source_msg = await _safe_get_messages(current_client, chat_id, message_id, session_key, max_retries=1)
+                    for p_mid in probe_ids:
+                        source_msg = await _safe_get_messages(current_client, chat_id, p_mid, session_key, max_retries=2)
+                        if source_msg and not getattr(source_msg, "empty", False):
+                            resolved_mid = p_mid
+                            active_jobs[job_id]["current_client"] = current_client
+                            break
 
             # Candidate pool workers only make sense for public chats, NOT for private channels
-            if source_msg is None and not is_private_chat:
+            if (source_msg is None or getattr(source_msg, "empty", False)) and not is_private_chat:
                 candidate_clients = [c for c in list(account_pool.values()) if c != current_client and getattr(c, "is_connected", False)]
                 for ac in admin_pool_clients:
                     if ac != current_client and getattr(ac, "is_connected", False) and ac not in candidate_clients:
@@ -702,13 +732,19 @@ async def download_restricted_media(
                     cand_key = _session_key_from_client(cand_c)
                     cand_limiter = rate_registry.get_sync(cand_key)
                     if not cand_limiter.is_quarantined:
-                        msg_cand = await _safe_get_messages(cand_c, chat_id, message_id, cand_key, max_retries=1)
-                        if msg_cand is not None:
-                            current_client = cand_c
-                            session_key = cand_key
-                            source_msg = msg_cand
-                            active_jobs[job_id]["current_client"] = current_client
-                            break
+                        for p_mid in probe_ids:
+                            msg_cand = await _safe_get_messages(cand_c, chat_id, p_mid, cand_key, max_retries=2)
+                            if msg_cand is not None and not getattr(msg_cand, "empty", False):
+                                current_client = cand_c
+                                session_key = cand_key
+                                source_msg = msg_cand
+                                resolved_mid = p_mid
+                                active_jobs[job_id]["current_client"] = current_client
+                                break
+                    if source_msg and not getattr(source_msg, "empty", False):
+                        break
+
+        message_id = resolved_mid
 
         # Deep MTProto Chat & Title VIP Protection Check
         if source_msg and user_id and not is_admin(user_id):
@@ -722,7 +758,7 @@ async def download_restricted_media(
                 active_jobs.pop(job_id, None)
                 raise
 
-        if source_msg is None:
+        if source_msg is None or getattr(source_msg, "empty", False):
             # Pyrogram failed to fetch message (e.g. unknown Layer 170+ constructor). Fallback to Telethon High-Layer Engine (Layer 229)
             _pyro_sess_str = await _get_pyrogram_session_str(current_client, user_id)
 
@@ -776,10 +812,11 @@ async def download_restricted_media(
                 "• Or provide an invite link using `/join <invite_link>`\n"
                 "• The post was deleted or rate limits are in effect"
             )
+            active_jobs.setdefault(job_id, {})["final_status_set"] = True
             active_jobs.pop(job_id, None)
             return None
 
-        # Check if message contains an actual downloadable file attachment
+        # Check if message contains an actual downloadable file attachment or media
         has_file_media = bool(
             source_msg.video
             or source_msg.document
@@ -789,6 +826,12 @@ async def download_restricted_media(
             or source_msg.video_note
             or source_msg.animation
             or source_msg.sticker
+            or (getattr(source_msg, "web_page", None) and (
+                getattr(source_msg.web_page, "video", None)
+                or getattr(source_msg.web_page, "document", None)
+                or getattr(source_msg.web_page, "photo", None)
+            ))
+            or (getattr(source_msg, "media", None) is not None)
         )
 
         # ── Telethon Fallback for Layer 170+ / Edited Media ────────────────────
@@ -837,6 +880,18 @@ async def download_restricted_media(
         # Case 1: Text-only / WebPage Link / Google Docs / Poll / Contact / Location / Non-file message
         if not has_file_media:
             msg_text = extract_formatted_text(source_msg)
+            # If text is empty but webpage has title/description/url, compile formatted card
+            if not msg_text and getattr(source_msg, "web_page", None):
+                wp = source_msg.web_page
+                t_parts = []
+                if getattr(wp, "title", None):
+                    t_parts.append(f"**{wp.title}**")
+                if getattr(wp, "description", None):
+                    t_parts.append(wp.description)
+                if getattr(wp, "url", None):
+                    t_parts.append(f"🔗 {wp.url}")
+                msg_text = "\n\n".join(t_parts)
+
             if msg_text:
                 return {
                     "is_text_only": True,
@@ -904,12 +959,23 @@ async def download_restricted_media(
                     "media_type": "text",
                     "source_msg": source_msg,
                 }
+            elif getattr(source_msg, "service", None):
+                s_action = str(source_msg.service.value) if hasattr(source_msg.service, "value") else str(source_msg.service)
+                await status_message.edit_text(
+                    f"ℹ️ **Message #{message_id} is a Telegram System Event** (`{s_action}`)\n\n"
+                    "This post is a service announcement (such as a pinned message notification, member action, or topic header), not a downloadable media or text file.\n\n"
+                    "👉 **Please send the link of the actual content post in the channel.**"
+                )
+                active_jobs.setdefault(job_id, {})["final_status_set"] = True
+                active_jobs.pop(job_id, None)
+                return None
             else:
                 await status_message.edit_text(
                     f"⚠️ **Message #{message_id} is Empty or Deleted**\n\n"
                     "This message in the channel contains no text, video, or file (it may have been deleted or is an empty spacer).\n\n"
                     "👉 **Please send the next link in the channel, e.g. Message #17.**"
                 )
+                active_jobs.setdefault(job_id, {})["final_status_set"] = True
                 active_jobs.pop(job_id, None)
                 return None
 
@@ -971,7 +1037,7 @@ async def download_restricted_media(
             elif mime.startswith("video/"):
                 ext = ".mp4"
                 media_type = "video"
-            elif doc_ext in (".pdf", ".zip", ".rar", ".7z", ".txt", ".docx", ".xlsx"):
+            elif doc_ext in (".pdf", ".zip", ".rar", ".7z", ".txt", ".docx", ".xlsx", ".apk"):
                 ext = doc_ext
                 media_type = "document"
             elif "pdf" in mime:
@@ -984,8 +1050,28 @@ async def download_restricted_media(
 
             if not original_file_name:
                 original_file_name = f"document_{message_id}{ext}"
+        elif getattr(source_msg, "web_page", None):
+            wp = source_msg.web_page
+            if getattr(wp, "video", None):
+                ext = ".mp4"
+                media_type = "video"
+                original_file_name = f"webpage_video_{message_id}.mp4"
+            elif getattr(wp, "document", None):
+                doc_name = getattr(wp.document, "file_name", "") or f"webpage_doc_{message_id}.bin"
+                ext = os.path.splitext(doc_name)[1].lower() or ".bin"
+                media_type = "document"
+                original_file_name = doc_name
+            elif getattr(wp, "photo", None):
+                ext = ".jpg"
+                media_type = "photo"
+                original_file_name = f"webpage_photo_{message_id}.jpg"
+            else:
+                ext = ".mp4"
+                media_type = "document"
+                original_file_name = f"media_{message_id}.bin"
         else:
             ext = ".mp4"
+            media_type = "video"
             original_file_name = f"file_{message_id}.mp4"
 
         # Clean original_file_name for safe local filesystem storage
@@ -1004,6 +1090,10 @@ async def download_restricted_media(
             or getattr(source_msg, "voice", None)
             or getattr(source_msg, "video_note", None)
             or getattr(source_msg, "photo", None)
+            or getattr(source_msg, "animation", None)
+            or getattr(source_msg, "sticker", None)
+            or getattr(source_msg, "web_page", None)
+            or getattr(source_msg, "media", None)
         )
         media_file_size = getattr(media_target, "file_size", 0) if media_target else 0
 
@@ -1215,11 +1305,13 @@ async def download_restricted_media(
             if downloaded_file and os.path.exists(str(downloaded_file)):
                 _safe_remove(str(downloaded_file))
             await status_message.edit_text("❌ Download cancelled.")
+            active_jobs.setdefault(job_id, {})["final_status_set"] = True
             active_jobs.pop(job_id, None)
             return None
 
         if not downloaded_file or not os.path.exists(str(downloaded_file)) or os.path.getsize(str(downloaded_file)) == 0:
             await status_message.edit_text("❌ Download failed — empty or corrupted file received.")
+            active_jobs.setdefault(job_id, {})["final_status_set"] = True
             active_jobs.pop(job_id, None)
             return None
 
@@ -1235,9 +1327,11 @@ async def download_restricted_media(
     except Exception as e:
         if active_jobs.get(job_id, {}).get("cancelled"):
             await status_message.edit_text("❌ Task was cancelled.")
+            active_jobs.setdefault(job_id, {})["final_status_set"] = True
             active_jobs.pop(job_id, None)
             return None
         logger.error("[Download] Unhandled exception in job %s: %s", job_id, e)
         await status_message.edit_text(f"❌ Download failed: {str(e)}")
+        active_jobs.setdefault(job_id, {})["final_status_set"] = True
         active_jobs.pop(job_id, None)
         return None

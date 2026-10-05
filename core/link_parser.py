@@ -15,15 +15,22 @@ class TelegramLink:
         chat_identifier: Any,  # int for private (-100...), str for public username
         message_id: int,
         topic_id: Optional[int] = None,
+        candidate_ids: Optional[List[int]] = None,
     ):
         self.raw_url = raw_url
         self.is_private = is_private
         self.chat_identifier = chat_identifier
         self.message_id = message_id
         self.topic_id = topic_id
+        if candidate_ids:
+            self.candidate_ids = candidate_ids
+        elif topic_id and topic_id != message_id:
+            self.candidate_ids = [message_id, topic_id]
+        else:
+            self.candidate_ids = [message_id]
 
     def __repr__(self):
-        return f"<TelegramLink chat={self.chat_identifier} msg={self.message_id} topic={self.topic_id} private={self.is_private}>"
+        return f"<TelegramLink chat={self.chat_identifier} msg={self.message_id} topic={self.topic_id} candidates={self.candidate_ids} private={self.is_private}>"
 
 
 def normalize_link_input(text: str) -> str:

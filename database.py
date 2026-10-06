@@ -1469,7 +1469,7 @@ class Database:
 
     async def get_raw_mode(self) -> bool:
         """Returns True if Ultra-Fast Pure Raw Video Mode is active."""
-        val = await self.get_global_setting("raw_mode", "0")
+        val = await self.get_global_setting("raw_mode", "1")
         return val == "1"
 
     async def set_raw_mode(self, enabled: bool):

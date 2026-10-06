@@ -583,8 +583,18 @@ async def run_batch_harvest_pipeline(
 
             if is_raw_mode:
                 logger.info("[Pipeline] Ultra-Fast Pure Raw Mode ACTIVE: Bypassing all video processing for instant 1:1 delivery.")
-                caption_to_send = (dl_res.get("caption") or "") or None
+                raw_caption = dl_res.get("caption") or ""
                 file_title = os.path.basename(original_path) if original_path else ""
+                clean_ads = bool(user_settings.get("clean_caption", 1))
+                user_caption_tmpl = user_settings.get("custom_caption")
+                caption_replacements = await db.get_caption_replacements(user_id)
+                caption_to_send = format_custom_caption(
+                    template=user_caption_tmpl,
+                    original_caption=raw_caption,
+                    file_name=file_title,
+                    clean_ads=clean_ads,
+                    replacements=caption_replacements,
+                )
             else:
                 # Step B: Audio Extractor (Convert video to pristine 192k MP3 podcast)
                 if delivery_fmt == "audio" and is_vid_check and original_path:
@@ -685,7 +695,12 @@ async def run_batch_harvest_pipeline(
                                 has_actual_wm = True
                                 _wm_subtitle = "Applying VIP custom brand — encoding zero-loss stream"
                         elif global_wm and global_wm.get("enabled") and not is_prem:
-                            has_actual_wm = True
+                            if any([
+                                str(global_wm.get("watermark_text") or "").strip(),
+                                str(global_wm.get("headline_text") or "").strip(),
+                                str(global_wm.get("logo_path") or "").strip(),
+                            ]):
+                                has_actual_wm = True
 
                         if has_actual_wm:
                             _est_wm = min(20, max(8, int(f_size_mb * 0.10)))
@@ -755,18 +770,6 @@ async def run_batch_harvest_pipeline(
                     branding_text = global_wm.get("watermark_text") or "@TgPremiumDownloader_bot"
                     viral_footer = f"\n\n⚡ **Unlocked via {branding_text}**\n💎 _Upgrade to /premium for watermark-free videos!_"
                     caption_to_send = (caption_to_send + viral_footer).strip()
-
-            try:
-                up_bar = format_progress_line(85.0, show_remaining=True, anim_frame="🚀")
-                await s_msg.edit_text(
-                    f"📤 **{prefix_label}Uploading Video to Telegram...**\n"
-                    f"📁 **File:** `{file_title}`\n\n"
-                    f"📊 **Progress:**\n"
-                    f"{up_bar}\n\n"
-                    f"⚡ _Pipelining fast delivery..._"
-                )
-            except Exception:
-                pass
 
             auto_forward_id = user_settings.get("auto_forward_chat_id")
             uploaded = await upload_unlocked_media(

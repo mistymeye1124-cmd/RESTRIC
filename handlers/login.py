@@ -1117,7 +1117,7 @@ async def send_code_to_telegram_app(client: Client, phone_number: str) -> types.
     chat (ID 777000 / Service Notifications) and avoiding datacenter SMS blocks.
     """
     clean_num = phone_number.strip(" +")
-    while True:
+    for _ in range(5):
         try:
             r = await client.invoke(
                 raw.functions.auth.SendCode(
@@ -1146,6 +1146,7 @@ async def send_code_to_telegram_app(client: Client, phone_number: str) -> types.
             await client.session.start()
         else:
             return types.SentCode._parse(r)
+    raise RuntimeError("Telegram DC migration limit reached")
 
 
 import time

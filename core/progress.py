@@ -143,21 +143,21 @@ class ProgressTracker:
         speed_str = f"{human_readable_size(self.current_speed)}/s"
 
         is_dl = "Download" in self.action_name or "HARVEST" in self.action_name.upper()
-        action_title = "PRO HARVESTER TURBO" if is_dl else "PRO DISPATCHER TURBO"
+        action_title = "DOWNLOAD IN PROGRESS" if is_dl else "UPLOAD IN PROGRESS"
 
         text = (
-            f"⚡ **{action_title}** ⚡\n"
+            f"⚡ **{action_title}**\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **Operation:** `{self.action_name}`\n"
             f"📊 **Progress:**\n"
             f"{progress_line}\n\n"
-            f"╭── 📡 **LIVE TELEMETRY** ───────────────\n"
+            f"╭── 📡 **TRANSFER DETAILS** ────────────\n"
             f"│ 📦 **Transferred:** `{readable_cur}` / `{readable_tot}`\n"
-            f"│ 🚀 **Throughput:** `{speed_str}` (Live)\n"
+            f"│ 🚀 **Speed:** `{speed_str}` (Live)\n"
             f"{status_line}\n"
-            f"│ 🛡️ **Shield:** `Active Anti-Ban Stealth (Zero Trace)`\n"
+            f"│ 🛡️ **Engine:** `{self.engine_tag}`\n"
             f"╰────────────────────────────────────────╯\n"
-            f"⚡ _Engine: {self.engine_tag}_"
+            f"⚡ _Status: Active Stream Processing_"
         )
         return text
 
@@ -276,6 +276,10 @@ async def live_pulse(
                               estimated_seconds=60):
             result = await apply_dual_video_watermark(...)
     """
+    if not status_message:
+        yield
+        return
+
     _stopped = asyncio.Event()
     _tick = [0]
     _start = time.time()

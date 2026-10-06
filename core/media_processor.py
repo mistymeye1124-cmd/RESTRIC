@@ -5,6 +5,7 @@ and Resolution Scaler/Compressor using bundled FFmpeg v7.1 and OpenCV.
 """
 
 import os
+import re
 import math
 import subprocess
 import asyncio
@@ -17,9 +18,95 @@ from core.watermark_engine import get_ffmpeg_binary
 MAX_FILE_SIZE_BYTES = 2000 * 1024 * 1024
 
 
+def normalize_and_save_thumbnail(source_path: str, target_path: str, max_dim: int = 320) -> bool:
+    """
+    Ensures any thumbnail (custom uploaded or auto-extracted) complies 100% with Telegram specification:
+    - Max dimension <= 320px preserving aspect ratio
+    - Pure sRGB color space (strips alpha channel cleanly with black background)
+    - High-quality progressive JPEG (quality 90, < 150KB)
+    """
+    if not os.path.exists(source_path) or os.path.getsize(source_path) == 0:
+        return False
+
+    try:
+        from PIL import Image
+        with Image.open(source_path) as img:
+            # Handle alpha channel (RGBA, LA, or palette with transparency)
+            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                img = img.convert("RGBA")
+                canvas = Image.new("RGB", img.size, (0, 0, 0))
+                canvas.paste(img, mask=img.split()[3])
+                img = canvas
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+
+            img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+
+            target_dir = os.path.dirname(target_path)
+            if target_dir:
+                os.makedirs(target_dir, exist_ok=True)
+
+            img.save(target_path, "JPEG", quality=90, optimize=True)
+            return os.path.exists(target_path) and os.path.getsize(target_path) > 100
+    except Exception as e:
+        print(f"[!] normalize_and_save_thumbnail error: {e}")
+        return False
+
+
+def _inspect_video_ffmpeg(video_path: str) -> Dict[str, Any]:
+    """Fallback video inspector using bundled FFmpeg v7.1 (handles HEVC, AV1, MKV, VP9, TS)."""
+    info = {
+        "duration": 0,
+        "width": 0,
+        "height": 0,
+        "fps": 0,
+        "size_bytes": 0,
+    }
+    if not os.path.exists(video_path):
+        return info
+
+    info["size_bytes"] = os.path.getsize(video_path)
+    try:
+        ffmpeg_bin = get_ffmpeg_binary()
+        res = subprocess.run(
+            [ffmpeg_bin, "-i", str(video_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="ignore",
+            timeout=15.0,
+        )
+        stderr = res.stderr or ""
+
+        # Parse duration: "Duration: 00:01:23.45"
+        dur_match = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", stderr)
+        if dur_match:
+            h, m, s = dur_match.groups()
+            info["duration"] = int(int(h) * 3600 + int(m) * 60 + float(s))
+
+        # Parse dimensions: "Stream #... Video: ... 1920x1080"
+        dim_match = re.search(r"Stream #.*Video:.*,\s*(\d{2,5})x(\d{2,5})", stderr)
+        if dim_match:
+            info["width"] = int(dim_match.group(1))
+            info["height"] = int(dim_match.group(2))
+
+        # Parse FPS
+        fps_match = re.search(r"Stream #.*Video:.*,\s*([\d\.]+)\s*(?:fps|tbr)", stderr)
+        if fps_match:
+            try:
+                info["fps"] = float(fps_match.group(1))
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[!] _inspect_video_ffmpeg error: {e}")
+
+    return info
+
+
 def inspect_video(video_path: str) -> Dict[str, Any]:
     """
     Inspects video file to get duration (seconds), width, height, FPS, and file size.
+    Uses fast OpenCV first, with automatic robust FFmpeg fallback for modern codecs (HEVC, AV1, MKV).
     Synchronous — use inspect_video_async for non-blocking calls in async context.
     """
     info = {
@@ -34,72 +121,157 @@ def inspect_video(video_path: str) -> Dict[str, Any]:
 
     info["size_bytes"] = os.path.getsize(video_path)
 
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        return info
+    # 1. Fast OpenCV inspection
+    try:
+        cap = cv2.VideoCapture(str(video_path))
+        if cap.isOpened():
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            duration = int(total_frames / fps) if fps and fps > 0 else 0
+            cap.release()
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            info["duration"] = duration
+            info["width"] = width
+            info["height"] = height
+            info["fps"] = fps
+    except Exception:
+        pass
 
-    duration = int(total_frames / fps) if fps and fps > 0 else 0
-    cap.release()
+    # 2. If OpenCV returned incomplete or zero metadata, fall back to FFmpeg v7.1
+    if info["duration"] <= 0 or info["width"] <= 0 or info["height"] <= 0:
+        ff_info = _inspect_video_ffmpeg(video_path)
+        if ff_info.get("duration", 0) > 0 and info["duration"] <= 0:
+            info["duration"] = ff_info["duration"]
+        if ff_info.get("width", 0) > 0 and info["width"] <= 0:
+            info["width"] = ff_info["width"]
+        if ff_info.get("height", 0) > 0 and info["height"] <= 0:
+            info["height"] = ff_info["height"]
+        if ff_info.get("fps", 0) > 0 and info["fps"] <= 0:
+            info["fps"] = ff_info["fps"]
 
-    info["duration"] = duration
-    info["width"] = width
-    info["height"] = height
-    info["fps"] = fps
     return info
 
 
 async def inspect_video_async(video_path: str) -> Dict[str, Any]:
-    """Non-blocking async wrapper — offloads OpenCV to thread pool so event loop never freezes."""
+    """Non-blocking async wrapper — offloads inspection to thread pool so event loop never freezes."""
     return await asyncio.to_thread(inspect_video, video_path)
 
+
+def _extract_thumb_ffmpeg(video_path: str, output_thumb_path: str, seek_seconds: int = 5) -> Optional[str]:
+    """
+    Extracts a frame from video using bundled static FFmpeg v7.1.
+    Handles any container (MKV, MP4, WebM, AVI, TS) and any codec (H.265, AV1, VP9, HDR).
+    If seek_seconds fails (e.g. video is shorter than seek_seconds), auto-falls back to frame 0.
+    """
+    if not os.path.exists(video_path):
+        return None
+
+    ffmpeg_bin = get_ffmpeg_binary()
+    thumb_dir = os.path.dirname(output_thumb_path)
+    if thumb_dir:
+        os.makedirs(thumb_dir, exist_ok=True)
+
+    # Scale filter keeps aspect ratio with maximum dimension <= 320
+    vf_scale = "scale=if(gte(iw\\,ih)\\,min(320\\,iw)\\,-2):if(gte(iw\\,ih)\\,-2\\,min(320\\,ih))"
+
+    # Try requested seek_seconds, then 1s, then 0s
+    for seek in [seek_seconds, 1, 0]:
+        try:
+            cmd = [
+                ffmpeg_bin,
+                "-y",
+                "-ss", str(seek),
+                "-i", str(video_path),
+                "-vframes", "1",
+                "-vf", vf_scale,
+                "-q:v", "2",
+                str(output_thumb_path),
+            ]
+            subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                timeout=15.0,
+            )
+            if os.path.exists(output_thumb_path) and os.path.getsize(output_thumb_path) > 100:
+                return output_thumb_path
+        except Exception:
+            pass
+
+    return None
 
 
 def extract_thumbnail(video_path: str, output_thumb_path: str, seek_seconds: int = 5) -> Optional[str]:
     """
-    Extracts a crisp frame at seek_seconds to use as the Telegram video thumbnail.
+    Extracts a crisp frame to use as the Telegram video thumbnail.
+    Uses fast OpenCV first, with automatic robust FFmpeg fallback and PIL normalization.
     Synchronous — use extract_thumbnail_async for non-blocking calls in async context.
     """
     if not os.path.exists(video_path):
         return None
 
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        return None
+    thumb_dir = os.path.dirname(output_thumb_path)
+    if thumb_dir:
+        os.makedirs(thumb_dir, exist_ok=True)
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    extracted = False
 
-    if fps and fps > 0:
-        target_frame = int(seek_seconds * fps)
-        if target_frame >= total_frames:
-            target_frame = max(0, total_frames // 2)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+    # 1. Try OpenCV frame extraction
+    try:
+        cap = cv2.VideoCapture(str(video_path))
+        if cap.isOpened():
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    ret, frame = cap.read()
-    cap.release()
+            if fps and fps > 0:
+                target_frame = int(seek_seconds * fps)
+                if target_frame >= total_frames:
+                    target_frame = max(0, total_frames // 2)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
 
-    if ret and frame is not None:
-        thumb_dir = os.path.dirname(output_thumb_path)
-        if thumb_dir:
-            os.makedirs(thumb_dir, exist_ok=True)
-        h, w = frame.shape[:2]
-        if max(h, w) > 320:
-            scale = 320.0 / max(h, w)
-            new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
-            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        cv2.imwrite(str(output_thumb_path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            ret, frame = cap.read()
+            # If seek failed, try frame 0
+            if (not ret or frame is None) and cap.isOpened():
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ret, frame = cap.read()
+
+            cap.release()
+
+            if ret and frame is not None:
+                h, w = frame.shape[:2]
+                if max(h, w) > 320:
+                    scale = 320.0 / max(h, w)
+                    new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
+                    frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                cv2.imwrite(str(output_thumb_path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+                if os.path.exists(output_thumb_path) and os.path.getsize(output_thumb_path) > 100:
+                    extracted = True
+    except Exception:
+        pass
+
+    # 2. If OpenCV failed, fallback to bundled static FFmpeg v7.1
+    if not extracted or not os.path.exists(output_thumb_path) or os.path.getsize(output_thumb_path) <= 100:
+        ff_thumb = _extract_thumb_ffmpeg(video_path, output_thumb_path, seek_seconds)
+        if ff_thumb and os.path.exists(ff_thumb) and os.path.getsize(ff_thumb) > 100:
+            extracted = True
+
+    # 3. Final normalization guarantee via PIL (ensures <= 320px, sRGB JPEG, optimal size)
+    if extracted and os.path.exists(output_thumb_path) and os.path.getsize(output_thumb_path) > 100:
+        norm_temp = f"{output_thumb_path}_norm.jpg"
+        if normalize_and_save_thumbnail(output_thumb_path, norm_temp):
+            try:
+                os.replace(norm_temp, output_thumb_path)
+            except Exception:
+                pass
         return output_thumb_path
 
     return None
 
 
 async def extract_thumbnail_async(video_path: str, output_thumb_path: str, seek_seconds: int = 5) -> Optional[str]:
-    """Non-blocking async wrapper — offloads OpenCV frame extraction to thread pool."""
+    """Non-blocking async wrapper — offloads thumbnail extraction to thread pool."""
     return await asyncio.to_thread(extract_thumbnail, video_path, output_thumb_path, seek_seconds)
 
 
@@ -228,7 +400,7 @@ async def compress_or_rescale_video(
     try:
         # If server is already processing 2 heavy video tasks, bypass instantly rather than queuing users
         try:
-            async with asyncio.timeout(2.0):
+            async def _do_rescale_pass1():
                 async with _cpu_semaphore:
                     proc = await asyncio.create_subprocess_exec(
                         *cmd,
@@ -252,6 +424,11 @@ async def compress_or_rescale_video(
                         except Exception:
                             pass
                         return output_path
+                return input_path
+
+            res_p1 = await asyncio.wait_for(_do_rescale_pass1(), timeout=effective_timeout + 2.0)
+            if res_p1 and res_p1 != input_path and os.path.exists(res_p1):
+                return res_p1
         except (asyncio.TimeoutError, TimeoutError):
             print(f"[!] CPU busy. Bypassing FFmpeg queue for {input_path} to prevent stalling users.")
             return input_path
@@ -278,7 +455,7 @@ async def compress_or_rescale_video(
     ]
     try:
         try:
-            async with asyncio.timeout(2.0):
+            async def _do_rescale_pass2():
                 async with _cpu_semaphore:
                     proc = await asyncio.create_subprocess_exec(
                         *cmd_fallback,
@@ -302,6 +479,11 @@ async def compress_or_rescale_video(
                         except Exception:
                             pass
                         return output_path
+                return input_path
+
+            res_p2 = await asyncio.wait_for(_do_rescale_pass2(), timeout=fallback_timeout + 2.0)
+            if res_p2 and res_p2 != input_path and os.path.exists(res_p2):
+                return res_p2
         except (asyncio.TimeoutError, TimeoutError):
             print(f"[!] CPU busy. Bypassing FFmpeg fallback queue for {input_path}.")
             return input_path
@@ -324,8 +506,8 @@ async def split_video_if_needed(video_path: str, max_part_size_bytes: int = MAX_
     if file_size <= max_part_size_bytes:
         return [video_path]
 
-    # Calculate number of segments needed
-    meta = inspect_video(video_path)
+    # Calculate number of segments needed (non-blocking async inspection)
+    meta = await inspect_video_async(video_path)
     total_duration = meta["duration"]
     if total_duration <= 0:
         return [video_path]

@@ -261,13 +261,14 @@ async def main():
     # Pre-warm the asyncio thread pool so first OpenCV/PIL call has zero cold-start delay
     import concurrent.futures
     loop = asyncio.get_running_loop()
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+    thread_workers = max(16, min(32, config.MAX_CONCURRENT_WORKERS * 2))
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=thread_workers)
     loop.set_default_executor(pool)
-    # Fire 4 dummy tasks to pre-spawn the threads immediately
+    # Fire 8 dummy tasks to pre-spawn the threads immediately
     await asyncio.gather(*[
-        asyncio.to_thread(lambda: None) for _ in range(4)
+        asyncio.to_thread(lambda: None) for _ in range(8)
     ])
-    print("[+] Thread pool pre-warmed (8 balanced workers ready).")
+    print(f"[+] Thread pool pre-warmed ({thread_workers} high-throughput workers ready).")
 
     if not check_configuration():
         print("[!] Bot cannot start without valid credentials. Please configure config.py.")
@@ -326,7 +327,7 @@ async def main():
             import sqlite3
             conn = sqlite3.connect(session_file, timeout=5.0)
             conn.execute("PRAGMA journal_mode=WAL;")
-            conn.execute("PRAGMA busy_timeout=15000;")
+            conn.execute("PRAGMA busy_timeout=60000;")
             conn.commit()
             conn.close()
         except Exception:
@@ -340,11 +341,11 @@ async def main():
         bot_token=BOT_TOKEN,
         plugins=dict(root="handlers"),
         workdir="sessions",
-        max_concurrent_transmissions=8,   # Optimized for network stability and zero packet drops
-        workers=16,                       # Balanced async event dispatchers
+        max_concurrent_transmissions=16,  # Scaled for 1000+ user high-throughput concurrency
+        workers=32,                       # 32 parallel async update dispatchers for instant button clicks
         ipv6=False,
         proxy=get_configured_proxy(),
-        sleep_threshold=60,                 # Automatically absorb normal 5-15s Telegram FloodWaits smoothly
+        sleep_threshold=60,               # Automatically absorb normal 5-15s Telegram FloodWaits smoothly
     )
 
     # Attach Anti-Duplicate Idempotency Guard to prevent double execution and duplicate messages

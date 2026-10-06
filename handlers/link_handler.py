@@ -16,8 +16,13 @@ from pyrogram import Client, filters
 
 logger = logging.getLogger(__name__)
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from core.client_manager import (
+    get_user_client,
+    get_client_for_channel,
+    get_personal_user_client,
+    get_next_available_pool_client,
+)
 from core.link_parser import parse_telegram_link
-from core.client_manager import get_user_client, get_client_for_channel, get_personal_user_client
 from core.download_engine import download_restricted_media, active_jobs
 from core.upload_engine import upload_unlocked_media
 from core.watermark_engine import apply_video_watermark, apply_dual_video_watermark, apply_video_delogo
@@ -327,21 +332,18 @@ async def run_batch_harvest_pipeline(
         prefix_label = f"[{idx}/{total}] " if total > 1 else ""
         batch_label = f"[{idx}/{total}] (Msg #{l_link.message_id})" if total > 1 else f"(Msg #{l_link.message_id})"
 
-        # Adaptive inter-item anti-ban jitter — only for batch (>1 item), not singles
-        # Random Gaussian-like micro-delay (0.6s - 1.2s) completely evades MTProto fixed-frequency scraping detection.
-        # Plus automatic 4-6s resting pause every 15 items to mimic human browser activity.
-        # Single downloads fire instantly with zero delay!
+        # High-Speed Inter-Item Pipeline:
+        # Micro-yield (0.10s) gives asyncio event loop time for network buffer flush.
+        # Smart pool account rotation every 10 items distributes MTProto traffic to prevent rate-limits without artificial delays.
         if total > 1 and idx > 1:
-            await asyncio.sleep(random.uniform(0.6, 1.2))
-            if idx % 15 == 0:
-                await asyncio.sleep(random.uniform(4.0, 6.0))
-            # Dynamic multi-account load distribution: rotate healthy worker across large batches
-            try:
-                rotated_c = await get_user_client(user_id)
-                if rotated_c and getattr(rotated_c, "is_connected", False):
-                    download_client = rotated_c
-            except Exception:
-                pass
+            await asyncio.sleep(0.10)
+            if idx % 10 == 0:
+                try:
+                    rotated_c = get_next_available_pool_client(exclude_client=download_client)
+                    if rotated_c and getattr(rotated_c, "is_connected", False):
+                        download_client = rotated_c
+                except Exception:
+                    pass
 
         # Owner Anti-Leech Protection: Block downloads from protected VIP channels
         from config import ADMIN_IDS

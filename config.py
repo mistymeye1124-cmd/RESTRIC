@@ -91,13 +91,32 @@ FREE_MAX_BATCH_SIZE = 1              # Only 1 video at a time for free users
 PREMIUM_DAILY_DOWNLOAD_LIMIT = 100   # Effectively unlimited
 PREMIUM_MAX_BATCH_SIZE = 30          # Can paste 30 links at once
 
-# Concurrency: Maximum simultaneous downloads (Tuned to 4 for peak speed without server overload)
-MAX_CONCURRENT_WORKERS = int(os.getenv("MAX_CONCURRENT_WORKERS", "4"))
+# ----------------- SYSTEM RESOURCE ALLOCATION (WEBSITE & VPS PROTECTION) -----------------
+# Strictly reserve 3.0 GB RAM and 10.0 GB Disk for Website & External Projects.
+# All surplus resources are dynamically allocated to the bot for 1,000+ user high-throughput concurrency.
+RESERVED_WEBSITE_RAM_MB = int(os.getenv("RESERVED_WEBSITE_RAM_MB", "3072"))  # 3.0 GB strictly reserved for Website
+RESERVED_WEBSITE_DISK_GB = float(os.getenv("RESERVED_WEBSITE_DISK_GB", "10.0")) # 10.0 GB strictly reserved for Website
 
-# Storage & Memory Safety Thresholds (Protects co-hosted ProGuild HQ website & VPS stability)
-MIN_FREE_DISK_GB = float(os.getenv("MIN_FREE_DISK_GB", "8.0"))        # Minimum 8GB disk reserve for ProGuild HQ website uploads
-MIN_FREE_RAM_MB = int(os.getenv("MIN_FREE_RAM_MB", "2500"))          # Minimum 2.5GB RAM reserve for ProGuild HQ website & OS
-AUTO_CLEAN_FILE_MAX_AGE_SEC = int(os.getenv("AUTO_CLEAN_FILE_MAX_AGE_SEC", "120")) # 2m max file age in downloads
+# Storage & Memory Safety Thresholds
+MIN_FREE_DISK_GB = RESERVED_WEBSITE_DISK_GB  # Enforce 10.0 GB safe floor for website
+MIN_FREE_RAM_MB = RESERVED_WEBSITE_RAM_MB    # Enforce 3.0 GB safe floor for website
+AUTO_CLEAN_FILE_MAX_AGE_SEC = int(os.getenv("AUTO_CLEAN_FILE_MAX_AGE_SEC", "1800")) # 30m max file age for orphans
+
+# Dynamic Worker Pool Sizing:
+# Scales parallel workers dynamically based on VPS RAM while preserving 3GB for website!
+def _calculate_optimal_workers() -> int:
+    try:
+        import psutil
+        total_ram_mb = psutil.virtual_memory().total / (1024 ** 2)
+        usable_for_bot = max(0, total_ram_mb - RESERVED_WEBSITE_RAM_MB)
+        # Allocate ~300MB per active worker slot
+        calculated = int(usable_for_bot / 300)
+        return max(4, min(32, calculated))
+    except Exception:
+        return 8
+
+_env_workers = os.getenv("MAX_CONCURRENT_WORKERS")
+MAX_CONCURRENT_WORKERS = int(_env_workers) if _env_workers and _env_workers.isdigit() else _calculate_optimal_workers()
 
 # Throttle interval in seconds for editing Telegram progress messages (prevents FloodWait)
 # 3.5s is the Telegram-compliant sweet spot: snappy UI without triggering messages.EditMessage FloodWait

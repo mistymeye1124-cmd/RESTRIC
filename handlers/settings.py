@@ -69,9 +69,9 @@ async def render_settings_card(user_id: int):
 
     text = (
         raw_notice +
-        "⚙️ **USER PREFERENCES & CLOUD COCKPIT** ⚙️\n"
+        "⚙️ **USER PREFERENCES & SETTINGS** ⚙️\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "⚡ **GLOBAL HARVESTER CONFIGURATION**\n\n"
+        "⚡ **DOWNLOAD CONFIGURATION**\n\n"
         "┌── 📋 **ACTIVE PARAMETERS** ──────────┐\n"
         f"│ • 👻 Ghost Mode: `{ghost_display}`\n"
         f"│ • 🎯 Auto-Forward: `{forward_chat}`\n"
@@ -80,7 +80,7 @@ async def render_settings_card(user_id: int):
         f"│ • 🚀 Delivery Format: `{fmt_display}`\n"
         f"│ • 📹 Video Mode: `{mode}`\n"
         f"│ • ✂️ Strip Competitor Ads: `{clean_display}`\n"
-        f"│ • 🎯 Batch Harvest Filter: `{filter_display}`\n"
+        f"│ • 🎯 Batch Download Filter: `{filter_display}`\n"
         f"│ • 🖼️ Custom Thumbnail: `{thumb_display}`\n"
         f"│ • 📝 Custom Caption: `{caption_preview}`\n"
         f"│ • 🌐 Interface Language: `{lang_display}`\n"

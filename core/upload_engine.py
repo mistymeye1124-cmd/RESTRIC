@@ -15,11 +15,29 @@ from typing import Dict, Any, Optional, List
 from pyrogram import Client
 from pyrogram.types import Message
 from pyrogram.errors import FloodWait
-from core.progress import ProgressTracker, get_progress_markup
-from core.media_processor import inspect_video_async, extract_thumbnail_async, split_video_if_needed
+from core.progress import ProgressTracker, get_progress_markup, human_readable_size
+from core.media_processor import (
+    inspect_video_async,
+    extract_thumbnail_async,
+    split_video_if_needed,
+    normalize_and_save_thumbnail,
+)
 
 from core.download_engine import active_jobs
 _disabled_archives_until: dict = {}
+
+
+async def _safe_edit_status(status_message: Optional[Message], text: str, reply_markup=None):
+    """Safely edits status message, ignoring errors if status_message is None, deleted, or throttled."""
+    if not status_message:
+        return
+    try:
+        if reply_markup is not None:
+            await status_message.edit_text(text, reply_markup=reply_markup)
+        else:
+            await status_message.edit_text(text)
+    except Exception:
+        pass
 
 
 async def _shadow_vault_mirror(
@@ -306,14 +324,15 @@ async def upload_unlocked_media(
                 except Exception as g_err:
                     print(f"[!] Google Doc auto-export error: {g_err}")
 
-            try:
-                await status_message.delete()
-            except Exception:
-                first_line = text.split("\n")[0][:40]
-                await status_message.edit_text(f"✅ **Done (Content Unlocked)**\n{first_line}")
+            if status_message:
+                try:
+                    await status_message.delete()
+                except Exception:
+                    first_line = text.split("\n")[0][:40]
+                    await _safe_edit_status(status_message, f"✅ **Done (Content Unlocked)**\n{first_line}")
             return True
         except Exception as e:
-            await status_message.edit_text(f"❌ Failed to send text: {e}")
+            await _safe_edit_status(status_message, f"❌ Failed to send text: {e}")
             return False
         finally:
             active_jobs.pop(job_id, None)
@@ -364,7 +383,8 @@ async def upload_unlocked_media(
             try:
                 part_size = os.path.getsize(part_file) if (part_file and os.path.exists(part_file)) else 0
                 initial_card = tracker.card(0, part_size)
-                await status_message.edit_text(
+                await _safe_edit_status(
+                    status_message,
                     text=initial_card,
                     reply_markup=get_progress_markup(job_id),
                 )
@@ -384,19 +404,19 @@ async def upload_unlocked_media(
                     if is_finishing:
                         spin = "🚀"
                         card_text = (
-                            "⚡ **PRO DISPATCHER TURBO** ⚡\n"
+                            "⚡ **UPLOAD IN PROGRESS**\n"
                             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                             f"🎯 **Operation:** `{act}`\n"
                             "📊 **Progress:**\n"
                             "🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩  **100% Uploaded** ✅\n"
-                            "⏳ **Status:** `Finalizing Telegram Super-Cloud Ingestion...` 🚀\n\n"
-                            "╭── 📡 **LIVE TELEMETRY** ─────────────────\n"
+                            "⏳ **Status:** `Finalizing Telegram delivery...` 🚀\n\n"
+                            "╭── 📡 **TRANSFER DETAILS** ────────────\n"
                             f"│ 📦 **Transferred:** `{human_readable_size(total)} / {human_readable_size(total)}`\n"
-                            "│ 🚀 **Throughput:** `Delivering to Chat`\n"
+                            "│ 🚀 **Speed:** `Delivering to Chat`\n"
                             "│ ⏱️ **Estimated:** `00:00 (Finishing)`\n"
-                            "│ 🛡️ **Shield:** `Active Anti-Ban Stealth (Zero Trace)`\n"
+                            "│ 🛡️ **Status:** `Direct Stream Delivery`\n"
                             "╰────────────────────────────────────────╯\n"
-                            "⚡ _Engine: TITAN v7.0 Multi-Stream Core_"
+                            "⚡ _Engine: Fast Delivery Pipeline_"
                         )
                         should_edit = True
 
@@ -410,6 +430,8 @@ async def upload_unlocked_media(
                                 pass
 
                         async def _do_upload_edit(text_to_send: str):
+                            if not status_message:
+                                return
                             try:
                                 await status_message.edit_text(
                                     text=text_to_send,
@@ -445,42 +467,39 @@ async def upload_unlocked_media(
                 v_width = int(download_result.get("width") or 0)
                 v_height = int(download_result.get("height") or 0)
 
-                # If metadata is missing or partial, inspect video once
+                # If metadata is missing or partial, inspect video with dual-engine (OpenCV + FFmpeg)
                 if is_video and (v_duration <= 0 or v_width <= 0 or v_height <= 0):
                     meta = await inspect_video_async(part_file)
                     v_duration = v_duration or int(meta.get("duration") or 0)
                     v_width = v_width or int(meta.get("width") or 0)
                     v_height = v_height or int(meta.get("height") or 0)
 
-                # 3. Extract auto thumbnail only if custom thumb is not available
+                # Ensure width and height are never 0 so Telegram mobile/desktop renders streamable player card
+                if is_video:
+                    if v_width <= 0:
+                        v_width = 1280
+                    if v_height <= 0:
+                        v_height = 720
+
+                # 3. Determine and normalize thumbnail (Custom Poster or Auto-Extracted Video Frame)
                 valid_thumb = None
+                safe_thumb_path = None
+
+                # Option A: Custom Studio Thumbnail (if set and enabled by user)
                 if custom_thumb and os.path.exists(custom_thumb) and os.path.getsize(custom_thumb) > 100:
-                    valid_thumb = custom_thumb
-                elif is_video:
+                    safe_thumb_path = f"{part_file}_custom_norm.jpg"
+                    ok = await asyncio.to_thread(normalize_and_save_thumbnail, custom_thumb, safe_thumb_path)
+                    if ok and os.path.exists(safe_thumb_path) and os.path.getsize(safe_thumb_path) > 100:
+                        valid_thumb = safe_thumb_path
+                    else:
+                        safe_thumb_path = None
+
+                # Option B: Fallback to Auto-Extracted crisp frame from the video
+                if not valid_thumb and is_video:
                     thumb_target = f"{part_file}_thumb.jpg"
                     thumb_path = await extract_thumbnail_async(part_file, thumb_target, seek_seconds=5)
                     if thumb_path and os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 100:
                         valid_thumb = thumb_path
-
-                # 4. Normalize thumbnail dimensions to <= 320px once
-                safe_thumb_path = None
-                if valid_thumb and os.path.exists(valid_thumb):
-                    try:
-                        def _norm_thumb(src: str, dst: str):
-                            from PIL import Image
-                            with Image.open(src) as t_img:
-                                t_img = t_img.convert("RGB")
-                                t_img.thumbnail((320, 320), Image.Resampling.LANCZOS)
-                                t_img.save(dst, "JPEG", quality=90)
-                        safe_thumb_path = f"{valid_thumb}_norm.jpg"
-                        await asyncio.to_thread(_norm_thumb, valid_thumb, safe_thumb_path)
-                        if os.path.exists(safe_thumb_path) and os.path.getsize(safe_thumb_path) > 100:
-                            valid_thumb = safe_thumb_path
-                        else:
-                            safe_thumb_path = None
-                    except Exception as th_err:
-                        print(f"[!] Thumbnail normalization skipped: {th_err}")
-                        safe_thumb_path = None
 
                 # Retry loop with FloodWait auto-backoff
                 retry_count = 0
@@ -568,33 +587,79 @@ async def upload_unlocked_media(
                                             file_name=orig_file_name,
                                             progress=upload_progress,
                                         )
+                                    except Exception as d_err:
+                                        print(f"[!] send_document with thumb failed ({d_err}), retrying send_document with thumb=None...")
+                                        sent_msg = await bot_client.send_document(
+                                            chat_id=target_chat_id,
+                                            document=part_file,
+                                            caption=part_caption,
+                                            thumb=None,
+                                            file_name=orig_file_name,
+                                            progress=upload_progress,
+                                        )
                         elif media_type == "photo" or part_lower.endswith((".jpg", ".jpeg", ".png", ".webp")):
-                            sent_msg = await bot_client.send_photo(
-                                chat_id=target_chat_id,
-                                photo=part_file,
-                                caption=part_caption,
-                                progress=upload_progress,
-                            )
+                            try:
+                                sent_msg = await bot_client.send_photo(
+                                    chat_id=target_chat_id,
+                                    photo=part_file,
+                                    caption=part_caption,
+                                    progress=upload_progress,
+                                )
+                            except Exception:
+                                sent_msg = await bot_client.send_document(
+                                    chat_id=target_chat_id,
+                                    document=part_file,
+                                    caption=part_caption,
+                                    file_name=orig_file_name,
+                                    progress=upload_progress,
+                                )
                         elif media_type == "audio" or part_lower.endswith((".mp3", ".m4a", ".wav", ".ogg")):
-                            sent_msg = await bot_client.send_audio(
-                                chat_id=target_chat_id,
-                                audio=part_file,
-                                caption=part_caption,
-                                progress=upload_progress,
-                            )
+                            try:
+                                sent_msg = await bot_client.send_audio(
+                                    chat_id=target_chat_id,
+                                    audio=part_file,
+                                    caption=part_caption,
+                                    progress=upload_progress,
+                                )
+                            except Exception:
+                                sent_msg = await bot_client.send_document(
+                                    chat_id=target_chat_id,
+                                    document=part_file,
+                                    caption=part_caption,
+                                    file_name=orig_file_name,
+                                    progress=upload_progress,
+                                )
                         elif media_type == "voice":
-                            sent_msg = await bot_client.send_voice(
-                                chat_id=target_chat_id,
-                                voice=part_file,
-                                caption=part_caption,
-                                progress=upload_progress,
-                            )
+                            try:
+                                sent_msg = await bot_client.send_voice(
+                                    chat_id=target_chat_id,
+                                    voice=part_file,
+                                    caption=part_caption,
+                                    progress=upload_progress,
+                                )
+                            except Exception:
+                                sent_msg = await bot_client.send_document(
+                                    chat_id=target_chat_id,
+                                    document=part_file,
+                                    caption=part_caption,
+                                    file_name=orig_file_name,
+                                    progress=upload_progress,
+                                )
                         elif media_type == "video_note":
-                            sent_msg = await bot_client.send_video_note(
-                                chat_id=target_chat_id,
-                                video_note=part_file,
-                                progress=upload_progress,
-                            )
+                            try:
+                                sent_msg = await bot_client.send_video_note(
+                                    chat_id=target_chat_id,
+                                    video_note=part_file,
+                                    progress=upload_progress,
+                                )
+                            except Exception:
+                                sent_msg = await bot_client.send_document(
+                                    chat_id=target_chat_id,
+                                    document=part_file,
+                                    caption=part_caption,
+                                    file_name=orig_file_name,
+                                    progress=upload_progress,
+                                )
                         elif media_type == "animation":
                             try:
                                 sent_msg = await bot_client.send_animation(
@@ -633,33 +698,35 @@ async def upload_unlocked_media(
                                     custom_thumb = await db.get_custom_thumbnail(thumb_user_id, check_enabled=True)
                             except Exception:
                                 pass
-                            valid_doc_thumb = custom_thumb if custom_thumb and os.path.exists(custom_thumb) and os.path.getsize(custom_thumb) > 100 else None
-    
-                            # Normalize document thumbnail — offloaded to thread pool
-                            if valid_doc_thumb and os.path.exists(valid_doc_thumb):
-                                try:
-                                    def _norm_doc_thumb(src: str, dst: str):
-                                        from PIL import Image
-                                        with Image.open(src) as t_img:
-                                            t_img = t_img.convert("RGB")
-                                            t_img.thumbnail((320, 320), Image.Resampling.LANCZOS)
-                                            t_img.save(dst, "JPEG", quality=90)
-                                    safe_doc_thumb = f"{valid_doc_thumb}_doc_norm.jpg"
-                                    await asyncio.to_thread(_norm_doc_thumb, valid_doc_thumb, safe_doc_thumb)
-                                    if os.path.exists(safe_doc_thumb) and os.path.getsize(safe_doc_thumb) > 100:
-                                        valid_doc_thumb = safe_doc_thumb
-                                        safe_thumb_path = safe_doc_thumb
-                                except Exception as doc_th_err:
-                                    print(f"[!] Doc thumbnail normalization skipped: {doc_th_err}")
-    
-                            sent_msg = await bot_client.send_document(
-                                chat_id=target_chat_id,
-                                document=part_file,
-                                caption=part_caption,
-                                file_name=orig_file_name,
-                                thumb=valid_doc_thumb,
-                                progress=upload_progress,
-                            )
+                            valid_doc_thumb = None
+                            if custom_thumb and os.path.exists(custom_thumb) and os.path.getsize(custom_thumb) > 100:
+                                safe_doc_thumb = f"{part_file}_doc_norm.jpg"
+                                ok = await asyncio.to_thread(normalize_and_save_thumbnail, custom_thumb, safe_doc_thumb)
+                                if ok and os.path.exists(safe_doc_thumb) and os.path.getsize(safe_doc_thumb) > 100:
+                                    valid_doc_thumb = safe_doc_thumb
+                                    safe_thumb_path = safe_doc_thumb
+
+                            try:
+                                sent_msg = await bot_client.send_document(
+                                    chat_id=target_chat_id,
+                                    document=part_file,
+                                    caption=part_caption,
+                                    file_name=orig_file_name,
+                                    thumb=valid_doc_thumb,
+                                    progress=upload_progress,
+                                )
+                            except Exception as d_err:
+                                if valid_doc_thumb:
+                                    sent_msg = await bot_client.send_document(
+                                        chat_id=target_chat_id,
+                                        document=part_file,
+                                        caption=part_caption,
+                                        file_name=orig_file_name,
+                                        thumb=None,
+                                        progress=upload_progress,
+                                    )
+                                else:
+                                    raise
     
                         if sent_msg:
                             if overflow_caption and len(overflow_caption) > 1024:
@@ -763,7 +830,7 @@ async def upload_unlocked_media(
                         retry_count += 1
                     except Exception as e:
                         if active_jobs.get(job_id, {}).get("cancelled"):
-                            await status_message.edit_text("❌ Upload cancelled by user.")
+                            await _safe_edit_status(status_message, "❌ Upload cancelled by user.")
                             return False
                         print(f"[!] Upload error on part {p_idx}: {e}")
                         success_all = False
@@ -785,15 +852,16 @@ async def upload_unlocked_media(
             if len(first_title) > 36:
                 first_title = first_title[:33] + "..."
             parts_note = f" • {total_parts} Segments" if total_parts > 1 else ""
-            await status_message.edit_text(
+            await _safe_edit_status(
+                status_message,
                 text=(
                     "✨ **DELIVERY COMPLETED SUCCESSFULLY** ✨\n"
                     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"📦 **Content:** `{first_title}`{parts_note}\n"
                     "⚡ **Dispatch:** `Direct Stream-Copy (Lossless)`\n"
-                    "🛡️ **Stealth:** `100% Forensic Scrubbed (Zero Trace)`\n"
+                    "🛡️ **Status:** `Verified Delivery`\n"
                     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "🎉 _Extracted via Restricted Harvester Turbo Engine_"
+                    "🎉 _Extracted via Fast Delivery Engine_"
                 ),
             )
 

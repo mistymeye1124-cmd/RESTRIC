@@ -149,25 +149,23 @@ def emergency_disk_purge() -> int:
 
 def check_storage_safety() -> Tuple[bool, str, float]:
     """
-    Evaluates whether the system has safe disk and RAM headroom
-    to accept and process a new media download.
-    Protects both the VPS OS and the co-hosted ProGuild HQ website.
+    Evaluates whether the system has safe disk and RAM headroom.
+    Maintains clean buffer for website while allowing maximum bot speed without stalls.
     Returns: (is_safe, reason, free_metric)
     """
     free_disk = get_free_disk_gb()
     if free_disk < MIN_FREE_DISK_GB:
-        # Attempt emergency purge first
         emergency_disk_purge()
         free_disk = get_free_disk_gb()
-        if free_disk < MIN_FREE_DISK_GB:
-            return False, f"Disk space low ({free_disk:.1f} GB free, minimum {MIN_FREE_DISK_GB} GB required for website safety)", free_disk
+        if free_disk < 2.0:
+            return False, f"Critical disk boundary ({free_disk:.1f} GB free)", free_disk
 
     free_ram = get_free_ram_mb()
     if free_ram < MIN_FREE_RAM_MB:
         gc.collect()
         free_ram = get_free_ram_mb()
-        if free_ram < MIN_FREE_RAM_MB:
-            return False, f"RAM low ({free_ram:.0f} MB available, minimum {MIN_FREE_RAM_MB} MB required)", free_ram
+        if free_ram < 500:
+            return False, f"Critical RAM boundary ({free_ram:.0f} MB free)", free_ram
 
     return True, "Storage and memory healthy", free_disk
 
@@ -201,19 +199,18 @@ async def start_storage_scavenger_daemon(interval_sec: int = 30):
                 stat = item.stat()
                 file_age = now - stat.st_mtime
 
-                # Determine if actively associated with a job
+                # CRITICAL: A file must NEVER be deleted if its associated job is active!
                 is_active = any(jid in fname for jid in active_ids)
+                if is_active:
+                    continue
 
-                # Delete if:
-                # 1. Not in active jobs and age > 60 seconds
-                # 2. Or file age > AUTO_CLEAN_FILE_MAX_AGE_SEC (120 seconds)
-                # 3. Or ends in .temp / .part and age > 90 seconds
+                # Only delete orphan/stale files not belonging to any active running job:
+                # 1. Orphan file older than AUTO_CLEAN_FILE_MAX_AGE_SEC (default 30 minutes)
+                # 2. Dangling abandoned partial download (.temp / .part) older than 10 minutes
                 should_delete = False
-                if not is_active and file_age > 60:
+                if file_age > AUTO_CLEAN_FILE_MAX_AGE_SEC:
                     should_delete = True
-                elif file_age > AUTO_CLEAN_FILE_MAX_AGE_SEC:
-                    should_delete = True
-                elif fname.endswith((".temp", ".part", "_delogo", "_wm")) and file_age > 90:
+                elif fname.endswith((".temp", ".part", "_delogo", "_wm")) and file_age > 600:
                     should_delete = True
 
                 if should_delete:

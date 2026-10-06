@@ -122,6 +122,19 @@ SQLiteStorage.get_peer_by_id = _de_safe_get_peer_by_id
 
 logger = logging.getLogger(__name__)
 
+async def _safe_edit_status(status_message: Optional[Message], text: str, reply_markup=None):
+    """Safely edits status message, ignoring errors if status_message is None, deleted, or throttled."""
+    if not status_message:
+        return
+    try:
+        if reply_markup is not None:
+            await status_message.edit_text(text, reply_markup=reply_markup)
+        else:
+            await status_message.edit_text(text)
+    except Exception:
+        pass
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Telethon high-layer (Layer 180+) fallback — handles Pyrogram's
 # MessageMediaUnsupported for edited/new-format posts.
@@ -464,7 +477,7 @@ async def _safe_get_messages(
             continue
 
         except FloodWait as e:
-            wait_sec = e.value + random_extra(4, 8)
+            wait_sec = e.value + 1
             limiter.on_flood_wait(int(wait_sec))
             logger.warning("[Download] FLOOD_WAIT %ds on %s (attempt %d)", wait_sec, session_key, attempt)
             if attempt < max_retries:
@@ -643,6 +656,8 @@ async def download_restricted_media(
                 return
 
             async def _do_edit(text_to_send: str):
+                if not status_message:
+                    return
                 try:
                     await status_message.edit_text(
                         text=text_to_send,
@@ -666,12 +681,26 @@ async def download_restricted_media(
             active_jobs[job_id]["current_client"] = current_client
         else:
             remaining = limiter.quarantine_remaining
-            await status_message.edit_text(
+            await _safe_edit_status(
+                status_message,
                 f"⏳ **Session temporarily rate-limited by Telegram**\n\n"
                 f"Safety cool-down: **{remaining / 60:.0f} min {remaining % 60:.0f} sec** remaining.\n"
                 "Your job will resume automatically — please wait."
             )
-            await asyncio.sleep(remaining)
+            sleep_step = 1.0
+            elapsed = 0.0
+            while elapsed < remaining:
+                if active_jobs.get(job_id, {}).get("cancelled"):
+                    break
+                alt_c = get_next_available_pool_client(exclude_client=current_client)
+                if alt_c:
+                    current_client = alt_c
+                    session_key = _session_key_from_client(current_client)
+                    limiter = rate_registry.get_sync(session_key)
+                    active_jobs[job_id]["current_client"] = current_client
+                    break
+                await asyncio.sleep(min(sleep_step, remaining - elapsed))
+                elapsed += sleep_step
 
     try:
         # Zero-Trace Ghost Mode: Never broadcast typing or read receipts to target source chat
@@ -753,7 +782,8 @@ async def download_restricted_media(
 
             if _pyro_sess_str:
                 try:
-                    await status_message.edit_text(
+                    await _safe_edit_status(
+                        status_message,
                         "⚡ **MTProto Turbo Engine Activated**\n"
                         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"🚀 **Target Message:** `#{message_id}`\n"
@@ -793,7 +823,8 @@ async def download_restricted_media(
                 except Exception as _tele_err:
                     logger.debug("[Download] Telethon fallback for None msg: %s", _tele_err)
 
-            await status_message.edit_text(
+            await _safe_edit_status(
+                status_message,
                 "❌ **Could not retrieve this message.**\n\n"
                 "Possible reasons:\n"
                 f"• No connected account is a member of this channel (`{chat_id}`)\n"
@@ -828,7 +859,8 @@ async def download_restricted_media(
 
             if _pyro_sess_str:
                 try:
-                    await status_message.edit_text(
+                    await _safe_edit_status(
+                        status_message,
                         "🔄 **Switching to High-Layer Engine** (Layer 180+)\n\n"
                         "This post uses a newer Telegram format — routing through the compatibility engine..."
                     )
@@ -949,7 +981,8 @@ async def download_restricted_media(
                 }
             elif getattr(source_msg, "service", None):
                 s_action = str(source_msg.service.value) if hasattr(source_msg.service, "value") else str(source_msg.service)
-                await status_message.edit_text(
+                await _safe_edit_status(
+                    status_message,
                     f"ℹ️ **Message #{message_id} is a Telegram System Event** (`{s_action}`)\n\n"
                     "This post is a service announcement (such as a pinned message notification, member action, or topic header), not a downloadable media or text file.\n\n"
                     "👉 **Please send the link of the actual content post in the channel.**"
@@ -958,7 +991,8 @@ async def download_restricted_media(
                 active_jobs.pop(job_id, None)
                 return None
             else:
-                await status_message.edit_text(
+                await _safe_edit_status(
+                    status_message,
                     f"⚠️ **Message #{message_id} is Empty or Deleted**\n\n"
                     "This message in the channel contains no text, video, or file (it may have been deleted or is an empty spacer).\n\n"
                     "👉 **Please send the next link in the channel, e.g. Message #17.**"
@@ -1198,7 +1232,7 @@ async def download_restricted_media(
                     break
 
             except FloodWait as e:
-                wait_sec = e.value + random_extra(5, 10)
+                wait_sec = e.value + 1
                 limiter.on_flood_wait(int(wait_sec))
                 cname = getattr(current_client, "name", "")
                 if "account_" in cname:
@@ -1215,17 +1249,28 @@ async def download_restricted_media(
                     session_key = _session_key_from_client(current_client)
                     limiter = rate_registry.get_sync(session_key)
                     active_jobs[job_id]["current_client"] = current_client
-                    try:
-                        await status_message.edit_text("🔄 Switching to backup session to bypass rate-limit...")
-                    except Exception:
-                        pass
-                    await asyncio.sleep(2)
+                    await _safe_edit_status(status_message, "🔄 Switching to backup session to bypass rate-limit...")
+                    await asyncio.sleep(0.1)
                     continue
 
-                await status_message.edit_text(
+                await _safe_edit_status(
+                    status_message,
                     f"⏳ Telegram rate limit — waiting {wait_sec:.0f}s before resuming download..."
                 )
-                await asyncio.sleep(wait_sec)
+                sleep_step = 1.0
+                elapsed = 0.0
+                while elapsed < wait_sec:
+                    if active_jobs.get(job_id, {}).get("cancelled"):
+                        break
+                    alt_c = get_next_available_pool_client(exclude_client=current_client)
+                    if alt_c:
+                        current_client = alt_c
+                        session_key = _session_key_from_client(current_client)
+                        limiter = rate_registry.get_sync(session_key)
+                        active_jobs[job_id]["current_client"] = current_client
+                        break
+                    await asyncio.sleep(min(sleep_step, wait_sec - elapsed))
+                    elapsed += sleep_step
 
             except PeerFlood:
                 limiter.on_peer_flood()
@@ -1236,14 +1281,12 @@ async def download_restricted_media(
                     session_key = _session_key_from_client(current_client)
                     limiter = rate_registry.get_sync(session_key)
                     active_jobs[job_id]["current_client"] = current_client
-                    try:
-                        await status_message.edit_text("🔄 Switching to backup session...")
-                    except Exception:
-                        pass
-                    await asyncio.sleep(2)
+                    await _safe_edit_status(status_message, "🔄 Switching to backup session...")
+                    await asyncio.sleep(0.1)
                     continue
 
-                await status_message.edit_text(
+                await _safe_edit_status(
+                    status_message,
                     "⚠️ Session rate-limited by Telegram. Safety cool-down active — try again shortly."
                 )
                 active_jobs.pop(job_id, None)
@@ -1257,7 +1300,8 @@ async def download_restricted_media(
                         asyncio.create_task(handle_dead_session(uid, reason=str(e)))
                     except Exception:
                         pass
-                await status_message.edit_text(
+                await _safe_edit_status(
+                    status_message,
                     "⚠️ **Session Expired / Terminated**\n\n"
                     "Your Telegram session was disconnected or expired.\n"
                     "👉 Please use `/login` to scan QR code and reconnect."
@@ -1286,15 +1330,12 @@ async def download_restricted_media(
                     session_key = _session_key_from_client(current_client)
                     limiter = rate_registry.get_sync(session_key)
                     active_jobs[job_id]["current_client"] = current_client
-                    try:
-                        await status_message.edit_text("🔄 Stream stalled or reset — switching to backup worker to continue...")
-                    except Exception:
-                        pass
-                    await asyncio.sleep(1)
+                    await _safe_edit_status(status_message, "🔄 Stream stalled or reset — switching to backup worker to continue...")
+                    await asyncio.sleep(0.1)
                     continue
 
                 if dl_attempt < 3:
-                    await asyncio.sleep(2 * dl_attempt)
+                    await asyncio.sleep(0.5 * dl_attempt)
 
         # Engine 3: Ultimate Failover via Telethon Layer 229 Engine if Pyrogram struggled
         if (not downloaded_file or not os.path.exists(str(downloaded_file)) or os.path.getsize(str(downloaded_file)) == 0) and not active_jobs.get(job_id, {}).get("cancelled"):
@@ -1302,10 +1343,7 @@ async def download_restricted_media(
 
             if _pyro_sess_str:
                 logger.info("[DownloadEngine] Activating Telethon Layer 229 Fallback after Pyrogram socket timeout...")
-                try:
-                    await status_message.edit_text("⚡ **Activating High-Layer Stream (Layer 229)** to bypass network stall...")
-                except Exception:
-                    pass
+                await _safe_edit_status(status_message, "⚡ **Activating High-Layer Stream (Layer 229)** to bypass network stall...")
                 _tele_res = await _telethon_fallback_download(
                     pyro_session_str=_pyro_sess_str,
                     chat_id=chat_id,
@@ -1323,13 +1361,13 @@ async def download_restricted_media(
         if active_jobs.get(job_id, {}).get("cancelled"):
             if downloaded_file and os.path.exists(str(downloaded_file)):
                 _safe_remove(str(downloaded_file))
-            await status_message.edit_text("❌ Download cancelled.")
+            await _safe_edit_status(status_message, "❌ Download cancelled.")
             active_jobs.setdefault(job_id, {})["final_status_set"] = True
             active_jobs.pop(job_id, None)
             return None
 
         if not downloaded_file or not os.path.exists(str(downloaded_file)) or os.path.getsize(str(downloaded_file)) == 0:
-            await status_message.edit_text("❌ Download failed — empty or corrupted file received.")
+            await _safe_edit_status(status_message, "❌ Download failed — empty or corrupted file received.")
             active_jobs.setdefault(job_id, {})["final_status_set"] = True
             active_jobs.pop(job_id, None)
             return None
@@ -1348,12 +1386,12 @@ async def download_restricted_media(
 
     except Exception as e:
         if active_jobs.get(job_id, {}).get("cancelled"):
-            await status_message.edit_text("❌ Task was cancelled.")
+            await _safe_edit_status(status_message, "❌ Task was cancelled.")
             active_jobs.setdefault(job_id, {})["final_status_set"] = True
             active_jobs.pop(job_id, None)
             return None
         logger.error("[Download] Unhandled exception in job %s: %s", job_id, e)
-        await status_message.edit_text(f"❌ Download failed: {str(e)}")
+        await _safe_edit_status(status_message, f"❌ Download failed: {str(e)}")
         active_jobs.setdefault(job_id, {})["final_status_set"] = True
         active_jobs.pop(job_id, None)
         return None

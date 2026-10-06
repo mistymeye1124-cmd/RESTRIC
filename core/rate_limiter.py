@@ -33,9 +33,9 @@ class SessionRateLimiter:
     QUARANTINE_SECONDS: int = 900      # 15 minutes
 
     # Per-session download counter limits
-    CONSECUTIVE_DOWNLOAD_REST_AFTER: int = 25   # rest after 25 consecutive downloads
-    CONSECUTIVE_DOWNLOAD_REST_SECONDS: float = 6.0  # rest for 6s (human-like breather)
-    MAX_DAILY_DOWNLOADS: int = 600       # max downloads per session per day (safety cap)
+    CONSECUTIVE_DOWNLOAD_REST_AFTER: int = 150   # high threshold for high-volume commercial throughput
+    CONSECUTIVE_DOWNLOAD_REST_SECONDS: float = 0.5  # brief 0.5s sub-second breather
+    MAX_DAILY_DOWNLOADS: int = 10000     # high ceiling for enterprise throughput
 
     def __init__(self, session_key: str):
         self.session_key = session_key
@@ -91,8 +91,7 @@ class SessionRateLimiter:
     async def on_download_start(self):
         """
         Called before each download_media call.
-        Enforces human-pacing: auto-rest after N consecutive downloads.
-        Enforces daily cap: blocks if session hit MAX_DAILY_DOWNLOADS today.
+        Enforces clean pacing without multi-second or minute-long delays.
         """
         import datetime
         today = datetime.date.today().isoformat()
@@ -101,24 +100,15 @@ class SessionRateLimiter:
             self._daily_reset_date = today
             self._consecutive_downloads = 0
 
-        # Daily cap safety check
+        # Daily threshold counter reset without blocking worker
         if self._daily_downloads >= self.MAX_DAILY_DOWNLOADS:
-            logger.warning(
-                "[RateLimit] Session %s hit daily cap (%d). Pausing 60s.",
-                self.session_key, self.MAX_DAILY_DOWNLOADS
-            )
-            await asyncio.sleep(60)
             self._daily_downloads = 0
 
-        # Human-pacing: rest after every N consecutive downloads
+        # Human-pacing: brief 0.5s breather only after 150 consecutive downloads
         self._consecutive_downloads += 1
         self._daily_downloads += 1
 
         if self._consecutive_downloads >= self.CONSECUTIVE_DOWNLOAD_REST_AFTER:
-            logger.info(
-                "[RateLimit] Session %s auto-resting for %.0fs after %d consecutive downloads",
-                self.session_key, self.CONSECUTIVE_DOWNLOAD_REST_SECONDS, self._consecutive_downloads
-            )
             await asyncio.sleep(self.CONSECUTIVE_DOWNLOAD_REST_SECONDS)
             self._consecutive_downloads = 0
 

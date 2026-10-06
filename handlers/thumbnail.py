@@ -7,6 +7,7 @@ will automatically carry this branding.
 """
 
 import os
+import asyncio
 from pathlib import Path
 from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -14,6 +15,7 @@ from database import db
 from config import BASE_DIR
 from core.emojis import apply_custom_emojis
 from core.state_manager import get_user_state
+from core.media_processor import normalize_and_save_thumbnail
 
 THUMBS_DIR = BASE_DIR / "downloads" / "thumbnails"
 THUMBS_DIR.mkdir(parents=True, exist_ok=True)
@@ -117,15 +119,26 @@ async def set_thumb_command(client: Client, message: Message):
         )
         return
 
-    # Download photo
+    # Download raw photo to temp file, then normalize to <=320px JPEG for Telegram compliance
+    raw_path = str(THUMBS_DIR / f"{user_id}_raw.jpg")
     target_path = str(THUMBS_DIR / f"{user_id}.jpg")
     try:
-        await client.download_media(target_msg.photo, file_name=target_path)
-        await db.set_custom_thumbnail(user_id, target_path)
-        await message.reply_text(
-            "✅ **Custom Thumbnail Saved Successfully!**\n\n"
-            "All future video downloads and auto-forwards will now feature your custom poster."
-        )
+        await client.download_media(target_msg.photo, file_name=raw_path)
+        ok = await asyncio.to_thread(normalize_and_save_thumbnail, raw_path, target_path)
+        if os.path.exists(raw_path):
+            try:
+                os.remove(raw_path)
+            except Exception:
+                pass
+
+        if ok and os.path.exists(target_path):
+            await db.set_custom_thumbnail(user_id, target_path)
+            await message.reply_text(
+                "✅ **Custom Thumbnail Saved & Optimized!**\n\n"
+                "All future video downloads, batch jobs, and auto-forwards will now feature this crisp custom poster."
+            )
+        else:
+            await message.reply_text("❌ Failed to process image into a valid Telegram thumbnail.")
     except Exception as e:
         await message.reply_text(f"❌ Failed to save custom thumbnail: {e}")
 
@@ -148,11 +161,22 @@ async def photo_listener_thumb(client: Client, message: Message):
 
     # If caption is /setthumb, handle directly
     if caption == "/setthumb":
+        raw_path = str(THUMBS_DIR / f"{user_id}_raw.jpg")
         target_path = str(THUMBS_DIR / f"{user_id}.jpg")
         try:
-            await client.download_media(message.photo, file_name=target_path)
-            await db.set_custom_thumbnail(user_id, target_path)
-            await message.reply_text("✅ **Custom Thumbnail Saved!**")
+            await client.download_media(message.photo, file_name=raw_path)
+            ok = await asyncio.to_thread(normalize_and_save_thumbnail, raw_path, target_path)
+            if os.path.exists(raw_path):
+                try:
+                    os.remove(raw_path)
+                except Exception:
+                    pass
+
+            if ok and os.path.exists(target_path):
+                await db.set_custom_thumbnail(user_id, target_path)
+                await message.reply_text("✅ **Custom Thumbnail Saved & Optimized!**")
+            else:
+                await message.reply_text("❌ Failed to process image as thumbnail.")
         except Exception as e:
             await message.reply_text(f"❌ Error: {e}")
         return
@@ -253,15 +277,24 @@ async def callback_save_photo_as_thumb(client: Client, query: CallbackQuery):
     try:
         source_msg = await client.get_messages(chat_id=query.message.chat.id, message_ids=msg_id)
         if source_msg and source_msg.photo:
+            raw_path = str(THUMBS_DIR / f"{user_id}_raw.jpg")
             target_path = str(THUMBS_DIR / f"{user_id}.jpg")
-            await client.download_media(source_msg.photo, file_name=target_path)
-            await db.set_custom_thumbnail(user_id, target_path)
-            await query.answer("✅ Saved as your Custom Thumbnail!", show_alert=True)
-            try:
-                await query.message.edit_text("✅ **Custom Thumbnail Activated Successfully!**")
-            except Exception:
-                pass
-            return
+            await client.download_media(source_msg.photo, file_name=raw_path)
+            ok = await asyncio.to_thread(normalize_and_save_thumbnail, raw_path, target_path)
+            if os.path.exists(raw_path):
+                try:
+                    os.remove(raw_path)
+                except Exception:
+                    pass
+
+            if ok and os.path.exists(target_path):
+                await db.set_custom_thumbnail(user_id, target_path)
+                await query.answer("✅ Saved as your Custom Thumbnail!", show_alert=True)
+                try:
+                    await query.message.edit_text("✅ **Custom Thumbnail Activated & Optimized!**")
+                except Exception:
+                    pass
+                return
     except Exception as e:
         print(f"[!] Error saving photo as thumb: {e}")
 

@@ -83,6 +83,50 @@ _OFFICIAL_PROFILES = [
         "app_version": "5.9.0 x64",
         "lang_code": "en",
     },
+    # --- Official Telegram Android (Flagship Mobile) ---
+    {
+        "device_model": "Samsung Galaxy S24 Ultra",
+        "system_version": "Android 14 (OneUI 6.1)",
+        "app_version": "11.1.3 (5249)",
+        "lang_code": "en",
+    },
+    {
+        "device_model": "Google Pixel 8 Pro",
+        "system_version": "Android 14 (AP2A.240805.005)",
+        "app_version": "11.1.3 (5249)",
+        "lang_code": "en",
+    },
+    {
+        "device_model": "Xiaomi 14 Ultra",
+        "system_version": "Android 14 (HyperOS 1.0.12)",
+        "app_version": "11.1.3 (5249)",
+        "lang_code": "en",
+    },
+    {
+        "device_model": "OnePlus 12",
+        "system_version": "Android 14 (OxygenOS 14.0)",
+        "app_version": "11.1.3 (5249)",
+        "lang_code": "en",
+    },
+    # --- Official Telegram iOS (iPhone & iPad) ---
+    {
+        "device_model": "iPhone 15 Pro Max",
+        "system_version": "iOS 17.6.1",
+        "app_version": "10.16.0 (2912)",
+        "lang_code": "en",
+    },
+    {
+        "device_model": "iPhone 14 Pro",
+        "system_version": "iOS 17.5.1",
+        "app_version": "10.15.2 (2890)",
+        "lang_code": "en",
+    },
+    {
+        "device_model": "iPad Pro 12.9-inch (6th Gen)",
+        "system_version": "iPadOS 17.6",
+        "app_version": "10.16.0 (2912)",
+        "lang_code": "en",
+    },
 ]
 
 

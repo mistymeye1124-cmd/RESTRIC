@@ -479,6 +479,7 @@ async def get_personal_user_client(user_id: int) -> Optional[Client]:
 
 
 _verified_chat_access: Dict[Tuple[str, str], float] = {}
+_miss_chat_access: Dict[Tuple[str, str], float] = {}
 
 
 async def resolve_chat_access(client: Client, chat_id: Any) -> bool:
@@ -486,7 +487,7 @@ async def resolve_chat_access(client: Client, chat_id: Any) -> bool:
     Tests if client has access to chat_id.
     Handles Pyrogram MTProto peer resolution and dialog syncing without invoking
     GetFullChannel (which causes 0xa04e8d3a ChannelFull deserialization crashes on Layer 158).
-    Includes high-performance TTL cache to eliminate redundant get_dialogs RPC sweeps.
+    Includes high-performance TTL cache (positive 1h, negative 10m) to eliminate redundant get_dialogs RPC sweeps.
     """
     if not client or not getattr(client, "is_connected", False):
         return False
@@ -498,6 +499,14 @@ async def resolve_chat_access(client: Client, chat_id: Any) -> bool:
     if cache_key in _verified_chat_access:
         if now < _verified_chat_access[cache_key]:
             return True
+        else:
+            _verified_chat_access.pop(cache_key, None)
+
+    if cache_key in _miss_chat_access:
+        if now < _miss_chat_access[cache_key]:
+            return False
+        else:
+            _miss_chat_access.pop(cache_key, None)
 
     target_raw = None
     try:
@@ -510,6 +519,7 @@ async def resolve_chat_access(client: Client, chat_id: Any) -> bool:
         peer = await client.resolve_peer(chat_id)
         if peer:
             _verified_chat_access[cache_key] = now + 3600
+            _miss_chat_access.pop(cache_key, None)
             return True
     except Exception:
         pass
@@ -528,6 +538,7 @@ async def resolve_chat_access(client: Client, chat_id: Any) -> bool:
                     pass
                 if d_id == chat_id or (target_raw is not None and d_raw == target_raw):
                     _verified_chat_access[cache_key] = now + 3600
+                    _miss_chat_access.pop(cache_key, None)
                     return True
             if count % 10 == 0:
                 await asyncio.sleep(0.05)
@@ -539,9 +550,12 @@ async def resolve_chat_access(client: Client, chat_id: Any) -> bool:
         peer = await client.resolve_peer(chat_id)
         if peer:
             _verified_chat_access[cache_key] = now + 3600
+            _miss_chat_access.pop(cache_key, None)
             return True
+        _miss_chat_access[cache_key] = now + 600
         return False
     except Exception:
+        _miss_chat_access[cache_key] = now + 600
         return False
 
 
@@ -549,7 +563,7 @@ async def get_client_for_channel(chat_id: Any, user_id: Optional[int] = None) ->
     """
     Resolves the best client that has access to chat_id:
     1. Checks user's personal client (highest priority for private channels).
-    2. If personal client doesn't have access or user isn't logged in, checks all healthy worker accounts in the pool.
+    2. If personal client doesn't have access or user isn't logged in, checks all healthy worker accounts in parallel.
     Returns: (client, reason)
     reason can be: "personal", "worker", "no_session", or "not_in_channel".
     """
@@ -561,7 +575,7 @@ async def get_client_for_channel(chat_id: Any, user_id: Optional[int] = None) ->
             if has_access:
                 return personal_client, "personal"
 
-    # Check worker accounts in pool
+    # Check worker accounts in pool concurrently
     candidate_workers: List[Client] = []
     for aid, client in list(account_pool.items()):
         if client.is_connected and client != personal_client:
@@ -573,10 +587,15 @@ async def get_client_for_channel(chat_id: Any, user_id: Optional[int] = None) ->
         if ac.is_connected and ac != personal_client and ac not in candidate_workers:
             candidate_workers.append(ac)
 
-    for worker in candidate_workers:
-        has_access = await resolve_chat_access(worker, chat_id)
-        if has_access:
-            return worker, "worker"
+    if candidate_workers:
+        async def _check_w(w: Client):
+            ok = await resolve_chat_access(w, chat_id)
+            return w if ok else None
+
+        results = await asyncio.gather(*[_check_w(w) for w in candidate_workers], return_exceptions=True)
+        for r in results:
+            if isinstance(r, Client):
+                return r, "worker"
 
     if not personal_client:
         return None, "no_session"
@@ -674,23 +693,32 @@ async def get_user_client(user_id: int, prefer_premium: bool = True) -> Optional
 def get_next_available_pool_client(exclude_client: Optional[Client] = None) -> Optional[Client]:
     """
     Hot-swap failover: returns an alternate, unquarantined client from the multi-account pool.
-    Called immediately when a userbot encounters FLOOD_WAIT or PEER_FLOOD.
+    Uses balanced round-robin to evenly distribute traffic across all helper accounts,
+    preventing single-account burnout and Telegram rate flags.
     """
+    global pool_index
+    candidates: List[Client] = []
+
     # 1. Search in dynamic multi-account pool
     for aid, c in account_pool.items():
         if c == exclude_client or not c.is_connected:
             continue
         limiter = rate_registry.get_sync(f"account_{aid}")
         if not limiter.is_quarantined:
-            return c
+            candidates.append(c)
 
     # 2. Search in legacy admin pool
     for c in admin_pool_clients:
-        if c == exclude_client or not c.is_connected:
+        if c == exclude_client or not c.is_connected or c in candidates:
             continue
         limiter = rate_registry.get_sync(getattr(c, "name", "unknown"))
         if not limiter.is_quarantined:
-            return c
+            candidates.append(c)
+
+    if candidates:
+        selected = candidates[pool_index % len(candidates)]
+        pool_index += 1
+        return selected
 
     return None
 

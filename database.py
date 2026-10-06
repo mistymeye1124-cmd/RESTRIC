@@ -130,13 +130,13 @@ class Database:
 
     async def init(self):
         """Initialize database schema with business, promo codes, and settings."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             # Enable high-concurrency WAL mode, RAM cache, and 512MB Memory-Mapped I/O
             # Tuned for 16GB RAM VPS — 256MB cache + 512MB mmap = near-zero disk reads
             await db.execute("PRAGMA journal_mode = WAL;")
             await db.execute("PRAGMA synchronous = NORMAL;")
             await db.execute("PRAGMA cache_size = -262144;")  # 256MB page cache
-            await db.execute("PRAGMA busy_timeout = 5000;")
+            await db.execute("PRAGMA busy_timeout = 60000;")
             await db.execute("PRAGMA mmap_size = 536870912;")  # 512MB mmap
             await db.execute("PRAGMA temp_store = MEMORY;")
             await db.execute("PRAGMA wal_autocheckpoint = 1000;")
@@ -645,7 +645,7 @@ class Database:
 
     async def register_user(self, user_id: int, first_name: str = "", username: str = ""):
         _cache_bust(user_id)  # invalidate cache on write
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 """
                 INSERT INTO users (user_id, first_name, username)
@@ -663,7 +663,7 @@ class Database:
         cached = _cache_get(("get_user", user_id))
         if cached is not None:
             return cached
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
             row = await cursor.fetchone()
@@ -673,7 +673,7 @@ class Database:
 
     async def get_users_page(self, page: int = 1, per_page: int = 8) -> Tuple[List[Dict[str, Any]], int]:
         """Returns (users_list, total_count) for real registered users with pagination."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute("SELECT COUNT(*) FROM users WHERE user_id > 0")
             total = (await cur.fetchone())[0]
@@ -708,7 +708,7 @@ class Database:
         try:
             expiry_dt = datetime.fromisoformat(expiry_str)
             if datetime.now() > expiry_dt:
-                async with aiosqlite.connect(self.db_file) as db:
+                async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
                     await db.execute(
                         "UPDATE users SET is_premium = 0, premium_expiry = NULL WHERE user_id = ?",
                         (user_id,),
@@ -771,7 +771,7 @@ class Database:
         # Safe because: quota is already checked above; the write is just bookkeeping
         async def _write_quota():
             try:
-                async with aiosqlite.connect(self.db_file) as _db:
+                async with aiosqlite.connect(self.db_file, timeout=60.0) as _db:
                     await _db.execute(
                         """
                         UPDATE users SET
@@ -799,7 +799,7 @@ class Database:
         from datetime import date
         today_str = date.today().isoformat()
         try:
-            async with aiosqlite.connect(self.db_file) as db:
+            async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
                 await db.execute(
                     """
                     UPDATE users SET
@@ -833,7 +833,7 @@ class Database:
         new_expiry = base_dt + timedelta(days=days)
         expiry_str = new_expiry.isoformat()
 
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 """
                 INSERT INTO users (user_id, is_premium, premium_expiry)
@@ -849,7 +849,7 @@ class Database:
 
     async def remove_premium(self, user_id: int):
         _cache_bust(user_id)  # flush user cache
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 "UPDATE users SET is_premium = 0, premium_expiry = NULL WHERE user_id = ?",
                 (user_id,),
@@ -861,7 +861,7 @@ class Database:
     # --- Session Management ---
 
     async def save_session(self, user_id: int, phone: str, string_session: str):
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 """
                 INSERT INTO users (user_id, phone, string_session, is_active)
@@ -879,7 +879,7 @@ class Database:
         self.sync_vault_and_env_sync()
 
     async def get_session(self, user_id: int) -> Optional[str]:
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             # 1. Primary check: users table where is_active = 1
             cursor = await db.execute(
                 "SELECT string_session FROM users WHERE user_id = ? AND is_active = 1",
@@ -923,7 +923,7 @@ class Database:
             return None
 
     async def remove_session(self, user_id: int):
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 "UPDATE users SET is_active = 0, string_session = NULL WHERE user_id = ?",
                 (user_id,),
@@ -935,7 +935,7 @@ class Database:
             await db.commit()
 
     async def get_all_active_sessions(self) -> list:
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cursor = await db.execute(
                 "SELECT user_id, string_session FROM users WHERE string_session IS NOT NULL AND string_session != ''"
             )
@@ -956,7 +956,7 @@ class Database:
     # --- Login State Tracking ---
 
     async def set_login_state(self, user_id: int, phone: str, phone_code_hash: str, step: str = "code"):
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 """
                 INSERT INTO login_states (user_id, phone, phone_code_hash, step)
@@ -972,7 +972,7 @@ class Database:
             await db.commit()
 
     async def update_login_step(self, user_id: int, step: str):
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 "UPDATE login_states SET step = ?, timestamp = CURRENT_TIMESTAMP WHERE user_id = ?",
                 (step, user_id),
@@ -980,7 +980,7 @@ class Database:
             await db.commit()
 
     async def get_login_state(self, user_id: int) -> Optional[Dict[str, str]]:
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cursor = await db.execute(
                 "SELECT phone, phone_code_hash, step FROM login_states WHERE user_id = ?",
                 (user_id,),
@@ -995,7 +995,7 @@ class Database:
             return None
 
     async def clear_login_state(self, user_id: int):
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute("DELETE FROM login_states WHERE user_id = ?", (user_id,))
             await db.commit()
 
@@ -1005,7 +1005,7 @@ class Database:
         self, user_id: int, plan_key: str, trx_id: str, sender_number: str, method: str, amount: float
     ) -> bool:
         try:
-            async with aiosqlite.connect(self.db_file) as db:
+            async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
                 await db.execute(
                     """
                     INSERT INTO transactions (user_id, plan_key, trx_id, sender_number, method, amount)
@@ -1019,7 +1019,7 @@ class Database:
             return False
 
     async def approve_transaction(self, trx_id: str) -> Optional[Dict[str, Any]]:
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT * FROM transactions WHERE trx_id = ? AND status = 'pending'",
@@ -1047,7 +1047,7 @@ class Database:
         return trx
 
     async def reject_transaction(self, trx_id: str) -> Optional[Dict[str, Any]]:
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT * FROM transactions WHERE trx_id = ? AND status = 'pending'",
@@ -1066,7 +1066,7 @@ class Database:
             return trx
 
     async def get_pending_transactions(self, limit: int = 15) -> List[Dict[str, Any]]:
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT * FROM transactions WHERE status = 'pending' ORDER BY created_at DESC LIMIT ?",
@@ -1076,7 +1076,7 @@ class Database:
             return [dict(r) for r in rows]
 
     async def get_transaction(self, trx_id: str) -> Optional[Dict[str, Any]]:
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT * FROM transactions WHERE trx_id = ?",
@@ -1087,7 +1087,7 @@ class Database:
 
     async def get_user_language(self, user_id: int) -> str:
         """Returns the user's preferred language ('en', 'bn', 'hi', 'ur'). Defaults to 'en'."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT language FROM user_settings WHERE user_id = ?", (user_id,))
             row = await cursor.fetchone()
@@ -1107,7 +1107,7 @@ class Database:
         cached = _cache_get(("get_wm", user_id))
         if cached is not None:
             return cached
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT * FROM watermark_settings WHERE user_id = ?", (user_id,))
             row = await cursor.fetchone()
@@ -1154,7 +1154,7 @@ class Database:
         _L1_CACHE.pop(("get_wm", user_id), None)
         current = await self.get_watermark_settings(user_id)
         current.update(kwargs)
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 """
                 INSERT INTO watermark_settings (
@@ -1208,20 +1208,20 @@ class Database:
     async def clear_watermark_settings(self, user_id: int):
         """Resets all watermark, logo, intro, and outro settings for user."""
         _L1_CACHE.pop(("get_wm", user_id), None)  # bust cache
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute("DELETE FROM watermark_settings WHERE user_id = ?", (user_id,))
             await db.commit()
 
     # --- Global Brand & Default Watermark Settings ---
 
     async def get_global_setting(self, key: str, default: str = "") -> str:
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("SELECT value FROM global_settings WHERE key = ?", (key,))
             row = await cur.fetchone()
             return row[0] if row and row[0] is not None else default
 
     async def set_global_setting(self, key: str, value: str):
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 """
                 INSERT INTO global_settings (key, value) VALUES (?, ?)
@@ -1269,7 +1269,7 @@ class Database:
         cached = _cache_get(("get_settings", user_id))
         if cached is not None:
             return cached
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT * FROM user_settings WHERE user_id = ?", (user_id,))
             row = await cursor.fetchone()
@@ -1311,7 +1311,7 @@ class Database:
         _L1_CACHE.pop(("get_settings", user_id), None)  # bust settings cache on write
         settings = await self.get_settings(user_id)
         settings.update(kwargs)
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 """
                 INSERT INTO user_settings (
@@ -1366,7 +1366,7 @@ class Database:
     # --- Admin Business Analytics ---
 
     async def get_business_stats(self) -> Dict[str, Any]:
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("SELECT COUNT(*) FROM users")
             total_users = (await cur.fetchone())[0]
 
@@ -1394,7 +1394,7 @@ class Database:
             }
 
     async def get_all_user_ids(self) -> List[int]:
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("SELECT user_id FROM users WHERE is_banned = 0")
             rows = await cur.fetchall()
             return [r[0] for r in rows]
@@ -1406,14 +1406,14 @@ class Database:
         from config import ADMIN_IDS
         if user_id not in ADMIN_IDS:
             return "normal"
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("SELECT simulated_mode FROM admin_simulations WHERE user_id = ?", (user_id,))
             row = await cur.fetchone()
             return row[0] if row and row[0] else "admin"
 
     async def set_simulated_mode(self, user_id: int, mode: str):
         """Sets the testing mode ('admin', 'free', 'vip') for an admin user."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 """
                 INSERT INTO admin_simulations (user_id, simulated_mode) VALUES (?, ?)
@@ -1426,7 +1426,7 @@ class Database:
     async def reset_user_quota(self, user_id: int):
         """Resets used download count for a user (useful for admin testing free limits)."""
         _cache_bust(user_id)  # flush before write so stale quota is never read
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 "UPDATE users SET daily_downloads_used = 0 WHERE user_id = ?",
                 (user_id,)
@@ -1442,7 +1442,7 @@ class Database:
 
     async def ban_user(self, user_id: int):
         _cache_bust(user_id)  # flush immediately so is_user_banned reflects ban at once
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 "UPDATE users SET is_banned = 1 WHERE user_id = ?",
                 (user_id,)
@@ -1452,7 +1452,7 @@ class Database:
 
     async def unban_user(self, user_id: int):
         _cache_bust(user_id)  # flush immediately so is_user_banned reflects unban at once
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 "UPDATE users SET is_banned = 0 WHERE user_id = ?",
                 (user_id,)
@@ -1542,7 +1542,7 @@ class Database:
         """Returns merged list of config ADMIN_IDS + dynamically added admin IDs."""
         from config import ADMIN_IDS
         admin_set = set(ADMIN_IDS)
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             async with db.execute("SELECT admin_id FROM dynamic_admins") as cursor:
                 async for row in cursor:
                     admin_set.add(row[0])
@@ -1550,7 +1550,7 @@ class Database:
 
     async def get_dynamic_admins(self) -> list[dict]:
         """Returns list of dynamically added co-admins."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("SELECT admin_id, added_by, title, created_at FROM dynamic_admins ORDER BY created_at ASC")
             rows = await cur.fetchall()
             return [{"admin_id": r[0], "added_by": r[1], "title": r[2], "created_at": r[3]} for r in rows]
@@ -1559,7 +1559,7 @@ class Database:
 
     async def add_dynamic_admin(self, admin_id: int, added_by: int = 0, title: str = "Co-Admin") -> bool:
         """Adds a new co-admin ID to the database."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             try:
                 await db.execute(
                     "INSERT INTO dynamic_admins (admin_id, added_by, title) VALUES (?, ?, ?) ON CONFLICT(admin_id) DO UPDATE SET title = excluded.title",
@@ -1572,7 +1572,7 @@ class Database:
 
     async def remove_dynamic_admin(self, admin_id: int) -> bool:
         """Removes a dynamic admin."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("DELETE FROM dynamic_admins WHERE admin_id = ?", (admin_id,))
             await db.commit()
             return cur.rowcount > 0
@@ -1582,7 +1582,7 @@ class Database:
         from config import ADMIN_IDS
         if user_id in ADMIN_IDS:
             return True
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("SELECT 1 FROM dynamic_admins WHERE admin_id = ?", (user_id,))
             return bool(await cur.fetchone())
 
@@ -1653,7 +1653,7 @@ class Database:
 
     async def get_user_feature_override(self, user_id: int, feature: str) -> Optional[bool]:
         """Returns personal override: True (granted), False (revoked), or None (inherit from tier)."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute(
                 "SELECT allowed FROM user_feature_overrides WHERE user_id = ? AND feature = ?",
                 (user_id, feature),
@@ -1663,7 +1663,7 @@ class Database:
 
     async def set_user_feature_override(self, user_id: int, feature: str, allowed: Optional[bool]):
         """Sets personal feature override for an individual user."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             if allowed is None:
                 await db.execute(
                     "DELETE FROM user_feature_overrides WHERE user_id = ? AND feature = ?",
@@ -1682,7 +1682,7 @@ class Database:
 
     async def get_user_all_overrides(self, user_id: int) -> Dict[str, bool]:
         """Returns all personal feature overrides active on this user."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute(
                 "SELECT feature, allowed FROM user_feature_overrides WHERE user_id = ?",
                 (user_id,),
@@ -1740,21 +1740,21 @@ class Database:
 
     async def get_active_payment_methods(self) -> Dict[str, str]:
         """Returns dict of active payment methods {name: details} for customers."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("SELECT name, details FROM payment_methods WHERE is_active = 1 ORDER BY id ASC")
             rows = await cur.fetchall()
             return {r[0]: r[1] for r in rows}
 
     async def get_all_payment_methods(self) -> List[Dict[str, Any]]:
         """Returns all payment methods with ID and active status for admin control."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("SELECT id, name, details, is_active FROM payment_methods ORDER BY id ASC")
             rows = await cur.fetchall()
             return [{"id": r[0], "name": r[1], "details": r[2], "is_active": bool(r[3])} for r in rows]
 
     async def add_or_update_payment_method(self, name: str, details: str, is_active: int = 1) -> bool:
         """Adds or updates a payment method by name."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             try:
                 await db.execute(
                     """
@@ -1771,7 +1771,7 @@ class Database:
 
     async def toggle_payment_method(self, method_id: int) -> Optional[bool]:
         """Toggles a payment method ON (1) or OFF (0). Returns new state or None if not found."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("SELECT is_active FROM payment_methods WHERE id = ?", (method_id,))
             row = await cur.fetchone()
             if not row:
@@ -1783,14 +1783,14 @@ class Database:
 
     async def delete_payment_method(self, method_id: int) -> bool:
         """Permanently deletes a payment method."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("DELETE FROM payment_methods WHERE id = ?", (method_id,))
             await db.commit()
             return cur.rowcount > 0
 
     async def get_payment_method_by_id(self, method_id: int) -> Optional[Dict[str, Any]]:
         """Fetches a single payment method by ID."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("SELECT id, name, details, is_active FROM payment_methods WHERE id = ?", (method_id,))
             row = await cur.fetchone()
             if row:
@@ -1799,7 +1799,7 @@ class Database:
 
     async def update_payment_method_details(self, method_id: int, new_details: str) -> bool:
         """Updates the number or details/instructions of an existing payment method by ID."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("UPDATE payment_methods SET details = ? WHERE id = ?", (new_details.strip(), method_id))
             await db.commit()
             return cur.rowcount > 0
@@ -1836,7 +1836,7 @@ class Database:
 
     async def create_coupon(self, code: str, days: int, max_uses: int = 1) -> bool:
         """Creates or updates a promo code granting VIP days."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             try:
                 await db.execute(
                     """
@@ -1856,7 +1856,7 @@ class Database:
             return False, "❌ Please enter a valid coupon/giveaway code."
 
         code_clean = str(code).strip().upper()
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             # 1. Anti-Abuse Check: Has this user already claimed this specific giveaway code?
             cur = await db.execute("SELECT 1 FROM redeemed_coupons WHERE user_id = ? AND code = ?", (user_id, code_clean))
             if await cur.fetchone():
@@ -1889,7 +1889,7 @@ class Database:
 
     async def get_all_coupons(self) -> List[Dict[str, Any]]:
         """Returns list of all active coupons."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute("SELECT code, days, uses_left, created_at FROM coupons ORDER BY created_at DESC")
             rows = await cur.fetchall()
@@ -1897,7 +1897,7 @@ class Database:
 
     async def delete_coupon(self, code: str) -> bool:
         """Deletes a coupon."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute("DELETE FROM coupons WHERE code = ?", (code.strip().upper(),))
             await db.commit()
             return True
@@ -1988,7 +1988,7 @@ class Database:
 
     async def get_referral_plans(self) -> List[Dict[str, int]]:
         """Returns all configured referral plans sorted by required invites ASC."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute("SELECT id, invites, days FROM referral_plans ORDER BY invites ASC")
             rows = await cur.fetchall()
@@ -1998,7 +1998,7 @@ class Database:
         """Adds or updates a referral milestone plan (e.g. 5 invites = 7 days)."""
         if invites <= 0 or days <= 0:
             return False
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 """
                 INSERT INTO referral_plans (invites, days) VALUES (?, ?)
@@ -2011,21 +2011,21 @@ class Database:
 
     async def delete_referral_plan(self, invites: int) -> bool:
         """Deletes a referral milestone plan by invite count."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("DELETE FROM referral_plans WHERE invites = ?", (int(invites),))
             await db.commit()
             return cur.rowcount > 0
 
     async def reset_referral_plans(self):
         """Resets referral plans to default single plan (3 invites = 3 days)."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute("DELETE FROM referral_plans")
             await db.execute("INSERT INTO referral_plans (invites, days) VALUES (3, 3)")
             await db.commit()
 
     async def deduct_referral_points(self, user_id: int, points: int) -> bool:
         """Deducts points after user redemption."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 "UPDATE users SET referral_points = MAX(0, referral_points - ?) WHERE user_id = ?",
                 (int(points), user_id),
@@ -2037,7 +2037,7 @@ class Database:
         """Stores a referral as pending until user verifies channel membership or human action."""
         if inviter_id == referred_id:
             return False
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 "INSERT OR REPLACE INTO pending_referrals (referred_id, inviter_id) VALUES (?, ?)",
                 (referred_id, inviter_id),
@@ -2047,14 +2047,14 @@ class Database:
 
     async def get_pending_referral(self, referred_id: int) -> Optional[int]:
         """Returns inviter_id if there is an unverified referral pending for this user."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("SELECT inviter_id FROM pending_referrals WHERE referred_id = ?", (referred_id,))
             row = await cur.fetchone()
             return row[0] if row else None
 
     async def remove_pending_referral(self, referred_id: int):
         """Removes a pending referral after it has been finalized or invalidated."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute("DELETE FROM pending_referrals WHERE referred_id = ?", (referred_id,))
             await db.commit()
 
@@ -2077,7 +2077,7 @@ class Database:
         cfg = await self.get_referral_config()
         pts_award = cfg["points_per_invite"]
 
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
 
             # 1. Anti-Circular Check: Was inviter originally referred by referred_id?
@@ -2164,7 +2164,7 @@ class Database:
 
     async def get_referral_stats(self, user_id: int) -> Dict[str, Any]:
         """Retrieves referral count, points, and invite history."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
                 "SELECT referral_count, referral_points, is_premium, premium_expiry FROM users WHERE user_id = ?",
@@ -2197,7 +2197,7 @@ class Database:
         When a referred user buys VIP, awards the inviter bonus VIP days!
         Returns (inviter_id, bonus_days) or None.
         """
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("SELECT referred_by FROM users WHERE user_id = ?", (referred_id,))
             row = await cur.fetchone()
             if not row or not row[0]:
@@ -2235,7 +2235,7 @@ class Database:
         if cached is not None:
             return cached if cached != "__NONE__" else None
 
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute("SELECT * FROM file_cache WHERE cache_key = ?", (key,))
             row = await cur.fetchone()
@@ -2249,7 +2249,7 @@ class Database:
             # Fire-and-forget hit counter increment — non-blocking
             async def _inc_hit():
                 try:
-                    async with aiosqlite.connect(self.db_file) as _db:
+                    async with aiosqlite.connect(self.db_file, timeout=60.0) as _db:
                         await _db.execute(
                             "UPDATE file_cache SET hit_count = hit_count + 1 WHERE cache_key = ?",
                             (key,)
@@ -2282,7 +2282,7 @@ class Database:
         key = self._make_cache_key(source_chat, message_id)
         # Bust the miss-cache entry so next get_cached_file finds this fresh record immediately
         _L1_CACHE.pop(("fc", key), None)
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 """
                 INSERT INTO file_cache (
@@ -2448,7 +2448,7 @@ class Database:
         Retrieves all VIP subscription packages from database.
         Returns dict keyed by plan_key (e.g. '7_days', '30_days', 'lifetime').
         """
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
 
             # Only auto-seed defaults if table is totally empty (first boot ever)
@@ -2494,7 +2494,7 @@ class Database:
 
     async def update_vip_plan_price(self, plan_key: str, price_bdt: int) -> bool:
         """Updates the price in BDT for a specific VIP plan."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute(
                 "UPDATE vip_plans SET price_bdt = ? WHERE plan_key = ?",
                 (int(price_bdt), plan_key),
@@ -2504,7 +2504,7 @@ class Database:
 
     async def update_vip_plan_days(self, plan_key: str, days: int) -> bool:
         """Updates duration days for a specific VIP plan."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute(
                 "UPDATE vip_plans SET days = ? WHERE plan_key = ?",
                 (int(days), plan_key),
@@ -2514,7 +2514,7 @@ class Database:
 
     async def update_vip_plan_name(self, plan_key: str, name: str) -> bool:
         """Updates the display name of a VIP plan."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute(
                 "UPDATE vip_plans SET name = ? WHERE plan_key = ?",
                 (name.strip(), plan_key),
@@ -2524,7 +2524,7 @@ class Database:
 
     async def update_vip_plan_badge(self, plan_key: str, badge: str) -> bool:
         """Updates the badge/emoji of a VIP plan."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute(
                 "UPDATE vip_plans SET badge = ? WHERE plan_key = ?",
                 (badge.strip(), plan_key),
@@ -2534,7 +2534,7 @@ class Database:
 
     async def toggle_vip_plan_active(self, plan_key: str) -> Optional[int]:
         """Toggles a VIP plan between active (1) and disabled (0)."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("SELECT is_active FROM vip_plans WHERE plan_key = ?", (plan_key,))
             row = await cur.fetchone()
             if not row:
@@ -2548,7 +2548,7 @@ class Database:
         self, plan_key: str, name: str, price_bdt: int, days: int, badge: str = "⭐", sort_order: int = 0
     ) -> bool:
         """Adds or updates a VIP subscription package."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 """
                 INSERT INTO vip_plans (plan_key, name, price_bdt, days, badge, is_active, sort_order)
@@ -2568,14 +2568,14 @@ class Database:
 
     async def delete_vip_plan(self, plan_key: str) -> bool:
         """Deletes a VIP subscription plan."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cur = await db.execute("DELETE FROM vip_plans WHERE plan_key = ?", (plan_key,))
             await db.commit()
             return cur.rowcount > 0
 
     async def reset_vip_plans(self) -> bool:
         """Resets VIP plans back to factory default packages."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute("DELETE FROM vip_plans")
             default_vip_plans = [
                 ("7_days", "7 Days VIP Pass", 100, 7, "⚡", 1, 1),
@@ -2635,7 +2635,7 @@ class Database:
         _PROTECTED_CHANNELS_CACHE.clear()
         _PROTECTED_CHANNEL_TITLES.clear()
         try:
-            async with aiosqlite.connect(self.db_file) as db:
+            async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
                 async with db.execute("SELECT channel_identifier, channel_title FROM protected_channels") as cursor:
                     rows = await cursor.fetchall()
                     for r in rows:
@@ -2676,7 +2676,7 @@ class Database:
             elif not cleaned.startswith("@") and not cleaned.startswith("-") and not cleaned.startswith("http"):
                 primary_key = f"@{cleaned}"
 
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             try:
                 await db.execute(
                     """
@@ -2703,7 +2703,7 @@ class Database:
         if not variants:
             return False, "Invalid channel identifier."
 
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             placeholders = ",".join("?" for _ in variants)
             cursor = await db.execute(
                 f"DELETE FROM protected_channels WHERE channel_identifier IN ({placeholders})",
@@ -2721,7 +2721,7 @@ class Database:
 
     async def get_protected_channels(self) -> List[Dict[str, Any]]:
         """Retrieves all locked VIP channels."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cursor = await db.execute(
                 "SELECT id, channel_identifier, channel_title, locked_by, created_at FROM protected_channels ORDER BY id DESC"
             )
@@ -2778,7 +2778,7 @@ class Database:
         if not string_session or not account_id:
             return False, "Invalid account ID or session string."
 
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             try:
                 await db.execute(
                     """
@@ -2916,7 +2916,7 @@ class Database:
 
         query += " ORDER BY id ASC"
 
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cursor = await db.execute(query, tuple(params))
             rows = await cursor.fetchall()
             return [
@@ -2943,7 +2943,7 @@ class Database:
 
     async def get_bot_account_by_id(self, account_id: int) -> Optional[Dict[str, Any]]:
         """Fetches a single bot account by its Telegram account_id."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cursor = await db.execute(
                 """
                 SELECT id, owner_user_id, account_id, phone, first_name, username, string_session, is_active, status, flood_wait_until, total_downloads, daily_downloads, last_used_at, created_at, COALESCE(can_share, 1), COALESCE(is_tg_premium, 0)
@@ -2975,7 +2975,7 @@ class Database:
 
     async def toggle_bot_account_sharing(self, account_id: int, owner_user_id: Optional[int] = None) -> Tuple[bool, int]:
         """Toggles can_share (1 = shared worker in pool, 0 = personal only)."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             query = "SELECT COALESCE(can_share, 1) FROM bot_accounts WHERE account_id = ?"
             params = [account_id]
             if owner_user_id is not None:
@@ -3000,13 +3000,13 @@ class Database:
 
     async def set_bot_account_sharing(self, account_id: int, can_share: int = 1):
         """Sets can_share value directly (1 = shared worker, 0 = personal only)."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute("UPDATE bot_accounts SET can_share = ? WHERE account_id = ?", (can_share, account_id))
             await db.commit()
 
     async def update_bot_account_status(self, account_id: int, status: str, flood_wait_until: float = 0):
         """Updates health status ('healthy', 'cooldown', 'dead') and flood cooldown timer."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             is_active_val = 0 if status == "dead" else 1
             await db.execute(
                 """
@@ -3020,7 +3020,7 @@ class Database:
 
     async def update_bot_account_tg_premium(self, account_id: int, is_premium: bool):
         """Updates Telegram Premium subscription flag for a bot account."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 "UPDATE bot_accounts SET is_tg_premium = ? WHERE account_id = ?",
                 (1 if is_premium else 0, account_id),
@@ -3029,7 +3029,7 @@ class Database:
 
     async def toggle_bot_account_tg_premium(self, account_id: int) -> Tuple[bool, int]:
         """Toggles account is_tg_premium (1 -> 0 or 0 -> 1)."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             query = "SELECT COALESCE(is_tg_premium, 0) FROM bot_accounts WHERE account_id = ?"
             cursor = await db.execute(query, (account_id,))
             row = await cursor.fetchone()
@@ -3046,7 +3046,7 @@ class Database:
 
     async def increment_bot_account_downloads(self, account_id: int):
         """Increments download telemetry for an account and touches last_used_at."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 """
                 UPDATE bot_accounts
@@ -3061,7 +3061,7 @@ class Database:
 
     async def toggle_bot_account(self, account_id: int, owner_user_id: Optional[int] = None) -> Tuple[bool, int]:
         """Toggles account is_active (1 -> 0 or 0 -> 1)."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             query = "SELECT is_active FROM bot_accounts WHERE account_id = ?"
             params = [account_id]
             if owner_user_id is not None:
@@ -3086,7 +3086,7 @@ class Database:
 
     async def delete_bot_account(self, account_id: int, owner_user_id: Optional[int] = None) -> bool:
         """Deletes a bot account from the pool."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             query = "DELETE FROM bot_accounts WHERE account_id = ?"
             params = [account_id]
             if owner_user_id is not None:
@@ -3111,7 +3111,7 @@ class Database:
         custom_caption: str = "",
     ) -> int:
         """Registers a new channel auto-forward / mirror monitor."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cursor = await db.execute(
                 """
                 INSERT INTO channel_monitors (
@@ -3126,7 +3126,7 @@ class Database:
 
     async def get_channel_monitors(self, user_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Returns all channel monitors, optionally filtered by user_id."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             if user_id is not None:
                 cursor = await db.execute(
@@ -3140,7 +3140,7 @@ class Database:
 
     async def get_channel_monitor_by_id(self, monitor_id: int) -> Optional[Dict[str, Any]]:
         """Returns a specific channel monitor by its ID."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT * FROM channel_monitors WHERE id = ?", (monitor_id,))
             row = await cursor.fetchone()
@@ -3148,7 +3148,7 @@ class Database:
 
     async def get_active_monitors_for_source(self, source_chat_id: int) -> List[Dict[str, Any]]:
         """Returns all active monitors listening to a given source_chat_id."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT * FROM channel_monitors WHERE source_chat_id = ? AND is_active = 1",
@@ -3159,7 +3159,7 @@ class Database:
 
     async def get_all_active_monitors(self) -> List[Dict[str, Any]]:
         """Returns all currently active channel monitors."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT * FROM channel_monitors WHERE is_active = 1")
             rows = await cursor.fetchall()
@@ -3167,7 +3167,7 @@ class Database:
 
     async def toggle_channel_monitor(self, monitor_id: int, user_id: Optional[int] = None) -> Optional[int]:
         """Toggles a channel monitor active/paused. Returns new status (1 or 0) or None."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             query = "SELECT is_active FROM channel_monitors WHERE id = ?"
             params: list = [monitor_id]
             if user_id is not None:
@@ -3189,7 +3189,7 @@ class Database:
 
     async def delete_channel_monitor(self, monitor_id: int, user_id: Optional[int] = None) -> bool:
         """Deletes a channel monitor and its history."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             query = "DELETE FROM channel_monitors WHERE id = ?"
             params: list = [monitor_id]
             if user_id is not None:
@@ -3204,7 +3204,7 @@ class Database:
 
     async def is_monitor_post_forwarded(self, monitor_id: int, source_msg_id: int) -> bool:
         """Checks if a source post has already been mirrored by this monitor."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cursor = await db.execute(
                 "SELECT 1 FROM channel_monitor_history WHERE monitor_id = ? AND source_msg_id = ? LIMIT 1",
                 (monitor_id, source_msg_id),
@@ -3213,7 +3213,7 @@ class Database:
 
     async def record_monitor_forward(self, monitor_id: int, source_msg_id: int, dest_msg_id: int = 0):
         """Records a successful post mirror in history and increments stats."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 """
                 INSERT OR IGNORE INTO channel_monitor_history (monitor_id, source_msg_id, dest_msg_id)
@@ -3235,7 +3235,7 @@ class Database:
 
     async def update_monitor_last_msg(self, monitor_id: int, last_msg_id: int):
         """Updates the highest checked message ID for a monitor."""
-        async with aiosqlite.connect(self.db_file) as db:
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             await db.execute(
                 "UPDATE channel_monitors SET last_msg_id = MAX(last_msg_id, ?) WHERE id = ?",
                 (last_msg_id, monitor_id),

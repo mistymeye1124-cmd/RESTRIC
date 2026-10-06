@@ -8,6 +8,7 @@ and zero impact on normal user download tasks.
 
 import os
 import re
+import time
 import uuid
 import asyncio
 from typing import Dict, Any, Optional
@@ -183,7 +184,11 @@ async def _run_channel_clone_worker(
                 pass
             break
 
+        pause_start = time.time()
         while job_data.get("paused") and not job_data.get("cancelled"):
+            if time.time() - pause_start > 7200:
+                active_clones.setdefault(clone_id, {})["cancelled"] = True
+                break
             await asyncio.sleep(2)
             job_data = active_clones.get(clone_id, {})
 

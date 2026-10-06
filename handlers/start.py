@@ -236,21 +236,21 @@ async def render_start_card(client: Client, user_id: int, first_name: str):
         pct = (remaining / free_limit * 100) if free_limit > 0 else 0
         q_bar = generate_blocks(pct, total_blocks=8, filled_char="🟧", empty_char="⬜")
         status_banner = (
-            "╭── 🧪 **[ARM SQUAD] TEST SIMULATION** ─────╮\n"
-            f"│ • Squad Clearance : `Standard Operative (Sim)`\n"
-            f"│ • Daily Energy    : `{q_bar} {remaining}/{free_limit} Left`\n"
-            f"│ • Cloud Uplink    : `{login_status}`\n"
-            f"│ • Stream Engine   : `Direct Zero-Loss Stream`\n"
+            "╭── 🧪 **TEST SIMULATION (FREE TIER)** ──────╮\n"
+            f"│ • User Plan       : `Standard Free (Simulated)`\n"
+            f"│ • Daily Downloads : `{q_bar} {remaining}/{free_limit} Left`\n"
+            f"│ • Account Link    : `{login_status}`\n"
+            f"│ • Download Engine : `High-Speed Direct Stream`\n"
             "╰── _(Testing Free user limits. Revert: `/mode admin`)_ ──╯"
         )
-        action_btn = InlineKeyboardButton("💎 Upgrade to VIP Elite Pass", callback_data="user_view_premium")
+        action_btn = InlineKeyboardButton("⭐ Upgrade to VIP Premium", callback_data="user_view_premium")
     elif sim_mode == "vip":
         status_banner = (
-            "╭── 🧪 **[ARM SQUAD] VIP SIMULATION** ──────╮\n"
-            "│ • Squad Clearance : `VIP Elite Commander (Sim)`\n"
-            "│ • Daily Energy    : `🟧🟧🟧🟧🟧🟧🟧🟧 100% Unlimited ⚡`\n"
-            f"│ • Engine Speed    : `⚡ Turbo VIP (0 Queue Latency)`\n"
-            f"│ • Cloud Uplink    : `{login_status}`\n"
+            "╭── 🧪 **TEST SIMULATION (VIP TIER)** ───────╮\n"
+            "│ • User Plan       : `VIP Premium (Simulated)`\n"
+            "│ • Daily Downloads : `🟧🟧🟧🟧🟧🟧🟧🟧 Unlimited ⚡`\n"
+            f"│ • Processing Speed: `⚡ Priority VIP Stream`\n"
+            f"│ • Account Link    : `{login_status}`\n"
             "╰── _(Testing VIP user perks. Revert: `/mode admin`)_ ──╯"
         )
         action_btn = InlineKeyboardButton("🧪 Switch Test Mode", callback_data="adm_view_mode_menu")
@@ -264,29 +264,29 @@ async def render_start_card(client: Client, user_id: int, first_name: str):
         total_w = len(pool_accs)
         total_dl = stats.get("total_downloads", 0)
         status_banner = (
-            "╭── 👑 **[ARM SQUAD] SUPREME COMMANDER** ───╮\n"
-            "│ • Clearance Level : `Master Architect (God Mode)`\n"
-            f"│ • 👥 Total Users  : `{total_users} Registered Accounts`\n"
+            "╭── 👑 **ADMINISTRATOR DASHBOARD** ─────────╮\n"
+            "│ • Role            : `System Administrator`\n"
+            f"│ • 👥 Users        : `{total_users} Total Registered`\n"
             f"│ • 💎 VIP Members  : `{prem_users} Active Subscribers`\n"
-            f"│ • ⚡ Worker Fleet : `🟢 {healthy_w}/{total_w} Online ({max(1, healthy_w)}x Speed)`\n"
+            f"│ • ⚡ Account Pool : `🟢 {healthy_w}/{total_w} Online ({max(1, healthy_w)}x Capacity)`\n"
             f"│ • 📦 Delivered    : `{total_dl} Files Transferred`\n"
-            f"│ • Cloud Uplink    : `{login_status}`\n"
+            f"│ • Account Link    : `{login_status}`\n"
             "╰───────────────────────────────────────────╯"
         )
-        action_btn = InlineKeyboardButton(f"👑 Master Admin Command Center ({total_users} Users)", callback_data="adm_open_panel")
+        action_btn = InlineKeyboardButton(f"👑 Admin Control Panel ({total_users} Users)", callback_data="adm_open_panel")
     elif is_prem:
         user_info = await db.get_user(user_id)
         expiry = user_info.get("premium_expiry") or "Lifetime Access" if user_info else "Lifetime Access"
         status_banner = (
-            "╭── 💎 **[ARM SQUAD] VIP ELITE SQUADRON** ──╮\n"
-            "│ • Squad Clearance : `VIP Elite Commander`\n"
-            f"│ • Access Pass     : `{expiry}`\n"
-            "│ • Daily Energy    : `🟧🟧🟧🟧🟧🟧🟧🟧 100% Unlimited ⚡`\n"
-            f"│ • Engine Priority : `⚡ Turbo VIP (0 Queue Latency)`\n"
-            f"│ • Cloud Uplink    : `{login_status}`\n"
+            "╭── 💎 **VIP PREMIUM ACCOUNT** ────────────╮\n"
+            "│ • Membership Plan : `VIP Premium Member`\n"
+            f"│ • Expiration      : `{expiry}`\n"
+            "│ • Daily Quota     : `🟧🟧🟧🟧🟧🟧🟧🟧 100% Unlimited ⚡`\n"
+            f"│ • Engine Speed    : `⚡ Turbo VIP (0 Queue Latency)`\n"
+            f"│ • Account Link    : `{login_status}`\n"
             "╰───────────────────────────────────────────╯"
         )
-        action_btn = InlineKeyboardButton("💎 VIP Elite Member Dashboard", callback_data="user_view_premium")
+        action_btn = InlineKeyboardButton("💎 VIP Member Dashboard", callback_data="user_view_premium")
     else:
         user_info = await db.get_user(user_id)
         used = user_info.get("daily_downloads_used", 0) if user_info else 0
@@ -294,15 +294,15 @@ async def render_start_card(client: Client, user_id: int, first_name: str):
         pct = (remaining / free_limit * 100) if free_limit > 0 else 0
         q_bar = generate_blocks(pct, total_blocks=8, filled_char="🟧", empty_char="⬜")
         status_banner = (
-            "╭── ⚔️ **[ARM SQUAD] OPERATIVE STATUS** ────╮\n"
-            f"│ • Squad Clearance : `Standard Operative`\n"
-            f"│ • Daily Energy    : `{q_bar} {remaining}/{free_limit} Left Today`\n"
-            f"│ • Cloud Uplink    : `{login_status}`\n"
-            f"│ • Stream Engine   : `⚡ Direct Zero-Loss Stream`\n"
-            "│ • Tactical Perk   : `Unlock 30x Batch with /premium`\n"
+            "╭── 👤 **ACCOUNT STATUS** ─────────────────╮\n"
+            "│ • Membership Plan : `Standard Free Tier`\n"
+            f"│ • Daily Quota     : `{q_bar} {remaining}/{free_limit} Left Today`\n"
+            f"│ • Account Link    : `{login_status}`\n"
+            f"│ • Download Engine : `⚡ Direct Lossless Stream`\n"
+            "│ • Batch Support   : `Unlock multi-link batch with VIP`\n"
             "╰───────────────────────────────────────────╯"
         )
-        action_btn = InlineKeyboardButton("💎 Upgrade to VIP Elite Pass", callback_data="user_view_premium")
+        action_btn = InlineKeyboardButton("⭐ Upgrade to VIP", callback_data="user_view_premium")
 
     lang = await db.get_user_language(user_id)
     lang_display = get_lang_display(lang)
@@ -321,31 +321,31 @@ async def render_start_card(client: Client, user_id: int, first_name: str):
             action_btn,
         ],
         [
-            InlineKeyboardButton("⚡ Quick Strike (Download)", callback_data="wizard_start_download"),
-            InlineKeyboardButton("🔐 Multi-Accounts (QR)", callback_data="user_view_login"),
+            InlineKeyboardButton("📥 Direct Download", callback_data="wizard_start_download"),
+            InlineKeyboardButton("🔐 Connect Account (QR)", callback_data="user_view_login"),
         ],
         [
-            InlineKeyboardButton("🎬 Brand Studio", callback_data="user_view_watermark"),
+            InlineKeyboardButton("🎬 Watermark Studio", callback_data="user_view_watermark"),
             InlineKeyboardButton("✂️ Caption Studio", callback_data="user_view_caption_studio"),
         ],
         [
             InlineKeyboardButton("🖼️ Custom Thumbnail", callback_data="user_view_thumbnail"),
-            InlineKeyboardButton("🛠️ Tactical Armory", callback_data="user_view_toolbox"),
+            InlineKeyboardButton("🛠️ Media Tools", callback_data="user_view_toolbox"),
         ],
         [
-            InlineKeyboardButton("📺 Stream Quality", callback_data="user_view_resolution"),
-            InlineKeyboardButton("⚙️ Squad Settings", callback_data="user_view_settings"),
+            InlineKeyboardButton("📺 Video Quality", callback_data="user_view_resolution"),
+            InlineKeyboardButton("⚙️ Settings", callback_data="user_view_settings"),
         ],
         [
-            InlineKeyboardButton("📡 Live Channel Mirror", callback_data="watcher_menu"),
-            InlineKeyboardButton("👥 Squad Referral", callback_data="user_view_referral"),
+            InlineKeyboardButton("📡 Auto-Forward Mirror", callback_data="watcher_menu"),
+            InlineKeyboardButton("👥 Referral & Earn", callback_data="user_view_referral"),
         ],
         [
-            InlineKeyboardButton("📊 Tier Comparison", callback_data="user_view_features"),
-            InlineKeyboardButton("📖 Tactical Manual", callback_data="user_view_guide"),
+            InlineKeyboardButton("📊 Compare Plans", callback_data="user_view_features"),
+            InlineKeyboardButton("📖 User Guide", callback_data="user_view_guide"),
         ],
         [
-            InlineKeyboardButton(f"🌐 {lang_display}", callback_data="user_view_language"),
+            InlineKeyboardButton(f"🌐 Language ({lang_display})", callback_data="user_view_language"),
         ],
     ]
 

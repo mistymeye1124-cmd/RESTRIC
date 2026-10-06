@@ -58,8 +58,8 @@ async def concat_video_clips(
     if not valid_intro and not valid_outro:
         return main_video_path
 
-    from core.media_processor import inspect_video
-    main_info = inspect_video(main_video_path)
+    from core.media_processor import inspect_video_async
+    main_info = await inspect_video_async(main_video_path)
     w = main_info.get("width") or 1280
     h = main_info.get("height") or 720
     w = w if w % 2 == 0 else w + 1
@@ -71,8 +71,8 @@ async def concat_video_clips(
     concat_inputs = []
     clip_index = 0
 
-    # Check each clip for audio stream presence
-    def has_audio_stream(file_path: str) -> bool:
+    # Check each clip for audio stream presence (non-blocking)
+    def _check_audio_sync(file_path: str) -> bool:
         try:
             res = subprocess.run(
                 [
@@ -88,10 +88,13 @@ async def concat_video_clips(
         except Exception:
             return True
 
+    async def has_audio_stream(file_path: str) -> bool:
+        return await asyncio.to_thread(_check_audio_sync, file_path)
+
     # 1. Intro Clip
     if valid_intro:
         inputs.extend(["-i", intro_path])
-        has_a = has_audio_stream(intro_path)
+        has_a = await has_audio_stream(intro_path)
         if has_a:
             filter_parts.append(
                 f"[{clip_index}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{clip_index}];"
@@ -99,7 +102,7 @@ async def concat_video_clips(
             )
         else:
             # Generate silent audio matching clip duration
-            intro_info = inspect_video(intro_path)
+            intro_info = await inspect_video_async(intro_path)
             intro_dur = max(1, intro_info.get("duration") or 5)
             filter_parts.append(
                 f"[{clip_index}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{clip_index}];"
@@ -110,7 +113,7 @@ async def concat_video_clips(
 
     # 2. Main Video
     inputs.extend(["-i", main_video_path])
-    has_main_a = has_audio_stream(main_video_path)
+    has_main_a = await has_audio_stream(main_video_path)
     if has_main_a:
         filter_parts.append(
             f"[{clip_index}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{clip_index}];"
@@ -128,14 +131,14 @@ async def concat_video_clips(
     # 3. Outro Clip
     if valid_outro:
         inputs.extend(["-i", outro_path])
-        has_outro_a = has_audio_stream(outro_path)
+        has_outro_a = await has_audio_stream(outro_path)
         if has_outro_a:
             filter_parts.append(
                 f"[{clip_index}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{clip_index}];"
                 f"[{clip_index}:a]aformat=sample_rates=48000:channel_layouts=stereo[a{clip_index}]"
             )
         else:
-            outro_info = inspect_video(outro_path)
+            outro_info = await inspect_video_async(outro_path)
             outro_dur = max(1, outro_info.get("duration") or 5)
             filter_parts.append(
                 f"[{clip_index}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{clip_index}];"
@@ -652,8 +655,8 @@ async def apply_video_delogo(
         return input_path
 
     try:
-        from core.media_processor import inspect_video
-        info = inspect_video(input_path)
+        from core.media_processor import inspect_video_async
+        info = await inspect_video_async(input_path)
         video_w = info.get("width") or 1280
         video_h = info.get("height") or 720
         video_w = video_w if video_w % 2 == 0 else video_w + 1

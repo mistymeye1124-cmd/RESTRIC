@@ -74,7 +74,7 @@ def _inspect_video_ffmpeg(video_path: str) -> Dict[str, Any]:
             stderr=subprocess.PIPE,
             text=True,
             errors="ignore",
-            timeout=15.0,
+            timeout=5.0,
         )
         stderr = res.stderr or ""
 
@@ -193,7 +193,7 @@ def _extract_thumb_ffmpeg(video_path: str, output_thumb_path: str, seek_seconds:
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
-                timeout=15.0,
+                timeout=4.0,
             )
             if os.path.exists(output_thumb_path) and os.path.getsize(output_thumb_path) > 100:
                 return output_thumb_path

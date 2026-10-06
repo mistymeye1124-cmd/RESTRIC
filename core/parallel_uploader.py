@@ -82,13 +82,24 @@ async def _turbo_save_file_impl(
             fp.close()
         raise ValueError(f"Can't upload files bigger than {file_size_limit_mib} MiB")
 
+    is_bot = False
+    try:
+        if getattr(client, "me", None) and getattr(client.me, "is_bot", False):
+            is_bot = True
+    except Exception:
+        pass
+
     # Dynamic Sweet-Spot Tuning: MTProto strictly enforces 512KB (524288 bytes) maximum part size.
     # Concurrency is scaled through multiple independent MTProto media sessions.
     part_size = 512 * 1024
-    if not is_big:
+    if is_bot:
+        # Telegram Bot API tokens have a strict server-side concurrency limit on SaveBigFilePart.
+        # 5 concurrent sessions achieve 53+ MB/s line rate with ZERO 1-second FloodWait delays!
+        workers_count = 4 if file_size < 10 * 1024 * 1024 else 5
+    elif not is_big:
         workers_count = 6
     elif file_size < 30 * 1024 * 1024:
-        workers_count = 8
+        workers_count = 6 if not is_prem else 8
     elif file_size < 100 * 1024 * 1024:
         workers_count = 8 if not is_prem else 10
     else:
@@ -144,12 +155,18 @@ async def _turbo_save_file_impl(
                 except RPCError as rpc_err:
                     last_err = rpc_err
                     retry += 1
-                    logger.warning("[TurboWorker %d] RPC error on part %d (retry %d): %s", wid, rpc.file_part, retry, rpc_err)
-                    try:
-                        await sess.restart()
-                    except Exception:
-                        pass
-                    await asyncio.sleep(0.05 * retry)
+                    err_str = str(rpc_err).upper()
+                    if "FLOOD_WAIT" in err_str or hasattr(rpc_err, "value"):
+                        fw_delay = getattr(rpc_err, "value", 1) or 1
+                        logger.warning("[TurboWorker %d] FloodWait on part %d: waiting %ss", wid, rpc.file_part, fw_delay)
+                        await asyncio.sleep(fw_delay)
+                    else:
+                        logger.warning("[TurboWorker %d] RPC error on part %d (retry %d): %s", wid, rpc.file_part, retry, rpc_err)
+                        try:
+                            await sess.restart()
+                        except Exception:
+                            pass
+                        await asyncio.sleep(0.05 * retry)
                 except Exception as ex:
                     last_err = ex
                     retry += 1

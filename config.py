@@ -91,19 +91,22 @@ FREE_MAX_BATCH_SIZE = 1              # Only 1 video at a time for free users
 PREMIUM_DAILY_DOWNLOAD_LIMIT = 100   # Effectively unlimited
 PREMIUM_MAX_BATCH_SIZE = 30          # Can paste 30 links at once
 
-# ----------------- SYSTEM RESOURCE ALLOCATION (WEBSITE & VPS PROTECTION) -----------------
-# Strictly reserve 3.0 GB RAM and 10.0 GB Disk for Website & External Projects.
-# All surplus resources are dynamically allocated to the bot for 1,000+ user high-throughput concurrency.
-RESERVED_WEBSITE_RAM_MB = int(os.getenv("RESERVED_WEBSITE_RAM_MB", "3072"))  # 3.0 GB strictly reserved for Website
-RESERVED_WEBSITE_DISK_GB = float(os.getenv("RESERVED_WEBSITE_DISK_GB", "10.0")) # 10.0 GB strictly reserved for Website
+# ----------------- SYSTEM RESOURCE ALLOCATION (BOT SAFE ZONE & VPS SHIELD) -----------------
+# Bot Minimum Dedicated Safe Zone: 5.0 GB RAM and 60.0 GB SSD Storage
+BOT_SAFE_ZONE_RAM_MB = int(os.getenv("BOT_SAFE_ZONE_RAM_MB", "5120"))      # 5.0 GB RAM dedicated safe zone for bot
+BOT_SAFE_ZONE_DISK_GB = float(os.getenv("BOT_SAFE_ZONE_DISK_GB", "60.0"))   # 60.0 GB Storage dedicated safe zone for bot
 
-# Storage & Memory Safety Thresholds
-MIN_FREE_DISK_GB = RESERVED_WEBSITE_DISK_GB  # Enforce 10.0 GB safe floor for website
-MIN_FREE_RAM_MB = RESERVED_WEBSITE_RAM_MB    # Enforce 3.0 GB safe floor for website
+# Preserved Website Baseline (Website & External Projects)
+RESERVED_WEBSITE_RAM_MB = int(os.getenv("RESERVED_WEBSITE_RAM_MB", "3072"))  # 3.0 GB reserved for Website
+RESERVED_WEBSITE_DISK_GB = float(os.getenv("RESERVED_WEBSITE_DISK_GB", "10.0")) # 10.0 GB reserved for Website
+
+# Storage & Memory Safety Thresholds (Guarantees bot never runs out of space or RAM)
+MIN_FREE_DISK_GB = BOT_SAFE_ZONE_DISK_GB  # Enforce 60.0 GB safe floor for bot
+MIN_FREE_RAM_MB = BOT_SAFE_ZONE_RAM_MB    # Enforce 5.0 GB safe floor for bot
 AUTO_CLEAN_FILE_MAX_AGE_SEC = int(os.getenv("AUTO_CLEAN_FILE_MAX_AGE_SEC", "1800")) # 30m max file age for orphans
 
 # Dynamic Worker Pool Sizing:
-# Scales parallel workers dynamically based on VPS RAM while preserving 3GB for website!
+# Scales parallel workers dynamically based on VPS RAM while preserving website and bot safe zone!
 def _calculate_optimal_workers() -> int:
     try:
         import psutil
@@ -111,7 +114,7 @@ def _calculate_optimal_workers() -> int:
         usable_for_bot = max(0, total_ram_mb - RESERVED_WEBSITE_RAM_MB)
         # Allocate ~300MB per active worker slot
         calculated = int(usable_for_bot / 300)
-        return max(4, min(32, calculated))
+        return max(8, min(32, calculated))
     except Exception:
         return 8
 

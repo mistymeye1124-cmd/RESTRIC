@@ -1124,57 +1124,70 @@ async def batch_command_handler(client: Client, message: Message):
 
 
 async def process_batch_raw_text(client: Client, message: Message, raw_text: str):
-    """Parses multiple URLs and initiates sequential queue execution."""
+    """Parses multiple URLs (Telegram posts, ranges, YouTube, FB, etc.) and initiates batch execution."""
     user_id = message.from_user.id
-    url_pattern = re.compile(r"https?://[^\s]+")
-    found_urls = url_pattern.findall(raw_text)
+    is_prem = await db.is_user_premium(user_id)
+    max_batch = await db.get_tier_max_batch("vip" if is_prem else "free")
 
-    if not found_urls:
-        await message.reply_text("❌ No valid URLs detected in your text. Please provide valid web or Telegram links.")
+    from core.link_parser import parse_telegram_link, normalize_link_input
+    from handlers.link_handler import telegram_link_listener
+    from handlers.omni_downloader import process_omni_link
+
+    norm_text = normalize_link_input(raw_text)
+    tg_links = parse_telegram_link(norm_text, max_per_link=max_batch)
+
+    all_raw_urls = re.findall(r"https?://[^\s]+", raw_text)
+    web_urls = [u.rstrip(".,;:)>]}") for u in all_raw_urls if not ("t.me/" in u or "telegram.me/" in u)]
+
+    if not tg_links and not web_urls:
+        await message.reply_text("❌ No valid URLs or Telegram links detected in your message. Please provide valid links.")
         return
 
-    # Check user tier batch limits
-    is_prem = await db.is_user_premium(user_id)
-    max_batch = 50 if is_prem else 5
+    # If only Telegram links were submitted (95%+ of usage)
+    if tg_links and not web_urls:
+        message.text = norm_text
+        await telegram_link_listener(client, message)
+        return
 
-    if len(found_urls) > max_batch:
+    # If mixed: execute Telegram batch pipeline first, then process remaining web URLs
+    if tg_links and web_urls:
+        message.text = norm_text
+        await telegram_link_listener(client, message)
+        for w_link in web_urls[:max_batch]:
+            try:
+                await process_omni_link(client, message, w_link)
+            except Exception as e:
+                print(f"[!] Batch web link failed: {e}")
+        return
+
+    # Pure web links batch (YouTube, Facebook, Insta, TikTok, Terabox, etc.)
+    total = len(web_urls)
+    if total > max_batch:
         await message.reply_text(
             f"⚠️ **Batch Limit:** Your current tier allows maximum `{max_batch}` links per batch.\n"
             f"Processing the first `{max_batch}` links from your list..."
         )
-        found_urls = found_urls[:max_batch]
+        web_urls = web_urls[:max_batch]
+        total = len(web_urls)
 
-    total = len(found_urls)
     batch_status_msg = await message.reply_text(
         f"📦 **BATCH QUEUE INITIALIZED:** `[0/{total}] Complete`\n"
-        f"⚡ Processing {total} links sequentially. Please do not send new commands until finished..."
+        f"⚡ Processing {total} web links sequentially..."
     )
-
-    from handlers.link_handler import telegram_link_listener
-    from handlers.omni_downloader import process_omni_link
 
     success_count = 0
     fail_count = 0
 
-    for idx, link in enumerate(found_urls, start=1):
+    for idx, link in enumerate(web_urls, start=1):
         try:
             await batch_status_msg.edit_text(
                 f"📦 **BATCH QUEUE IN PROGRESS:** `[{idx}/{total}]`\n"
                 f"⚡ Currently downloading: `{link[:50]}...`\n"
                 f"✅ Done: `{success_count}` | ❌ Errors: `{fail_count}`"
             )
-
-            # Delegate to appropriate downloader
-            if "t.me/" in link:
-                dummy_msg = message
-                dummy_msg.text = link
-                await telegram_link_listener(client, dummy_msg)
-            else:
-                await process_omni_link(client, message, link)
-
+            await process_omni_link(client, message, link)
             success_count += 1
-            await asyncio.sleep(1.0)  # Gentle buffer between downloads
-
+            await asyncio.sleep(0.5)
         except Exception as e:
             fail_count += 1
             print(f"[!] Batch item {idx} failed: {e}")

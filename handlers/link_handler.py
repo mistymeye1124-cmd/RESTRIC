@@ -166,9 +166,9 @@ async def telegram_link_listener(bot_client: Client, message: Message):
         telegram_links = telegram_links[:max_batch]
 
     # 4. Check Client Resolution for Private Links
-    has_private = any(l.is_private for l in telegram_links)
-    if has_private:
-        target_chat = telegram_links[0].chat_identifier
+    first_private_link = next((l for l in telegram_links if l.is_private), None)
+    if first_private_link:
+        target_chat = first_private_link.chat_identifier
         chosen_client, status_reason = await get_client_for_channel(target_chat, user_id)
         if not chosen_client:
             if status_reason == "no_session":
@@ -333,17 +333,26 @@ async def run_batch_harvest_pipeline(
         batch_label = f"[{idx}/{total}] (Msg #{l_link.message_id})" if total > 1 else f"(Msg #{l_link.message_id})"
 
         # High-Speed Inter-Item Pipeline:
-        # Micro-yield (0.10s) gives asyncio event loop time for network buffer flush.
-        # Smart pool account rotation every 10 items distributes MTProto traffic to prevent rate-limits without artificial delays.
+        # Micro-yield (0.05s) gives asyncio event loop time for network buffer flush.
+        # Smart pool account rotation every 10 items for public channels distributes MTProto traffic safely.
         if total > 1 and idx > 1:
-            await asyncio.sleep(0.10)
-            if idx % 10 == 0:
+            await asyncio.sleep(0.05)
+            if not l_link.is_private and idx % 10 == 0:
                 try:
                     rotated_c = get_next_available_pool_client(exclude_client=download_client)
                     if rotated_c and getattr(rotated_c, "is_connected", False):
                         download_client = rotated_c
                 except Exception:
                     pass
+
+        # Per-channel dynamic client routing: ensure private channels always use an authorized client
+        item_client = download_client
+        if l_link.is_private:
+            if getattr(download_client, "_bound_chat_id", None) != l_link.chat_identifier:
+                resolved_c, _ = await get_client_for_channel(l_link.chat_identifier, user_id)
+                if resolved_c:
+                    item_client = resolved_c
+                    setattr(item_client, "_bound_chat_id", l_link.chat_identifier)
 
         # Owner Anti-Leech Protection: Block downloads from protected VIP channels
         from config import ADMIN_IDS
@@ -495,7 +504,7 @@ async def run_batch_harvest_pipeline(
         # Step A: Download / Extract content
         try:
             dl_res = await download_restricted_media(
-                client=download_client,
+                client=item_client,
                 bot_client=bot_client,
                 chat_id=l_link.chat_identifier,
                 message_id=l_link.message_id,

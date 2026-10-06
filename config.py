@@ -84,12 +84,12 @@ PREMIUM_PLANS = {
 
 # ----------------- QUOTAS & CONCURRENCY -----------------
 # Free tier limitations
-FREE_DAILY_DOWNLOAD_LIMIT = 3        # Number of downloads free users can do per 24 hours
-FREE_MAX_BATCH_SIZE = 1              # Only 1 video at a time for free users
+FREE_DAILY_DOWNLOAD_LIMIT = 10       # Number of downloads free users can do per 24 hours
+FREE_MAX_BATCH_SIZE = 30             # Can paste up to 30 links at once for free users
 
 # Premium tier advantages
-PREMIUM_DAILY_DOWNLOAD_LIMIT = 100   # Effectively unlimited
-PREMIUM_MAX_BATCH_SIZE = 30          # Can paste 30 links at once
+PREMIUM_DAILY_DOWNLOAD_LIMIT = 1000  # Effectively unlimited
+PREMIUM_MAX_BATCH_SIZE = 150         # Can paste 150 links at once
 
 # ----------------- SYSTEM RESOURCE ALLOCATION (BOT SAFE ZONE & VPS SHIELD) -----------------
 # Bot Minimum Dedicated Safe Zone: 5.0 GB RAM and 60.0 GB SSD Storage

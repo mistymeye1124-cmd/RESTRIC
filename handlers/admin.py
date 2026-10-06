@@ -121,7 +121,7 @@ async def build_admin_panel_data():
                 InlineKeyboardButton("🛠️ Recover Stashed Workers", callback_data="adm_btn_recover_workers"),
             ],
             [
-                InlineKeyboardButton("💾 Backup Database", callback_data="adm_btn_backup_db"),
+                InlineKeyboardButton("💾 Export / Backup Database", callback_data="adm_btn_backup_db"),
                 InlineKeyboardButton("🔄 Refresh Dashboard", callback_data="adm_open_panel"),
             ],
             [
@@ -4801,10 +4801,19 @@ async def adm_btn_backup_db_callback(client: Client, callback_query: CallbackQue
             "• **Or Restore directly in Bot:**\n"
             "  Reply to this document message with `/restore` command."
         )
+        markup = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("📥 Restore Guide", callback_data="adm_btn_restore_guide"),
+                    InlineKeyboardButton("🔙 Back to Admin Panel", callback_data="adm_open_panel"),
+                ]
+            ]
+        )
         await client.send_document(
             chat_id=callback_query.from_user.id,
             document=str(b_file),
-            caption=caption
+            caption=caption,
+            reply_markup=markup,
         )
         await status_msg.delete()
     except Exception as e:
@@ -4821,7 +4830,7 @@ async def adm_btn_restore_guide_callback(client: Client, callback_query: Callbac
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "If you change your VPS (e.g. Hostinger KVM 2 to KVM 4 or any server), follow either of these methods:\n\n"
         "🔹 **Method 1: Direct Telegram Restore (Easiest)**\n"
-        "1. Click **💾 Backup Database** to get your `.db` file in Telegram.\n"
+        "1. Click **💾 Export / Backup Database** to get your `.db` file in Telegram.\n"
         "2. On your new VPS, start the bot once.\n"
         "3. Simply reply to that `.db` backup file in Telegram with `/restore`!\n"
         "4. The bot automatically updates all tables without touching SSH!\n\n"
@@ -4835,7 +4844,7 @@ async def adm_btn_restore_guide_callback(client: Client, callback_query: Callbac
     markup = InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("💾 Backup Database Now", callback_data="adm_btn_backup_db"),
+                InlineKeyboardButton("💾 Export Database Now", callback_data="adm_btn_backup_db"),
                 InlineKeyboardButton("🔙 Back to Settings", callback_data="adm_view_sys_settings"),
             ]
         ]
@@ -4846,7 +4855,7 @@ async def adm_btn_restore_guide_callback(client: Client, callback_query: Callbac
         await callback_query.message.reply_text(text, reply_markup=markup)
 
 
-@Client.on_message(filters.command(["backup", "dbbackup"]) & filters.private)
+@Client.on_message(filters.command(["backup", "dbbackup", "export", "dbexport", "exportdb"]) & filters.private)
 async def backup_command(client: Client, message: Message):
     if not is_admin(message.from_user.id):
         return

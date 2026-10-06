@@ -3242,8 +3242,49 @@ class Database:
             )
             await db.commit()
 
+    async def create_backup_file(self, backup_dir: Any = "backups") -> Path:
+        """
+        Creates an atomic, zero-lock snapshot backup of the live SQLite database.
+        Checkpoints WAL journal and produces a standalone clean .db file for export or migration.
+        """
+        import sqlite3
+        backup_path = Path(backup_dir)
+        backup_path.mkdir(parents=True, exist_ok=True)
+        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest_file = backup_path / f"bot_database_backup_{now_str}.db"
+
+        # Checkpoint WAL safely before online backup
+        try:
+            async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
+                await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
+        except Exception:
+            pass
+
+        def _do_backup():
+            src = sqlite3.connect(self.db_file)
+            dst = sqlite3.connect(str(dest_file))
+            src.backup(dst)
+            dst.close()
+            src.close()
+
+        await asyncio.to_thread(_do_backup)
+
+        # Retain last 10 snapshots to maintain safe storage hygiene
+        try:
+            all_baks = sorted(backup_path.glob("bot_database_backup_*.db"), key=os.path.getmtime, reverse=True)
+            for old_bak in all_baks[10:]:
+                try:
+                    old_bak.unlink()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        return dest_file
+
 
 db = Database()
+
 
 
 

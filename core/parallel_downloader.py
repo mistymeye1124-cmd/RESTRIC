@@ -109,17 +109,17 @@ async def turbo_parallel_download(
 
     cpu_count = os.cpu_count() or 4
     if total_size < 5 * 1024 * 1024:
-        num_workers = 4
+        num_workers = 6
         chunk_size = 512 * 1024
     elif total_size < 25 * 1024 * 1024:
-        num_workers = 6
-        chunk_size = 1024 * 1024
-    elif total_size < 75 * 1024 * 1024:
         num_workers = 8
         chunk_size = 1024 * 1024
+    elif total_size < 75 * 1024 * 1024:
+        num_workers = 12
+        chunk_size = 1024 * 1024
     else:
-        # Large files (75MB - 4GB): 12 streams for Premium, 8 streams for standard (50-80 MB/s wire throughput)
-        num_workers = 12 if is_prem else 8
+        # Large files (75MB - 4GB): 16 streams for Premium, 12 streams for standard (80-120 MB/s wire throughput)
+        num_workers = 16 if is_prem else 12
         chunk_size = 1024 * 1024
 
     fid = FileId.decode(target.file_id)

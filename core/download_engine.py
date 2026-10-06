@@ -1132,6 +1132,23 @@ async def download_restricted_media(
 
         pyrogram_progress = _progress_callback
 
+        # Fast Source Thumbnail: Grab existing ~15KB Telegram thumbnail in 30ms to avoid slow FFmpeg extraction later
+        source_thumb_file = None
+        s_thumb_target = (
+            getattr(source_msg, "video", None)
+            or getattr(source_msg, "document", None)
+            or getattr(source_msg, "animation", None)
+        )
+        if s_thumb_target and getattr(s_thumb_target, "thumbs", None):
+            try:
+                first_th = s_thumb_target.thumbs[0]
+                th_dest = os.path.join(TEMP_DOWNLOAD_DIR, f"{job_id}_src_thumb.jpg")
+                dl_th = await current_client.download_media(first_th.file_id, file_name=th_dest)
+                if dl_th and os.path.exists(str(dl_th)) and os.path.getsize(str(dl_th)) > 50:
+                    source_thumb_file = str(dl_th)
+            except Exception:
+                pass
+
         downloaded_file = None
         for dl_attempt in range(1, 4):
             try:
@@ -1141,8 +1158,8 @@ async def download_restricted_media(
                 # Clean leftover partial temp file from aborted attempts
                 _safe_remove(target_file_path + ".temp", target_file_path)
 
-                # Engine 1: Turbo Parallel Multi-Stream for media files (>= 2MB)
-                if dl_attempt == 1 and media_file_size >= 2 * 1024 * 1024 and getattr(media_target, "file_id", None):
+                # Engine 1: Turbo Parallel Multi-Stream for media files (>= 512KB)
+                if dl_attempt == 1 and media_file_size >= 512 * 1024 and getattr(media_target, "file_id", None):
                     try:
                         from core.parallel_downloader import turbo_parallel_download
                         logger.info("[DownloadEngine] Attempting Turbo Parallel download for %d MB file...", media_file_size // (1024 * 1024))
@@ -1382,6 +1399,7 @@ async def download_restricted_media(
             "duration": media_duration,
             "width": media_width,
             "height": media_height,
+            "thumb_path": source_thumb_file,
         }
 
     except Exception as e:

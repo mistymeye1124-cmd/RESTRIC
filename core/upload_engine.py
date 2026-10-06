@@ -481,7 +481,7 @@ async def upload_unlocked_media(
                     if v_height <= 0:
                         v_height = 720
 
-                # 3. Determine and normalize thumbnail (Custom Poster or Auto-Extracted Video Frame)
+                # 3. Determine and normalize thumbnail (Custom Poster, Source Poster, or Auto-Extracted Video Frame)
                 valid_thumb = None
                 safe_thumb_path = None
 
@@ -494,8 +494,12 @@ async def upload_unlocked_media(
                     else:
                         safe_thumb_path = None
 
-                # Option B: Fallback to Auto-Extracted crisp frame from the video
-                if not valid_thumb and is_video:
+                # Option B: Fast Source Thumbnail from Telegram Message (Instant 0-delay pass-through)
+                if not valid_thumb and download_result.get("thumb_path") and os.path.exists(download_result["thumb_path"]):
+                    valid_thumb = download_result["thumb_path"]
+
+                # Option C: Fallback to Auto-Extracted crisp frame from the video (Bypassed in raw mode for pure speed)
+                if not valid_thumb and is_video and not is_raw_mode:
                     thumb_target = f"{part_file}_thumb.jpg"
                     thumb_path = await extract_thumbnail_async(part_file, thumb_target, seek_seconds=5)
                     if thumb_path and os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 100:

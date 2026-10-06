@@ -162,7 +162,11 @@ async def _turbo_save_file_impl(
                     else:
                         logger.warning("[TurboWorker %d] RPC error on part %d (retry %d): %s", wid, rpc.file_part, retry, rpc_err)
                         try:
-                            await sess.restart()
+                            await sess.stop()
+                        except Exception:
+                            pass
+                        try:
+                            await sess.start()
                         except Exception:
                             pass
                         await asyncio.sleep(0.05 * retry)
@@ -171,7 +175,11 @@ async def _turbo_save_file_impl(
                     retry += 1
                     logger.warning("[TurboWorker %d] Network error on part %d (retry %d): %s", wid, rpc.file_part, retry, ex)
                     try:
-                        await sess.restart()
+                        await sess.stop()
+                    except Exception:
+                        pass
+                    try:
+                        await sess.start()
                     except Exception:
                         pass
                     await asyncio.sleep(0.05 * retry)

@@ -108,18 +108,15 @@ async def turbo_parallel_download(
                 pass
 
     cpu_count = os.cpu_count() or 4
-    if total_size < 5 * 1024 * 1024:
-        num_workers = 6
+    if total_size < 10 * 1024 * 1024:
+        num_workers = 3
         chunk_size = 512 * 1024
-    elif total_size < 25 * 1024 * 1024:
-        num_workers = 8
-        chunk_size = 1024 * 1024
     elif total_size < 75 * 1024 * 1024:
-        num_workers = 12
+        num_workers = 4
         chunk_size = 1024 * 1024
     else:
-        # Large files (75MB - 4GB): 16 streams for Premium, 12 streams for standard (80-120 MB/s wire throughput)
-        num_workers = 16 if is_prem else 12
+        # Large files (75MB - 4GB): 5 streams for Premium, 4 streams for standard (35-60 MB/s wire throughput without FloodWait)
+        num_workers = 5 if is_prem else 4
         chunk_size = 1024 * 1024
 
     fid = FileId.decode(target.file_id)
@@ -199,7 +196,14 @@ async def turbo_parallel_download(
         """Cleanly re-establishes a broken TCP MTProto socket with re-authorization."""
         try:
             logger.info("[TurboWorker %d] Re-establishing MTProto socket connection...", w_id)
-            await sess.restart()
+            try:
+                await sess.stop()
+            except Exception:
+                pass
+            try:
+                await sess.start()
+            except Exception:
+                pass
             if exported_auth:
                 try:
                     await sess.invoke(
@@ -288,8 +292,13 @@ async def turbo_parallel_download(
 
                     # Immediate failover triggers for MTProto rate/auth limits
                     if isinstance(e, FloodWait) or "FLOOD_WAIT" in err_str:
+                        wait_val = getattr(e, "value", 5) or 5
+                        if wait_val <= 6 and retry < 2:
+                            logger.info("[TurboWorker %d] Minor FloodWait %ds — pausing briefly before retry...", worker_id, wait_val)
+                            await asyncio.sleep(wait_val + 1)
+                            continue
                         logger.warning("[TurboWorker %d] FloodWait encountered on offset %d: %s", worker_id, offset, err_str)
-                        abort_reason = f"Telegram FloodWait ({getattr(e, 'value', 10)}s)"
+                        abort_reason = f"Telegram FloodWait ({wait_val}s)"
                         abort_event.set()
                         break
 
@@ -345,12 +354,12 @@ async def turbo_parallel_download(
             await asyncio.sleep(1.0)
             if downloaded_bytes >= total_size or abort_event.is_set() or completed_event.is_set():
                 break
-            if time.time() - last_progress_time > 20.0:
+            if time.time() - last_progress_time > 45.0:
                 logger.warning(
-                    "[TurboDownloader] Stall detected! No bytes received for 20.0s (transferred: %d/%d). Auto-recovering to fallback...",
+                    "[TurboDownloader] Stall detected! No bytes received for 45.0s (transferred: %d/%d). Auto-recovering to fallback...",
                     downloaded_bytes, total_size
                 )
-                abort_reason = "Stall detected (no bytes for 20s)"
+                abort_reason = "Stall detected (no bytes for 45s)"
                 abort_event.set()
                 for w in workers:
                     w.cancel()

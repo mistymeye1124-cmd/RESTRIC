@@ -304,33 +304,80 @@ async def _telethon_fallback_download(
             logger.warning("[TelethonFallback] Message %d has no media even in Telethon", message_id)
             return None
 
-        # Determine safe file extension and metadata from Telethon document attributes
-        ext = ".mp4"
+        # Determine safe file extension and metadata from Telethon message
+        ext = ".bin"
         file_name = None
         duration = 0
         width = 0
         height = 0
-        media_type = "video"
+        media_type = "document"
         caption = extract_formatted_text(msg)
 
-        if hasattr(msg, "document") and msg.document:
-            try:
-                for attr in getattr(msg.document, "attributes", []):
-                    if isinstance(attr, DocumentAttributeFilename) and attr.file_name:
-                        file_name = attr.file_name
-                        _, e = os.path.splitext(attr.file_name)
-                        if e:
-                            ext = e.lower()
-                    elif isinstance(attr, DocumentAttributeVideo):
+        # Check if Message is a Photo
+        if (hasattr(msg, "photo") and msg.photo) or (hasattr(msg, "media") and type(msg.media).__name__ == "MessageMediaPhoto"):
+            media_type = "photo"
+            ext = ".jpg"
+            file_name = f"photo_{message_id}.jpg"
+
+        elif hasattr(msg, "document") and msg.document:
+            mime = (getattr(msg.document, "mime_type", "") or "").lower()
+            doc_ext = ""
+            for attr in getattr(msg.document, "attributes", []):
+                attr_name = type(attr).__name__
+                if attr_name == "DocumentAttributeFilename" and getattr(attr, "file_name", None):
+                    file_name = attr.file_name
+                    doc_ext = os.path.splitext(attr.file_name)[1].lower()
+                elif attr_name == "DocumentAttributeVideo":
+                    if getattr(attr, "round_message", False):
+                        media_type = "video_note"
+                    else:
                         media_type = "video"
-                        duration = int(getattr(attr, "duration", 0) or 0)
-                        width = int(getattr(attr, "w", 0) or 0)
-                        height = int(getattr(attr, "h", 0) or 0)
-                    elif isinstance(attr, DocumentAttributeAudio):
+                    duration = int(getattr(attr, "duration", 0) or 0)
+                    width = int(getattr(attr, "w", 0) or 0)
+                    height = int(getattr(attr, "h", 0) or 0)
+                elif attr_name == "DocumentAttributeAudio":
+                    if getattr(attr, "voice", False):
+                        media_type = "voice"
+                    else:
                         media_type = "audio"
-                        duration = int(getattr(attr, "duration", 0) or 0)
-            except Exception:
-                pass
+                    duration = int(getattr(attr, "duration", 0) or 0)
+                elif attr_name == "DocumentAttributeAnimated":
+                    media_type = "animation"
+                elif attr_name == "DocumentAttributeSticker":
+                    media_type = "sticker"
+
+            if doc_ext:
+                ext = doc_ext
+            elif mime.startswith("video/"):
+                ext = ".mp4"
+                if media_type == "document":
+                    media_type = "video"
+            elif mime.startswith("image/"):
+                ext = ".jpg" if "jpeg" in mime else (".png" if "png" in mime else ".webp")
+                if media_type == "document":
+                    media_type = "photo"
+            elif mime.startswith("audio/"):
+                ext = ".ogg" if media_type == "voice" else ".mp3"
+                if media_type == "document":
+                    media_type = "audio"
+            elif "pdf" in mime:
+                ext = ".pdf"
+                media_type = "document"
+            elif "zip" in mime or "rar" in mime:
+                ext = ".zip"
+                media_type = "document"
+            elif media_type == "video":
+                ext = ".mp4"
+            elif media_type == "photo":
+                ext = ".jpg"
+            elif media_type == "audio":
+                ext = ".mp3"
+            elif media_type == "voice":
+                ext = ".ogg"
+            elif media_type == "sticker":
+                ext = ".webp"
+            else:
+                ext = ".bin"
 
         if not file_name:
             if caption:
@@ -339,7 +386,7 @@ async def _telethon_fallback_download(
                 if clean_slug:
                     file_name = f"{clean_slug}{ext}"
             if not file_name:
-                file_name = f"video_{message_id}{ext}"
+                file_name = f"{media_type}_{message_id}{ext}"
 
         # Ensure extension on out_path
         if not os.path.splitext(out_path)[1]:
@@ -522,9 +569,9 @@ async def _safe_get_messages(
             logger.warning("[Download] Peer %s not resolved yet (%s). Deep resolving...", chat_id, e)
             try:
                 try:
-                    await asyncio.wait_for(client.resolve_peer(chat_id), timeout=8.0)
+                    await asyncio.wait_for(client.get_chat(chat_id), timeout=6.0)
                 except Exception:
-                    pass
+                    await asyncio.wait_for(client.resolve_peer(chat_id), timeout=6.0)
                 msg = await asyncio.wait_for(
                     client.get_messages(chat_id=chat_id, message_ids=message_id),
                     timeout=8.0,
@@ -542,7 +589,7 @@ async def _safe_get_messages(
                 except Exception:
                     pass
                 count = 0
-                async for dialog in client.get_dialogs(limit=250):
+                async for dialog in client.get_dialogs(limit=50):
                     count += 1
                     if dialog and getattr(dialog, "chat", None):
                         d_id = dialog.chat.id
@@ -553,7 +600,7 @@ async def _safe_get_messages(
                             pass
                         if d_id == chat_id or (target_raw is not None and d_raw == target_raw):
                             break
-                    if count % 20 == 0:
+                    if count % 15 == 0:
                         await asyncio.sleep(0.05)
                 msg = await asyncio.wait_for(
                     client.get_messages(chat_id=chat_id, message_ids=message_id),
@@ -791,7 +838,7 @@ async def download_restricted_media(
                         "⏳ _Buffering 1MB high-speed chunks..._"
                     )
                     os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
-                    _tele_out_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{job_id}_msg{message_id}.mp4")
+                    _tele_out_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{job_id}_msg{message_id}")
                     _tele_res = await _telethon_fallback_download(
                         pyro_session_str=_pyro_sess_str,
                         chat_id=chat_id,
@@ -807,12 +854,13 @@ async def download_restricted_media(
                         _known_high_layer_peers.add(str(chat_id))
                         _known_high_layer_peers.add(str(chat_id).replace("-100", "").lstrip("-"))
                         active_jobs.pop(job_id, None)
+                        t_mtype = _tele_res.get("media_type") or "document"
                         return {
                             "is_text_only": False,
                             "file_path": _tele_res["file_path"],
-                            "original_file_name": _tele_res.get("file_name") or f"video_{message_id}.mp4",
+                            "original_file_name": _tele_res.get("file_name") or f"{t_mtype}_{message_id}.bin",
                             "caption": _tele_res.get("caption") or "",
-                            "media_type": _tele_res.get("media_type") or "video",
+                            "media_type": t_mtype,
                             "source_msg": None,
                             "duration": _tele_res.get("duration"),
                             "width": _tele_res.get("width"),
@@ -865,7 +913,7 @@ async def download_restricted_media(
                         "This post uses a newer Telegram format — routing through the compatibility engine..."
                     )
                     os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
-                    _tele_out_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{job_id}_msg{message_id}.mp4")
+                    _tele_out_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{job_id}_msg{message_id}")
                     _tele_res = await _telethon_fallback_download(
                         pyro_session_str=_pyro_sess_str,
                         chat_id=chat_id,
@@ -881,12 +929,13 @@ async def download_restricted_media(
                         _known_high_layer_peers.add(str(chat_id))
                         _known_high_layer_peers.add(str(chat_id).replace("-100", "").lstrip("-"))
                         active_jobs.pop(job_id, None)
+                        t_mtype = _tele_res.get("media_type") or "document"
                         return {
                             "is_text_only": False,
                             "file_path": _tele_res["file_path"],
-                            "original_file_name": _tele_res.get("file_name") or f"video_{message_id}.mp4",
+                            "original_file_name": _tele_res.get("file_name") or f"{t_mtype}_{message_id}.bin",
                             "caption": _tele_res.get("caption") or (extract_formatted_text(source_msg) if source_msg else "") or "",
-                            "media_type": _tele_res.get("media_type") or "video",
+                            "media_type": t_mtype,
                             "source_msg": source_msg,
                             "duration": _tele_res.get("duration"),
                             "width": _tele_res.get("width"),
@@ -1064,12 +1113,24 @@ async def download_restricted_media(
             if doc_name:
                 original_file_name = doc_name
 
-            if doc_ext in (".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts"):
+            if doc_ext in (".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".m4v", ".3gp"):
                 ext = doc_ext
                 media_type = "video"
             elif mime.startswith("video/"):
                 ext = ".mp4"
                 media_type = "video"
+            elif doc_ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"):
+                ext = doc_ext
+                media_type = "photo"
+            elif mime.startswith("image/"):
+                ext = ".jpg" if "jpeg" in mime else (".png" if "png" in mime else ".webp")
+                media_type = "photo"
+            elif doc_ext in (".mp3", ".m4a", ".flac", ".wav", ".aac", ".ogg", ".opus"):
+                ext = doc_ext
+                media_type = "audio"
+            elif mime.startswith("audio/"):
+                ext = ".mp3"
+                media_type = "audio"
             elif doc_ext in (".pdf", ".zip", ".rar", ".7z", ".txt", ".docx", ".xlsx", ".apk"):
                 ext = doc_ext
                 media_type = "document"
@@ -1078,8 +1139,10 @@ async def download_restricted_media(
                 media_type = "document"
             elif doc_ext:
                 ext = doc_ext
+                media_type = "document"
             else:
-                ext = ".mp4" if "video" in mime else ".bin"
+                ext = ".bin"
+                media_type = "document"
 
             if not original_file_name:
                 original_file_name = f"document_{message_id}{ext}"
@@ -1099,13 +1162,13 @@ async def download_restricted_media(
                 media_type = "photo"
                 original_file_name = f"webpage_photo_{message_id}.jpg"
             else:
-                ext = ".mp4"
+                ext = ".bin"
                 media_type = "document"
                 original_file_name = f"media_{message_id}.bin"
         else:
-            ext = ".mp4"
-            media_type = "video"
-            original_file_name = f"file_{message_id}.mp4"
+            ext = ".bin"
+            media_type = "document"
+            original_file_name = f"file_{message_id}.bin"
 
         # Clean original_file_name for safe local filesystem storage
         safe_name = "".join(c for c in (original_file_name or f"file_{message_id}{ext}") if c.isalnum() or c in (" ", ".", "_", "-")).strip()
@@ -1204,7 +1267,7 @@ async def download_restricted_media(
                 )
 
                 async def _anti_stall_watchdog():
-                    """Actively detects socket stalls and breaks out of hanging transmission within 20s."""
+                    """Actively detects socket stalls and breaks out of hanging transmission within 45s."""
                     while not dl_done_event.is_set():
                         await asyncio.sleep(2.0)
                         if dl_done_event.is_set():
@@ -1214,7 +1277,7 @@ async def download_restricted_media(
                             dl_task.cancel()
                             break
                         elapsed = time.time() - last_progress_time[0]
-                        if elapsed >= 20.0:
+                        if elapsed >= 45.0:
                             logger.warning(
                                 "[Anti-Stall Guardian] Zero bytes received for %.1fs (stuck at %d/%d). Terminating frozen socket task...",
                                 elapsed,
@@ -1230,14 +1293,24 @@ async def download_restricted_media(
                 except asyncio.CancelledError:
                     if active_jobs and job_id and active_jobs.get(job_id, {}).get("cancelled"):
                         raise
-                    logger.warning("[Anti-Stall Guardian] Download stalled on TCP socket. Reconnecting with backup session...")
+                    logger.warning("[Anti-Stall Guardian] Download stalled on TCP socket. Reconnecting...")
                     _safe_remove(target_file_path)
-                    alt_client = get_next_available_pool_client(exclude_client=current_client)
-                    if alt_client:
-                        current_client = alt_client
-                        session_key = _session_key_from_client(current_client)
-                        limiter = rate_registry.get_sync(session_key)
-                        active_jobs[job_id]["current_client"] = current_client
+                    is_private_peer = False
+                    if source_msg and getattr(source_msg, "chat", None):
+                        is_private_peer = not bool(getattr(source_msg.chat, "username", None))
+                    elif isinstance(chat_id, (int, str)) and str(chat_id).startswith("-100"):
+                        is_private_peer = True
+
+                    if not is_private_peer:
+                        alt_client = get_next_available_pool_client(exclude_client=current_client)
+                        if alt_client:
+                            current_client = alt_client
+                            session_key = _session_key_from_client(current_client)
+                            limiter = rate_registry.get_sync(session_key)
+                            active_jobs[job_id]["current_client"] = current_client
+                    else:
+                        logger.info("[Anti-Stall Guardian] Private peer detected — preserving authorized session.")
+                    await asyncio.sleep(1.5)
                     continue
                 finally:
                     dl_done_event.set()
@@ -1259,7 +1332,13 @@ async def download_restricted_media(
                     except Exception:
                         pass
 
-                alt_client = get_next_available_pool_client(exclude_client=current_client)
+                is_private_peer = False
+                if source_msg and getattr(source_msg, "chat", None):
+                    is_private_peer = not bool(getattr(source_msg.chat, "username", None))
+                elif isinstance(chat_id, (int, str)) and str(chat_id).startswith("-100"):
+                    is_private_peer = True
+
+                alt_client = get_next_available_pool_client(exclude_client=current_client) if not is_private_peer else None
                 if alt_client:
                     logger.info("[Download] FloodWait %ds encountered — hot-swapping to %s", wait_sec, alt_client.name)
                     current_client = alt_client

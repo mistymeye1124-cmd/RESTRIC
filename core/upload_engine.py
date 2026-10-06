@@ -21,10 +21,81 @@ from core.media_processor import (
     extract_thumbnail_async,
     split_video_if_needed,
     normalize_and_save_thumbnail,
+    ensure_streamable_mp4,
 )
 
 from core.download_engine import active_jobs
 _disabled_archives_until: dict = {}
+
+
+def sniff_real_media_type(file_path: str, orig_name: str = "", declared_type: str = "") -> str:
+    """
+    Inspects magic bytes of downloaded content to detect its true media type:
+    - photo: JPEG (\\xff\\xd8\\xff), PNG (\\x89PNG), WebP (RIFF...WEBP), BMP (BM)
+    - video: MP4/MOV (ftyp/moov), MKV/WebM (\\x1aE\\xdf\\xa3), AVI (RIFF...AVI ), FLV (FLV)
+    - audio: MP3 (ID3 or sync frame), FLAC (fLaC), WAV (RIFF...WAVE)
+    - voice: OGG/Opus (OggS)
+    - animation: GIF (GIF87a / GIF89a)
+    - document: PDF, ZIP, RAR, 7Z, text, or binary
+    """
+    if not file_path or not os.path.exists(file_path):
+        return declared_type or "document"
+
+    header = b""
+    try:
+        with open(file_path, "rb") as f:
+            header = f.read(64)
+    except Exception:
+        header = b""
+
+    # 1. Direct Magic Byte Signatures
+    if header.startswith(b"\xff\xd8\xff"):
+        return "photo"
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "photo"
+    if header.startswith(b"RIFF") and b"WEBP" in header[:16]:
+        return "sticker" if declared_type == "sticker" else "photo"
+    if header.startswith(b"BM"):
+        return "photo"
+    if header.startswith(b"GIF87a") or header.startswith(b"GIF89a"):
+        return "animation"
+    if len(header) >= 12 and (header[4:8] == b"ftyp" or header[4:8] == b"moov"):
+        return "video"
+    if header.startswith(b"\x1a\x45\xdf\xa3"):
+        return "video"
+    if header.startswith(b"RIFF") and b"AVI " in header[:16]:
+        return "video"
+    if header.startswith(b"FLV\x01"):
+        return "video"
+    if header.startswith(b"ID3") or (len(header) >= 2 and header[0] == 0xff and (header[1] & 0xe0) == 0xe0):
+        return "audio"
+    if header.startswith(b"fLaC"):
+        return "audio"
+    if header.startswith(b"RIFF") and b"WAVE" in header[:16]:
+        return "audio"
+    if header.startswith(b"OggS"):
+        return "voice" if declared_type == "voice" else "audio"
+
+    # 2. Document Magic Bytes
+    if header.startswith(b"%PDF"):
+        return "document"
+    if header.startswith(b"PK\x03\x04") or header.startswith(b"Rar!\x1a\x07") or header.startswith(b"7z\xbc\xaf\x27\x1c"):
+        return "document"
+
+    # 3. Fallback based on extension or declared type
+    ext = os.path.splitext(orig_name or file_path)[1].lower()
+    if ext in (".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".m4v", ".3gp", ".flv", ".wmv"):
+        return "video"
+    if ext in (".jpg", ".jpeg", ".png", ".webp", ".bmp"):
+        return "photo"
+    if ext in (".mp3", ".m4a", ".flac", ".wav", ".aac"):
+        return "audio"
+    if ext in (".ogg", ".opus"):
+        return "voice" if declared_type == "voice" else "audio"
+    if ext in (".gif",):
+        return "animation"
+
+    return declared_type or "document"
 
 
 async def _safe_edit_status(status_message: Optional[Message], text: str, reply_markup=None):
@@ -444,14 +515,25 @@ async def upload_unlocked_media(
 
                         _last_upload_edit_task = asyncio.create_task(_do_upload_edit(card_text))
     
-                # Detect whether this file is a video
-                part_lower = part_file.lower()
-                orig_lower = (orig_file_name or "").lower()
-                is_video = not upload_as_doc and (
-                    media_type == "video"
-                    or part_lower.endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".m4v", ".3gp"))
-                    or orig_lower.endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".m4v", ".3gp"))
-                )
+                # Detect real media type via magic bytes to guarantee 100% correct delivery
+                real_mtype = sniff_real_media_type(part_file, orig_file_name, media_type)
+
+                # Correct file extension if mismatched
+                if real_mtype == "photo" and orig_file_name and orig_file_name.lower().endswith((".mp4", ".bin", ".mkv")):
+                    orig_file_name = os.path.splitext(orig_file_name)[0] + ".jpg"
+                elif real_mtype == "video" and orig_file_name and orig_file_name.lower().endswith((".bin", ".jpg", ".png")):
+                    orig_file_name = os.path.splitext(orig_file_name)[0] + ".mp4"
+                elif real_mtype == "audio" and orig_file_name and orig_file_name.lower().endswith((".bin", ".mp4")):
+                    orig_file_name = os.path.splitext(orig_file_name)[0] + ".mp3"
+
+                is_video = not upload_as_doc and (real_mtype == "video")
+
+                # If detected as video, guarantee streamability (+faststart moov atom at beginning)
+                if is_video:
+                    try:
+                        part_file = await ensure_streamable_mp4(part_file)
+                    except Exception as _stream_err:
+                        print(f"[!] ensure_streamable_mp4 notice: {_stream_err}")
     
                 # 1. Fetch user's custom studio thumbnail once if active and not in raw mode
                 custom_thumb = None
@@ -601,7 +683,7 @@ async def upload_unlocked_media(
                                             file_name=orig_file_name,
                                             progress=upload_progress,
                                         )
-                        elif media_type == "photo" or part_lower.endswith((".jpg", ".jpeg", ".png", ".webp")):
+                        elif real_mtype == "photo" or (not upload_as_doc and (media_type == "photo" or (part_lower.endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp"))))):
                             try:
                                 sent_msg = await bot_client.send_photo(
                                     chat_id=target_chat_id,
@@ -609,7 +691,16 @@ async def upload_unlocked_media(
                                     caption=part_caption,
                                     progress=upload_progress,
                                 )
-                            except Exception:
+                            except FloodWait as fw:
+                                await asyncio.sleep(fw.value + 1)
+                                sent_msg = await bot_client.send_photo(
+                                    chat_id=target_chat_id,
+                                    photo=part_file,
+                                    caption=part_caption,
+                                    progress=upload_progress,
+                                )
+                            except Exception as p_err:
+                                print(f"[!] send_photo failed ({p_err}), sending as document...")
                                 sent_msg = await bot_client.send_document(
                                     chat_id=target_chat_id,
                                     document=part_file,
@@ -617,8 +708,16 @@ async def upload_unlocked_media(
                                     file_name=orig_file_name,
                                     progress=upload_progress,
                                 )
-                        elif media_type == "audio" or part_lower.endswith((".mp3", ".m4a", ".wav", ".ogg")):
+                        elif real_mtype == "audio" or (not upload_as_doc and (media_type == "audio" or part_lower.endswith((".mp3", ".m4a", ".wav", ".flac", ".aac")))):
                             try:
+                                sent_msg = await bot_client.send_audio(
+                                    chat_id=target_chat_id,
+                                    audio=part_file,
+                                    caption=part_caption,
+                                    progress=upload_progress,
+                                )
+                            except FloodWait as fw:
+                                await asyncio.sleep(fw.value + 1)
                                 sent_msg = await bot_client.send_audio(
                                     chat_id=target_chat_id,
                                     audio=part_file,
@@ -633,8 +732,16 @@ async def upload_unlocked_media(
                                     file_name=orig_file_name,
                                     progress=upload_progress,
                                 )
-                        elif media_type == "voice":
+                        elif real_mtype == "voice" or (not upload_as_doc and (media_type == "voice" or part_lower.endswith((".ogg", ".opus")))):
                             try:
+                                sent_msg = await bot_client.send_voice(
+                                    chat_id=target_chat_id,
+                                    voice=part_file,
+                                    caption=part_caption,
+                                    progress=upload_progress,
+                                )
+                            except FloodWait as fw:
+                                await asyncio.sleep(fw.value + 1)
                                 sent_msg = await bot_client.send_voice(
                                     chat_id=target_chat_id,
                                     voice=part_file,
@@ -649,7 +756,7 @@ async def upload_unlocked_media(
                                     file_name=orig_file_name,
                                     progress=upload_progress,
                                 )
-                        elif media_type == "video_note":
+                        elif real_mtype == "video_note" or (not upload_as_doc and media_type == "video_note"):
                             try:
                                 sent_msg = await bot_client.send_video_note(
                                     chat_id=target_chat_id,
@@ -664,7 +771,7 @@ async def upload_unlocked_media(
                                     file_name=orig_file_name,
                                     progress=upload_progress,
                                 )
-                        elif media_type == "animation":
+                        elif real_mtype == "animation" or (not upload_as_doc and (media_type == "animation" or part_lower.endswith(".gif"))):
                             try:
                                 sent_msg = await bot_client.send_animation(
                                     chat_id=target_chat_id,
@@ -680,11 +787,18 @@ async def upload_unlocked_media(
                                     file_name=orig_file_name,
                                     progress=upload_progress,
                                 )
-                        elif media_type == "sticker":
+                        elif real_mtype == "sticker" or (not upload_as_doc and (media_type == "sticker" or part_lower.endswith((".webp", ".tgs")))):
                             try:
                                 sent_msg = await bot_client.send_sticker(
                                     chat_id=target_chat_id,
                                     sticker=part_file,
+                                    progress=upload_progress,
+                                )
+                            except Exception:
+                                sent_msg = await bot_client.send_document(
+                                    chat_id=target_chat_id,
+                                    document=part_file,
+                                    file_name=orig_file_name,
                                     progress=upload_progress,
                                 )
                             except Exception:
@@ -759,18 +873,34 @@ async def upload_unlocked_media(
                                             f_id = sent_msg.video.file_id
                                             f_uid = sent_msg.video.file_unique_id
                                             m_type = "video"
-                                        elif sent_msg.document:
-                                            f_id = sent_msg.document.file_id
-                                            f_uid = sent_msg.document.file_unique_id
-                                            m_type = "document"
-                                        elif sent_msg.audio:
-                                            f_id = sent_msg.audio.file_id
-                                            f_uid = sent_msg.audio.file_unique_id
-                                            m_type = "audio"
                                         elif sent_msg.photo:
                                             f_id = sent_msg.photo.file_id
                                             f_uid = sent_msg.photo.file_unique_id
                                             m_type = "photo"
+                                        elif sent_msg.audio:
+                                            f_id = sent_msg.audio.file_id
+                                            f_uid = sent_msg.audio.file_unique_id
+                                            m_type = "audio"
+                                        elif sent_msg.voice:
+                                            f_id = sent_msg.voice.file_id
+                                            f_uid = sent_msg.voice.file_unique_id
+                                            m_type = "voice"
+                                        elif sent_msg.video_note:
+                                            f_id = sent_msg.video_note.file_id
+                                            f_uid = sent_msg.video_note.file_unique_id
+                                            m_type = "video_note"
+                                        elif sent_msg.animation:
+                                            f_id = sent_msg.animation.file_id
+                                            f_uid = sent_msg.animation.file_unique_id
+                                            m_type = "animation"
+                                        elif sent_msg.sticker:
+                                            f_id = sent_msg.sticker.file_id
+                                            f_uid = sent_msg.sticker.file_unique_id
+                                            m_type = "sticker"
+                                        elif sent_msg.document:
+                                            f_id = sent_msg.document.file_id
+                                            f_uid = sent_msg.document.file_unique_id
+                                            m_type = "document"
     
                                         if f_id:
                                             f_sz = os.path.getsize(part_file) if os.path.exists(part_file) else 0

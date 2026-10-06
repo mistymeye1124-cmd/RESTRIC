@@ -430,6 +430,28 @@ async def run_batch_harvest_pipeline(
                             photo=f_id,
                             caption=deliv_cap or None,
                         )
+                    elif m_type == "voice":
+                        sent_cached = await bot_client.send_voice(
+                            chat_id=user_id,
+                            voice=f_id,
+                            caption=deliv_cap or None,
+                        )
+                    elif m_type == "video_note":
+                        sent_cached = await bot_client.send_video_note(
+                            chat_id=user_id,
+                            video_note=f_id,
+                        )
+                    elif m_type == "animation":
+                        sent_cached = await bot_client.send_animation(
+                            chat_id=user_id,
+                            animation=f_id,
+                            caption=deliv_cap or None,
+                        )
+                    elif m_type == "sticker":
+                        sent_cached = await bot_client.send_sticker(
+                            chat_id=user_id,
+                            sticker=f_id,
+                        )
                     else:
                         sent_cached = await bot_client.send_document(
                             chat_id=user_id,
@@ -568,11 +590,15 @@ async def run_batch_harvest_pipeline(
                 delivered += 1
                 continue
 
-            is_vid_check = dl_res.get("media_type") == "video" or (
-                original_path and original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".flv"))
+            mtype_res = dl_res.get("media_type")
+            is_photo_check = mtype_res == "photo" or (
+                original_path and original_path.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp"))
             )
-            is_doc_check = dl_res.get("media_type") == "document" or (
+            is_doc_check = mtype_res == "document" or (
                 original_path and original_path.lower().endswith((".pdf", ".doc", ".docx", ".zip", ".rar", ".txt", ".apk"))
+            )
+            is_vid_check = (mtype_res == "video") or (
+                not is_photo_check and not is_doc_check and original_path and original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".flv"))
             )
 
             # Batch Content Filter Gate (Only filters during bulk batch downloads)
@@ -582,6 +608,9 @@ async def run_batch_harvest_pipeline(
                     skipped += 1
                     continue
                 elif media_filt == "document" and not is_doc_check:
+                    skipped += 1
+                    continue
+                elif media_filt == "photo" and not is_photo_check:
                     skipped += 1
                     continue
 

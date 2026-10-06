@@ -3476,6 +3476,31 @@ async def archive_command(client: Client, message: Message):
     await message.reply_text(text, reply_markup=markup)
 
 
+@Client.on_message(filters.command(["clearcache", "purgecache", "resetcache"]) & filters.private)
+async def clear_cache_command(client: Client, message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split()
+    target_chat = parts[1] if len(parts) > 1 else None
+
+    del_count = await db.clear_file_cache(source_chat=target_chat)
+    if target_chat:
+        await message.reply_text(
+            f"🧹 **Cloud Cache Cleared!**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 **Target Channel:** `{target_chat}`\n"
+            f"🗑️ **Purged Records:** `{del_count}` cache entries.\n\n"
+            "✨ _Subsequent downloads from this channel will fetch fresh content from Telegram._"
+        )
+    else:
+        await message.reply_text(
+            f"🧹 **Global Cloud Cache Purged!**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🗑️ **Purged Records:** `{del_count}` cache entries across all channels.\n\n"
+            "✨ _All cached items reset. Future downloads will fetch fresh media directly._"
+        )
+
+
 @Client.on_message(filters.command("testarchive") & filters.private)
 async def test_archive_command(client: Client, message: Message):
     if not is_admin(message.from_user.id):

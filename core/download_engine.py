@@ -277,29 +277,38 @@ async def _telethon_fallback_download(
             StringSession(tele_str),
             int(API_ID),
             API_HASH,
-            receive_updates=False,
         )
         await client.connect()
         if not await client.is_user_authorized():
             logger.error("[TelethonFallback] Session not authorized after conversion")
             return None
 
-        # VIP Protection Gate inside Telethon Engine
-        if user_id and not is_admin(user_id):
-            ch_title = ""
-            ch_uname = ""
+        # Resolve target channel/group entity
+        target_entity = None
+        try:
+            target_entity = await client.get_entity(chat_id)
+        except Exception:
             try:
-                entity = await client.get_entity(chat_id)
-                ch_title = getattr(entity, "title", "") or ""
-                ch_uname = getattr(entity, "username", "") or ""
+                raw_c_id = int(str(chat_id).replace("-100", "").lstrip("-"))
+                async for d in client.iter_dialogs(limit=100):
+                    if d.id == chat_id or getattr(d.entity, "id", None) == raw_c_id:
+                        target_entity = d.entity
+                        break
             except Exception:
                 pass
+
+        ch_title = getattr(target_entity, "title", "") if target_entity else ""
+        ch_uname = getattr(target_entity, "username", "") if target_entity else ""
+
+        # VIP Protection Gate inside Telethon Engine
+        if user_id and not is_admin(user_id):
             try:
                 await _check_vip_channel_access(user_id, chat_id, title=ch_title, username=ch_uname)
             except PermissionError:
                 raise
 
-        msg = await client.get_messages(chat_id, ids=message_id)
+        fetch_target = target_entity if target_entity is not None else chat_id
+        msg = await client.get_messages(fetch_target, ids=message_id)
         if msg is None or msg.media is None:
             logger.warning("[TelethonFallback] Message %d has no media even in Telethon", message_id)
             return None
@@ -717,9 +726,14 @@ async def download_restricted_media(
 
             _last_edit_task = asyncio.create_task(_do_edit(card_text))
 
+    # Private chat detection — never hot swap pool clients for private channels
+    raw_cid = str(chat_id).replace("-100", "").lstrip("-")
+    is_private_chat = str(chat_id).startswith("-100") or str(chat_id).startswith("-") or not str(chat_id).isalnum()
+    is_known_high_layer = str(chat_id) in _known_high_layer_peers or raw_cid in _known_high_layer_peers
+
     # Quarantine check before starting
     if limiter.is_quarantined:
-        alt_client = get_next_available_pool_client(exclude_client=current_client)
+        alt_client = get_next_available_pool_client(exclude_client=current_client) if not is_private_chat else None
         if alt_client:
             logger.info("[Download] Primary session %s quarantined — hot-swapping to %s", session_key, alt_client.name)
             current_client = alt_client
@@ -739,21 +753,19 @@ async def download_restricted_media(
             while elapsed < remaining:
                 if active_jobs.get(job_id, {}).get("cancelled"):
                     break
-                alt_c = get_next_available_pool_client(exclude_client=current_client)
-                if alt_c:
-                    current_client = alt_c
-                    session_key = _session_key_from_client(current_client)
-                    limiter = rate_registry.get_sync(session_key)
-                    active_jobs[job_id]["current_client"] = current_client
-                    break
+                if not is_private_chat:
+                    alt_c = get_next_available_pool_client(exclude_client=current_client)
+                    if alt_c:
+                        current_client = alt_c
+                        session_key = _session_key_from_client(current_client)
+                        limiter = rate_registry.get_sync(session_key)
+                        active_jobs[job_id]["current_client"] = current_client
+                        break
                 await asyncio.sleep(min(sleep_step, remaining - elapsed))
                 elapsed += sleep_step
 
     try:
         # Zero-Trace Ghost Mode: Never broadcast typing or read receipts to target source chat
-        raw_cid = str(chat_id).replace("-100", "").lstrip("-")
-        is_known_high_layer = str(chat_id) in _known_high_layer_peers or raw_cid in _known_high_layer_peers
-        is_private_chat = str(chat_id).startswith("-100") or str(chat_id).startswith("-")
 
         # Compile list of candidate message IDs to probe (e.g. topic_id vs message_id in forum / comment threads)
         probe_ids = [message_id]
@@ -1358,28 +1370,30 @@ async def download_restricted_media(
                 while elapsed < wait_sec:
                     if active_jobs.get(job_id, {}).get("cancelled"):
                         break
-                    alt_c = get_next_available_pool_client(exclude_client=current_client)
-                    if alt_c:
-                        current_client = alt_c
-                        session_key = _session_key_from_client(current_client)
-                        limiter = rate_registry.get_sync(session_key)
-                        active_jobs[job_id]["current_client"] = current_client
-                        break
+                    if not is_private_chat:
+                        alt_c = get_next_available_pool_client(exclude_client=current_client)
+                        if alt_c:
+                            current_client = alt_c
+                            session_key = _session_key_from_client(current_client)
+                            limiter = rate_registry.get_sync(session_key)
+                            active_jobs[job_id]["current_client"] = current_client
+                            break
                     await asyncio.sleep(min(sleep_step, wait_sec - elapsed))
                     elapsed += sleep_step
 
             except PeerFlood:
                 limiter.on_peer_flood()
-                alt_client = get_next_available_pool_client(exclude_client=current_client)
-                if alt_client:
-                    logger.info("[Download] PeerFlood encountered — hot-swapping to %s", alt_client.name)
-                    current_client = alt_client
-                    session_key = _session_key_from_client(current_client)
-                    limiter = rate_registry.get_sync(session_key)
-                    active_jobs[job_id]["current_client"] = current_client
-                    await _safe_edit_status(status_message, "🔄 Switching to backup session...")
-                    await asyncio.sleep(0.1)
-                    continue
+                if not is_private_chat:
+                    alt_client = get_next_available_pool_client(exclude_client=current_client)
+                    if alt_client:
+                        logger.info("[Download] PeerFlood encountered — hot-swapping to %s", alt_client.name)
+                        current_client = alt_client
+                        session_key = _session_key_from_client(current_client)
+                        limiter = rate_registry.get_sync(session_key)
+                        active_jobs[job_id]["current_client"] = current_client
+                        await _safe_edit_status(status_message, "🔄 Switching to backup session...")
+                        await asyncio.sleep(0.1)
+                        continue
 
                 await _safe_edit_status(
                     status_message,
@@ -1418,17 +1432,18 @@ async def download_restricted_media(
                 # Auto clean partial files
                 _safe_remove(target_file_path, target_file_path + ".temp")
 
-                # Auto hot-swap to another healthy pool account
-                alt_client = get_next_available_pool_client(exclude_client=current_client)
-                if alt_client:
-                    logger.info("[Download] Error encountered — hot-swapping to backup client %s", alt_client.name)
-                    current_client = alt_client
-                    session_key = _session_key_from_client(current_client)
-                    limiter = rate_registry.get_sync(session_key)
-                    active_jobs[job_id]["current_client"] = current_client
-                    await _safe_edit_status(status_message, "🔄 Stream stalled or reset — switching to backup worker to continue...")
-                    await asyncio.sleep(0.1)
-                    continue
+                # Auto hot-swap to another healthy pool account only for non-private chats
+                if not is_private_chat:
+                    alt_client = get_next_available_pool_client(exclude_client=current_client)
+                    if alt_client:
+                        logger.info("[Download] Error encountered — hot-swapping to backup client %s", alt_client.name)
+                        current_client = alt_client
+                        session_key = _session_key_from_client(current_client)
+                        limiter = rate_registry.get_sync(session_key)
+                        active_jobs[job_id]["current_client"] = current_client
+                        await _safe_edit_status(status_message, "🔄 Stream stalled or reset — switching to backup worker to continue...")
+                        await asyncio.sleep(0.1)
+                        continue
 
                 if dl_attempt < 3:
                     await asyncio.sleep(0.5 * dl_attempt)

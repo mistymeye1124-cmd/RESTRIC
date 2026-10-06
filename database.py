@@ -2314,6 +2314,21 @@ class Database:
             )
             await db.commit()
 
+    async def clear_file_cache(self, source_chat: Optional[Any] = None) -> int:
+        """Deletes file cache entries for a specific chat or all chats. Clears L1 cache."""
+        global _L1_CACHE
+        keys_to_del = [k for k in list(_L1_CACHE.keys()) if isinstance(k, tuple) and k[0] == "fc"]
+        for k in keys_to_del:
+            _L1_CACHE.pop(k, None)
+
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
+            if source_chat is not None:
+                cur = await db.execute("DELETE FROM file_cache WHERE source_chat = ?", (str(source_chat),))
+            else:
+                cur = await db.execute("DELETE FROM file_cache")
+            await db.commit()
+            return cur.rowcount
+
     # =========================================================================
     # CUSTOM THUMBNAIL STUDIO & MEDIA MODES
     # =========================================================================

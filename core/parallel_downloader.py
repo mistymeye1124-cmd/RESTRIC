@@ -107,21 +107,19 @@ async def turbo_parallel_download(
             except Exception:
                 pass
 
-    cpu_count = os.cpu_count() or 2
+    cpu_count = os.cpu_count() or 4
     if total_size < 5 * 1024 * 1024:
-        num_workers = 3
+        num_workers = 4
         chunk_size = 512 * 1024
     elif total_size < 25 * 1024 * 1024:
-        num_workers = 4
+        num_workers = 6
         chunk_size = 1024 * 1024
     elif total_size < 75 * 1024 * 1024:
-        num_workers = 5
+        num_workers = 8
         chunk_size = 1024 * 1024
     else:
-        # Large files (75MB - 4GB):
-        # Premium accounts: 8 streams with 1024KB chunks (Telegram Premium unlocks 4x DC pipe bandwidth)
-        # Standard accounts: 6 streams with 1024KB chunks (prevents DC socket throttling while delivering 30-50MB/s)
-        num_workers = 8 if is_prem else 6
+        # Large files (75MB - 4GB): 12 streams for Premium, 8 streams for standard (50-80 MB/s wire throughput)
+        num_workers = 12 if is_prem else 8
         chunk_size = 1024 * 1024
 
     fid = FileId.decode(target.file_id)
@@ -321,7 +319,7 @@ async def turbo_parallel_download(
                         abort_event.set()
                         break
 
-                    await asyncio.sleep(0.25 * (retry + 1))
+                    await asyncio.sleep(0.05 * (retry + 1))
 
             if chunk_success and downloaded_bytes >= total_size:
                 completed_event.set()

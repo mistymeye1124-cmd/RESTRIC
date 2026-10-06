@@ -606,10 +606,9 @@ async def run_batch_harvest_pipeline(
                         dl_res["file_path"] = audio_path
                         dl_res["media_type"] = "audio"
 
-                # Step B.1: Rescale / Compression (if < 1080p requested and not audio)
-                current_settings = await db.get_settings(user_id)
-                effective_res = current_settings.get("resolution", res_pref)
-                if delivery_fmt != "audio" and effective_res.isdigit() and int(effective_res) < 1080 and original_path and original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm")):
+                # Step B.1: Rescale / Compression (Bypassed for Original to guarantee instant delivery)
+                # When res_pref is 'original' (default direct mode), media passes through with 0 CPU transcode delay!
+                if res_pref != "original" and delivery_fmt != "audio" and res_pref.isdigit() and int(res_pref) < 1080 and original_path and original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm")):
                     f_size_mb_pre = (os.path.getsize(original_path) / (1024 * 1024)) if os.path.exists(original_path) else 0
                     if f_size_mb_pre <= 150:
                         scaled_path = f"{original_path}_scaled.mp4"

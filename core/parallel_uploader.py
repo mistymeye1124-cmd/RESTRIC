@@ -86,13 +86,13 @@ async def _turbo_save_file_impl(
     # Concurrency is scaled through multiple independent MTProto media sessions.
     part_size = 512 * 1024
     if not is_big:
-        workers_count = 4
+        workers_count = 6
     elif file_size < 30 * 1024 * 1024:
-        workers_count = 5
+        workers_count = 8
     elif file_size < 100 * 1024 * 1024:
-        workers_count = 6 if not is_prem else 7
+        workers_count = 8 if not is_prem else 10
     else:
-        workers_count = 7 if not is_prem else 8
+        workers_count = 8 if not is_prem else 12
 
     file_total_parts = int(math.ceil(file_size / part_size))
     is_missing_part = file_id is not None
@@ -149,7 +149,7 @@ async def _turbo_save_file_impl(
                         await sess.restart()
                     except Exception:
                         pass
-                    await asyncio.sleep(0.3 * retry)
+                    await asyncio.sleep(0.05 * retry)
                 except Exception as ex:
                     last_err = ex
                     retry += 1
@@ -158,7 +158,7 @@ async def _turbo_save_file_impl(
                         await sess.restart()
                     except Exception:
                         pass
-                    await asyncio.sleep(0.3 * retry)
+                    await asyncio.sleep(0.05 * retry)
 
             if not success:
                 if last_err:

@@ -429,66 +429,13 @@ async def compress_or_rescale_video(
             res_p1 = await asyncio.wait_for(_do_rescale_pass1(), timeout=effective_timeout + 2.0)
             if res_p1 and res_p1 != input_path and os.path.exists(res_p1):
                 return res_p1
+            # If Pass 1 fell back or timed out, return input_path immediately without wasting another 15 seconds
+            return input_path
         except (asyncio.TimeoutError, TimeoutError):
             print(f"[!] CPU busy. Bypassing FFmpeg queue for {input_path} to prevent stalling users.")
             return input_path
     except Exception as e:
         print(f"[!] Fast compression error: {e}")
-
-    # Pass 2: Fallback with fast aac audio re-encode (with strict 15s deadline, never 600s!)
-    fallback_timeout = min(15.0, effective_timeout)
-    cmd_fallback = [
-        ffmpeg_bin,
-        "-y",
-        "-threads", "0",
-        "-i", input_path,
-        "-vf", scale_filter,
-        "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-tune", "fastdecode,zerolatency",
-        "-crf", "28",
-        "-c:a", "aac",
-        "-b:a", "96k",
-        "-sn",
-        "-movflags", "+faststart",
-        output_path,
-    ]
-    try:
-        try:
-            async def _do_rescale_pass2():
-                async with _cpu_semaphore:
-                    proc = await asyncio.create_subprocess_exec(
-                        *cmd_fallback,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    try:
-                        await asyncio.wait_for(proc.communicate(), timeout=fallback_timeout)
-                    except asyncio.TimeoutError:
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
-                        print(f"[!] Video rescale fallback reached {fallback_timeout:.0f}s deadline. Falling back to original.")
-                        return input_path
-
-                    if proc.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
-                        try:
-                            if input_path != output_path and os.path.exists(input_path):
-                                os.remove(input_path)
-                        except Exception:
-                            pass
-                        return output_path
-                return input_path
-
-            res_p2 = await asyncio.wait_for(_do_rescale_pass2(), timeout=fallback_timeout + 2.0)
-            if res_p2 and res_p2 != input_path and os.path.exists(res_p2):
-                return res_p2
-        except (asyncio.TimeoutError, TimeoutError):
-            print(f"[!] CPU busy. Bypassing FFmpeg fallback queue for {input_path}.")
-            return input_path
-    except Exception as e:
-        print(f"[!] Fallback compression error: {e}")
 
     # Guaranteed non-blocking escape hatch: return original intact video immediately
     return input_path

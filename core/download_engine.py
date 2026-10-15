@@ -707,8 +707,9 @@ async def download_restricted_media(
             raise pyrogram.StopTransmission
 
         should_edit, card_text = tracker.update(current, total)
-        if should_edit:
-            if _last_edit_task and not _last_edit_task.done():
+        is_finishing = (current >= total) or (total > 0 and current / total >= 0.98)
+        if should_edit or is_finishing:
+            if _last_edit_task and not _last_edit_task.done() and not is_finishing:
                 return
 
             async def _do_edit(text_to_send: str):
@@ -1253,6 +1254,12 @@ async def download_restricted_media(
                         if downloaded_file and os.path.exists(str(downloaded_file)) and os.path.getsize(str(downloaded_file)) > 0:
                             limiter.on_success()
                             _record_account_download(current_client)
+                            try:
+                                tracker.mark_finished()
+                                done_card = tracker.render_card(media_file_size, media_file_size)
+                                await _safe_edit_status(status_message, done_card, reply_markup=get_progress_markup(job_id, res_pref))
+                            except Exception:
+                                pass
                             break
                     except Exception as turbo_err:
                         logger.warning("[DownloadEngine] Turbo parallel attempt skipped (%s), routing to Anti-Stall Pyrogram Stream...", turbo_err)

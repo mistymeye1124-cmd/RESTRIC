@@ -1279,7 +1279,7 @@ async def topic_command_handler(bot_client: Client, message: Message):
     await telegram_link_listener(bot_client, message)
 
 
-@Client.on_message(filters.command(["clone", "clonechannel"]) & filters.private)
+@Client.on_message(filters.command(["clonechannel"]) & filters.private)
 async def clone_channel_handler(bot_client: Client, message: Message):
     """
     Clones an entire channel, range, or forum topic directly into the user's private backup channel.

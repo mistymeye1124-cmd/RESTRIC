@@ -99,7 +99,7 @@ def sniff_real_media_type(file_path: str, orig_name: str = "", declared_type: st
 
 
 async def _safe_edit_status(status_message: Optional[Message], text: str, reply_markup=None):
-    """Safely edits status message, ignoring errors if status_message is None, deleted, or throttled."""
+    """Safely edits status message, retrying short flood waits so status transitions are preserved."""
     if not status_message:
         return
     try:
@@ -107,6 +107,16 @@ async def _safe_edit_status(status_message: Optional[Message], text: str, reply_
             await status_message.edit_text(text, reply_markup=reply_markup)
         else:
             await status_message.edit_text(text)
+    except FloodWait as e:
+        if getattr(e, "value", 0) <= 3:
+            try:
+                await asyncio.sleep(e.value + 0.1)
+                if reply_markup is not None:
+                    await status_message.edit_text(text, reply_markup=reply_markup)
+                else:
+                    await status_message.edit_text(text)
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -849,12 +859,25 @@ async def upload_unlocked_media(
                         if sent_msg:
                             if overflow_caption and len(overflow_caption) > 1024:
                                 try:
-                                    await bot_client.send_message(
-                                        chat_id=target_chat_id,
-                                        text=f"📝 **Full Caption & Resource Links:**\n\n{overflow_caption}",
-                                        reply_to_message_id=sent_msg.id,
-                                        disable_web_page_preview=True,
-                                    )
+                                    remaining = overflow_caption[1000:].strip()
+                                    if not remaining:
+                                        remaining = overflow_caption
+                                    while remaining:
+                                        chunk = remaining[:3900]
+                                        remaining = remaining[3900:]
+                                        try:
+                                            await bot_client.send_message(
+                                                chat_id=target_chat_id,
+                                                text=chunk,
+                                                reply_to_message_id=sent_msg.id if getattr(sent_msg, "id", None) else None,
+                                                disable_web_page_preview=True,
+                                            )
+                                        except Exception:
+                                            await bot_client.send_message(
+                                                chat_id=target_chat_id,
+                                                text=chunk,
+                                                disable_web_page_preview=True,
+                                            )
                                 except Exception as _ov_err:
                                     print(f"[!] Overflow caption delivery notice: {_ov_err}")
 

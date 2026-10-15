@@ -639,6 +639,25 @@ class Database:
                 """
             )
 
+            # 15. Cloner Checkpoint & Resumption Table
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS clone_checkpoints (
+                    clone_key TEXT PRIMARY KEY,
+                    user_id INTEGER,
+                    source_chat TEXT,
+                    dest_chat TEXT,
+                    start_id INTEGER,
+                    end_id INTEGER,
+                    last_processed_id INTEGER,
+                    delivered_count INTEGER,
+                    skipped_count INTEGER,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_clone_chk_user ON clone_checkpoints(user_id);")
+
             await db.commit()
 
     # --- User & Quota Management ---
@@ -3296,6 +3315,62 @@ class Database:
             pass
 
         return dest_file
+
+    # =========================================================================
+    # CLONER CHECKPOINT & RESUMPTION ENGINE
+    # =========================================================================
+
+    async def save_clone_checkpoint(
+        self,
+        user_id: int,
+        source: Any,
+        dest: Any,
+        start_id: int,
+        end_id: int,
+        last_processed_id: int,
+        delivered: int,
+        skipped: int,
+    ):
+        """Saves or updates a checkpoint for an active channel clone task."""
+        clone_key = f"{user_id}_{source}_{dest}"
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
+            await db.execute(
+                """
+                INSERT INTO clone_checkpoints (
+                    clone_key, user_id, source_chat, dest_chat, start_id, end_id,
+                    last_processed_id, delivered_count, skipped_count, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(clone_key) DO UPDATE SET
+                    last_processed_id = excluded.last_processed_id,
+                    delivered_count = excluded.delivered_count,
+                    skipped_count = excluded.skipped_count,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (clone_key, user_id, str(source), str(dest), start_id, end_id, last_processed_id, delivered, skipped),
+            )
+            await db.commit()
+
+    async def get_clone_checkpoint(self, user_id: int, source: Any, dest: Any) -> Optional[dict]:
+        """Retrieves checkpoint for a user, source, and destination clone task."""
+        clone_key = f"{user_id}_{source}_{dest}"
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM clone_checkpoints WHERE clone_key = ?",
+                (clone_key,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    async def clear_clone_checkpoint(self, user_id: int, source: Any, dest: Any):
+        """Clears completed or cancelled checkpoint."""
+        clone_key = f"{user_id}_{source}_{dest}"
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
+            await db.execute(
+                "DELETE FROM clone_checkpoints WHERE clone_key = ?",
+                (clone_key,),
+            )
+            await db.commit()
 
 
 db = Database()

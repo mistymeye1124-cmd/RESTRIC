@@ -84,7 +84,10 @@ async def _turbo_save_file_impl(
 
     is_bot = False
     try:
-        if getattr(client, "me", None) and getattr(client.me, "is_bot", False):
+        c_me = getattr(client, "me", None)
+        if c_me and getattr(c_me, "is_bot", False):
+            is_bot = True
+        elif str(getattr(client, "name", "")).startswith("bot_"):
             is_bot = True
     except Exception:
         pass
@@ -93,16 +96,17 @@ async def _turbo_save_file_impl(
     # Concurrency is scaled through multiple independent MTProto media sessions.
     part_size = 512 * 1024
     if is_bot:
-        # Telegram Bot API tokens: 6 to 8 concurrent sessions achieve 75+ MB/s wire throughput
-        workers_count = 6 if file_size < 15 * 1024 * 1024 else (7 if file_size < 80 * 1024 * 1024 else 8)
+        # Telegram Bot API tokens: strictly rate-limited when exceeding 2-3 concurrent streams.
+        # 2-3 workers stay 100% in the SAFE ZONE (zero FLOOD_WAIT on SaveBigFilePart) while maintaining 25-35 MB/s speed.
+        workers_count = 2 if file_size < 30 * 1024 * 1024 else 3
     elif not is_big:
-        workers_count = 8
+        workers_count = 4
     elif file_size < 30 * 1024 * 1024:
-        workers_count = 8 if not is_prem else 10
+        workers_count = 4 if not is_prem else 6
     elif file_size < 100 * 1024 * 1024:
-        workers_count = 10 if not is_prem else 12
+        workers_count = 5 if not is_prem else 8
     else:
-        workers_count = 12 if not is_prem else 14
+        workers_count = 6 if not is_prem else 10
 
     file_total_parts = int(math.ceil(file_size / part_size))
     is_missing_part = file_id is not None

@@ -352,7 +352,7 @@ def auto_heal_stale_accounts(current_db_path: Path) -> int:
                 """
                 UPDATE bot_accounts
                 SET is_active = 1, status = 'healthy', flood_wait_until = 0
-                WHERE string_session IS NOT NULL AND string_session != '' AND (is_active = 0 OR status = 'dead')
+                WHERE string_session IS NOT NULL AND string_session != '' AND status != 'dead' AND is_active = 0
                 """
             )
             healed = cur.rowcount

@@ -25,7 +25,7 @@ DEFAULT_SOURCE_CHANNEL = -1001883004189
 DEFAULT_DEST_CHANNEL = -1003501797635
 
 
-@Client.on_message(filters.command(["antivirus", "toggle_antivirus"]) & filters.private)
+@Client.on_message(filters.command(["antivirus", "toggle_antivirus"]))
 async def cmd_toggle_antivirus(client: Client, message: Message):
     """Toggles the Anti-Virus Shield & Dropper Purger ON/OFF."""
     user_id = message.from_user.id
@@ -47,7 +47,7 @@ async def cmd_toggle_antivirus(client: Client, message: Message):
         )
 
 
-@Client.on_message(filters.command(["addclean"]) & filters.private)
+@Client.on_message(filters.command(["addclean"]))
 async def cmd_add_clean_word(client: Client, message: Message):
     """Adds words, usernames, or links to the user's permanent purge list."""
     user_id = message.from_user.id
@@ -77,7 +77,7 @@ async def cmd_add_clean_word(client: Client, message: Message):
     )
 
 
-@Client.on_message(filters.command(["delclean"]) & filters.private)
+@Client.on_message(filters.command(["delclean"]))
 async def cmd_del_clean_word(client: Client, message: Message):
     """Removes a word from the purge list."""
     user_id = message.from_user.id
@@ -91,7 +91,7 @@ async def cmd_del_clean_word(client: Client, message: Message):
     await message.reply_text(f"🗑️ `{word}` ডিলিট লিস্ট থেকে বাদ দেওয়া হয়েছে। বর্তমান শব্দ সংখ্যা: `{len(updated)}`")
 
 
-@Client.on_message(filters.command(["cleanwords"]) & filters.private)
+@Client.on_message(filters.command(["cleanwords"]))
 async def cmd_list_clean_words(client: Client, message: Message):
     """Shows all custom words currently set to be purged."""
     user_id = message.from_user.id
@@ -110,7 +110,7 @@ async def cmd_list_clean_words(client: Client, message: Message):
     await message.reply_text(text)
 
 
-@Client.on_message(filters.command(["clearclean"]) & filters.private)
+@Client.on_message(filters.command(["clearclean"]))
 async def cmd_clear_clean_words(client: Client, message: Message):
     """Clears all custom clean words."""
     user_id = message.from_user.id
@@ -138,7 +138,7 @@ def _parse_message_link(raw_str: str) -> Optional[tuple]:
     return None
 
 
-@Client.on_message(filters.command(["inspect", "testclean", "cleanpost"]) & filters.private)
+@Client.on_message(filters.command(["inspect", "testclean", "cleanpost"]))
 async def cmd_inspect_post(client: Client, message: Message):
     """
     Downloads a single post, extracts everything, performs A-to-Z deep sanitization,
@@ -169,7 +169,8 @@ async def cmd_inspect_post(client: Client, message: Message):
         return
 
     source_chat_id, msg_id = parsed
-    dest_chat_id = DEFAULT_DEST_CHANNEL
+    is_priv = getattr(message.chat, "type", None) and getattr(message.chat.type, "value", str(message.chat.type)) == "private"
+    dest_chat_id = DEFAULT_DEST_CHANNEL if is_priv else message.chat.id
 
     status_msg = await message.reply_text(
         f"⏳ **তল্লাশি শুরু হচ্ছে...**\n"
@@ -310,14 +311,25 @@ async def cmd_inspect_post(client: Client, message: Message):
             f"📤 ডেস্টিনেশন: `{dest_chat_id}`"
         )
 
-        # 5. Upload to destination channel
-        await upload_unlocked_media(
-            client=client,
-            chat_id=dest_chat_id,
-            file_info=dl_res,
+        # 5. Deliver unlocked content to destination (directly into mapped Forum Topic if active)
+        target_topic_id = getattr(message, "message_thread_id", None) or None
+        if not target_topic_id:
+            monitors = await db.get_monitors_for_destination(dest_chat_id)
+            for m in monitors:
+                if m.get("source_chat_id") == source_chat_id and m.get("topic_id", 0) > 0:
+                    target_topic_id = m["topic_id"]
+                    break
+
+        uploaded = await upload_unlocked_media(
+            bot_client=client,
+            target_chat_id=dest_chat_id,
+            download_result=dl_res,
             status_message=None,
             job_id=job_id,
+            custom_caption=clean_caption,
+            upload_as_doc=False,
             user_id=user_id,
+            reply_to_message_id=target_topic_id,
         )
 
         # 6. Build and send audit report to AN0N
@@ -343,7 +355,7 @@ async def cmd_inspect_post(client: Client, message: Message):
         active_jobs.pop(job_id, None)
 
 
-@Client.on_message(filters.command(["clonelast"]) & filters.private)
+@Client.on_message(filters.command(["clonelast"]))
 async def cmd_clone_last_n(client: Client, message: Message):
     """
     Clones the last N posts from the source channel to destination channel.

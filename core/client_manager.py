@@ -228,8 +228,8 @@ async def load_bot_account_client(account_record: Dict[str, Any]) -> Optional[Cl
     client = Client(**client_kwargs)
     install_turbo_uploader(client)
     try:
-        await client.start()
-        me = await client.get_me()
+        await asyncio.wait_for(client.start(), timeout=8.0)
+        me = await asyncio.wait_for(client.get_me(), timeout=5.0)
         raw_is_prem = bool(getattr(me, "is_premium", False))
         db_is_prem = bool(account_record.get("is_tg_premium", 0))
         is_tg_prem = raw_is_prem or db_is_prem

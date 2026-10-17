@@ -59,6 +59,10 @@ async def render_settings_card(user_id: int):
     sfx = settings.get("file_suffix", "") or ""
     branding_display = f"`{pfx}`...`{sfx}`" if (pfx or sfx) else "⚪ Default Original"
 
+    # Anti-Virus Shield & Dropper Purge
+    antivirus_scan = await db.get_antivirus_scan(user_id)
+    av_display = "🟢 ON (Malware Droppers Purged)" if antivirus_scan else "⚪ OFF (Raw Files Allowed)"
+
     is_raw_mode = await db.get_raw_mode()
     raw_notice = (
         "⚡ **NOTICE: Ultra-Fast Pure Raw Mode is ACTIVE by Admin** ⚡\n"
@@ -74,6 +78,7 @@ async def render_settings_card(user_id: int):
         "⚡ **DOWNLOAD CONFIGURATION**\n\n"
         "┌── 📋 **ACTIVE PARAMETERS** ──────────┐\n"
         f"│ • 👻 Ghost Mode: `{ghost_display}`\n"
+        f"│ • 🛡️ Anti-Virus Shield: `{av_display}`\n"
         f"│ • 🎯 Auto-Forward: `{forward_chat}`\n"
         f"│ • 🏷️ File Renaming: {branding_display}\n"
         f"│ • 📺 Default Quality: `{res_display}`\n"
@@ -97,10 +102,13 @@ async def render_settings_card(user_id: int):
             ],
             [
                 InlineKeyboardButton(f"👻 Ghost Mode: {'ON 🟢' if ghost_mode else 'OFF ⚪'}", callback_data="toggle_ghost_mode"),
-                InlineKeyboardButton(f"✂️ Strip Ads: {'ON 🟢' if clean_ads else 'OFF ⚪'}", callback_data="toggle_clean_ads"),
+                InlineKeyboardButton(f"🛡️ Anti-Virus: {'ON 🟢' if antivirus_scan else 'OFF ⚪'}", callback_data="toggle_antivirus_scan"),
             ],
             [
+                InlineKeyboardButton(f"✂️ Strip Ads: {'ON 🟢' if clean_ads else 'OFF ⚪'}", callback_data="toggle_clean_ads"),
                 InlineKeyboardButton("🏷️ Filename Prefix/Suffix", callback_data="prompt_prefix_help"),
+            ],
+            [
                 InlineKeyboardButton("✂️ Caption & Credit Studio", callback_data="user_view_caption_studio"),
             ],
             [
@@ -503,6 +511,19 @@ async def callback_toggle_clean_ads(client: Client, query: CallbackQuery):
     new_state = await db.toggle_clean_caption(user_id)
     status_label = "ENABLED (Competitor ads & links removed)" if new_state else "DISABLED (Original ads preserved)"
     await query.answer(f"✂️ Ad-Stripper: {status_label}", show_alert=False)
+    text, markup = await render_settings_card(user_id)
+    try:
+        await query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        pass
+
+
+@Client.on_callback_query(filters.regex(r"^toggle_antivirus_scan$"))
+async def callback_toggle_antivirus_scan(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    new_state = await db.toggle_antivirus_scan(user_id)
+    status_label = "ENABLED (Malware droppers & payloads purged)" if new_state else "DISABLED (Raw files allowed)"
+    await query.answer(f"🛡️ Anti-Virus Shield: {status_label}", show_alert=False)
     text, markup = await render_settings_card(user_id)
     try:
         await query.message.edit_text(text, reply_markup=markup)

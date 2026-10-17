@@ -28,11 +28,11 @@ from pyrogram.types import (
     InputMediaVideo,
     InputMediaDocument,
 )
-from pyrogram.errors import FloodWait, PeerFlood
+from pyrogram.errors import FloodWait
 from core.client_manager import get_user_client
 from core.download_engine import download_restricted_media, active_jobs
 from core.upload_engine import upload_unlocked_media
-from core.media_processor import strip_video_metadata
+from core.deep_sanitizer import deep_inspect_and_sanitize
 from core.caption_cleaner import format_custom_caption
 from database import db
 
@@ -487,15 +487,28 @@ async def _run_channel_clone_worker(
 
             orig_fp = dl_res.get("file_path")
             if orig_fp and os.path.exists(orig_fp):
-                anon_fp = f"{orig_fp}_anon.mp4"
-                cleaned = await strip_video_metadata(orig_fp, anon_fp)
-                if cleaned and cleaned != orig_fp and os.path.exists(cleaned):
+                src_chat_title = getattr(m_chk.chat, "title", "") or ""
+                src_chat_uname = getattr(m_chk.chat, "username", "") or ""
+                antivirus_scan = await db.get_antivirus_scan(user_id)
+                custom_clean_words = await db.get_clean_words(user_id)
+                deep_res = await deep_inspect_and_sanitize(
+                    file_path=orig_fp,
+                    channel_title=src_chat_title,
+                    channel_username=src_chat_uname,
+                    custom_words=custom_clean_words,
+                    antivirus_scan=antivirus_scan,
+                )
+                if deep_res.get("blocked_threat"):
+                    print(f"[!] Security Alert: Skipped malicious file on ID {msg_id}: {deep_res.get('threat_name')}")
+                    skipped += 1
                     try:
                         if os.path.exists(orig_fp):
                             os.remove(orig_fp)
                     except Exception:
                         pass
-                    dl_res["file_path"] = cleaned
+                    await db.save_clone_checkpoint(user_id, source, dest, start_id, end_id, msg_id, delivered, skipped)
+                    continue
+                dl_res["file_path"] = deep_res.get("clean_path", orig_fp)
 
             # Apply Watermark for VIP users if configured
             is_prem = await db.is_user_premium(user_id)

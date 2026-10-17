@@ -153,6 +153,8 @@ class Database:
                 "ALTER TABLE watermark_settings ADD COLUMN outro_clip_path TEXT DEFAULT '';",
                 "ALTER TABLE watermark_settings ADD COLUMN style TEXT DEFAULT 'pill';",
                 "ALTER TABLE watermark_settings ADD COLUMN bounce_speed INTEGER DEFAULT 3;",
+                "ALTER TABLE user_settings ADD COLUMN custom_clean_words TEXT DEFAULT '';",
+                "ALTER TABLE user_settings ADD COLUMN antivirus_scan INTEGER DEFAULT 1;",
             ]:
                 try:
                     await db.execute(col_sql)
@@ -2431,6 +2433,18 @@ class Database:
         await self.update_settings(user_id, clean_caption=new_val)
         return bool(new_val)
 
+    async def toggle_antivirus_scan(self, user_id: int) -> bool:
+        """Toggles anti-virus scan & dropper purging for user."""
+        settings = await self.get_settings(user_id)
+        new_val = 0 if settings.get("antivirus_scan", 1) else 1
+        await self.update_settings(user_id, antivirus_scan=new_val)
+        return bool(new_val)
+
+    async def get_antivirus_scan(self, user_id: int) -> bool:
+        """Returns whether anti-virus scan is enabled for user."""
+        settings = await self.get_settings(user_id)
+        return bool(settings.get("antivirus_scan", 1))
+
     async def get_caption_replacements(self, user_id: int) -> List[Tuple[str, str]]:
         """Returns list of (find_text, replace_text) replacement rules."""
         import json
@@ -2482,6 +2496,46 @@ class Database:
     async def clear_caption_replacements(self, user_id: int):
         """Clears all caption find-and-replace rules for user."""
         await self.update_settings(user_id, caption_replacements="")
+
+    async def get_clean_words(self, user_id: int) -> List[str]:
+        """Returns list of custom words/patterns to purge from all files and captions."""
+        import json
+        settings = await self.get_settings(user_id)
+        raw = settings.get("custom_clean_words", "")
+        if not raw:
+            return []
+        try:
+            items = json.loads(raw)
+            if isinstance(items, list):
+                return [str(x).strip() for x in items if str(x).strip()]
+        except Exception:
+            return [x.strip() for x in raw.split(",") if x.strip()]
+        return []
+
+    async def add_clean_word(self, user_id: int, word: str) -> List[str]:
+        """Adds a custom word to the user's permanent purge list."""
+        import json
+        words = await self.get_clean_words(user_id)
+        w_clean = word.strip()
+        if w_clean and not any(w.lower() == w_clean.lower() for w in words):
+            words.append(w_clean)
+            raw = json.dumps(words)
+            await self.update_settings(user_id, custom_clean_words=raw)
+        return words
+
+    async def remove_clean_word(self, user_id: int, word: str) -> List[str]:
+        """Removes a custom word from the purge list."""
+        import json
+        words = await self.get_clean_words(user_id)
+        w_clean = word.strip().lower()
+        words = [w for w in words if w.lower() != w_clean]
+        raw = json.dumps(words)
+        await self.update_settings(user_id, custom_clean_words=raw)
+        return words
+
+    async def clear_clean_words(self, user_id: int):
+        """Clears all custom purge words for user."""
+        await self.update_settings(user_id, custom_clean_words="")
 
     # =========================================================================
     # DYNAMIC VIP PLANS & MONETIZATION PRICING ENGINE

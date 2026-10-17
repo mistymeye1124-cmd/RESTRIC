@@ -86,6 +86,16 @@ def strip_competitor_ads(
         r"(?i)^\s*.*(?:telegram|tg)\s+(?:channel|channels|group|groups|link|links|community).*$",
         r"(?i)^\s*.*(?:আমাদের\s*চ্যানেলে\s*যুক্ত\s*হন|যুক্ত\s*হন|সাবস্ক্রাইব\s*করুন|টেলিগ্রাম\s*চ্যানেল).*$",
         r"(?i)^\s*(?:exclusive\s*content|copyright\s*reserved|all\s*rights\s*reserved|dm\s*for|contact\s*admin).*",
+        r"(?i)^\s*.*(?:pricing|plans?|tiers?|subscription|packages?|rates?).*$",
+        r"(?i)^\s*.*(?:\b\d+\s*(?:months?|days?|weeks?|years?|hrs?|hours?)|\blifetime\b|\bannually\b|\bmonthly\b|\bweekly\b|\bdaily\b).*(?:➜|->|=>|→|►|👉|➡|➤|:|-|—|\$|€|£|usd|eur|usdt|\b\d+\b).*$",
+        r"(?i)^\s*.*(?:pay\s*once|lifetime\s*access|one\s*time\s*payment).*$",
+        r"(?i)^\s*.*vip\s*(?:cloud|group|member|channel|tier|access).*(?:hq|posting|leaks|combo|database).*$",
+        r"(?i)^\s*.*stop\s*lagging\s*behind\s*(?:the\s*competition)?.*$",
+        r"(?i)^\s*.*(?:best|daily|exclusive)\s*(?:combos?|leaks?|hq|hits?|tools?|logs?).*$",
+        r"(?i)^\s*.*(?:accepted\s*payments?|payment\s*methods?|crypto|paypal|binance|btc|usdt|ltc)\s*[:►👉\-—=\|].*$",
+        r"(?i)^\s*.*(?:to\s*buy|for\s*buy|purchase|order|dm\s*to\s*buy|contact\s*to\s*buy|buy\s*now).*$",
+        r"(?i)^\s*.*(?:public\s*channel|main\s*channel|backup\s*channel|vip\s*channel|official\s*channel|telegram\s*channel|our\s*channel|channel\s*link|discussion\s*group)\s*[:►👉\-—=\|].*$",
+        r"(?i)^\s*.*(?:message|contact|dm|admin|owner|support)\s+@[\w\d_]{3,}.*$",
     ]
 
     promo_line_prefixes = (
@@ -110,15 +120,29 @@ def strip_competitor_ads(
         re.IGNORECASE
     )
 
+    DECORATIVE_CHARS = "-=_~*#■█━═─▬─━│┃┄┅┆┇┈┉┊┋┌┍┎┏┐┑┒┓└┕┖┗┘┙┚┛├┝┞┟┠┡┢┣┤┥┦┧┨┩┪┫┬┭┮┳┴┵┶┻┼┽┾╀╁╂╃╄╅╆╇╈╉╊╋═║╒╓╔╕╖╗╘╙╚╛╜╝╞╟╠╡╢╣╤╥╦╧╨╩╪╫╬"
+
     for line in lines:
-        stripped = line.strip(" \t-►👉*━═~_=•#|┌┐└┘├┤┼│")
-        if not stripped or (len(set(stripped)) == 1 and stripped[0] in "-=_~*#"):
+        stripped = line.strip(" \t-►👉*━═~_=•#|┌┐└┘├┤┼│■█▬")
+
+        # 1. Skip decorative border lines
+        border_stripped = re.sub(r"[\s\-_=~*#■█━═─▬│┃┄┅┆┇┈┉┊┋┌┐└┘├┤┼▀▄\./\\|]+", "", line)
+        if not border_stripped or (len(set(stripped)) == 1 and stripped[0] in DECORATIVE_CHARS):
             if not prev_blank and cleaned_lines:
                 cleaned_lines.append("")
                 prev_blank = True
             continue
 
-        # Check full promo banner lines (e.g. "🔥 JOIN OUR TELEGRAM CHANNELS 🔥")
+        # 2. Check pricing / duration subscription tier line (e.g. "💸 1 Month ➜ $8 💰")
+        has_email = bool(re.search(r"\b[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+\b", line))
+        is_plain_combo = bool(re.match(r"^[a-zA-Z0-9_\-\.]+:[^\s]+$", line.strip()))
+        if not has_email and not is_plain_combo:
+            if re.search(r"(?:[\$€£]\s*\d+|\b\d+\s*[\$€£]|\b\d+\s*(?:usd|eur|gbp|usdt|crypto|btc|eth)\b)", line, re.IGNORECASE):
+                continue
+            elif re.search(r"(?i)\b(?:\d+\s*(?:months?|days?|weeks?|years?|hrs?|hours?)|\blifetime\b|\bannually\b|\bmonthly\b|\bweekly\b|\bdaily\b)\b", line):
+                continue
+
+        # 3. Check full promo banner lines (e.g. "🔥 JOIN OUR TELEGRAM CHANNELS 🔥")
         is_banner = False
         for banner_pat in full_promo_line_patterns:
             if re.match(banner_pat, stripped):

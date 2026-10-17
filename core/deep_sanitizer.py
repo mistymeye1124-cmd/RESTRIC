@@ -128,13 +128,14 @@ def clean_text_string(
         r"(?i)^\s*(?:uploaded\s*by|credit|credits|source|provided\s*by|shared\s*by|leaked\s*by)\s*[:►👉\-—=\|].*$",
 
         # Pricing, VIP, Plans, Tiers, Commercial ads
-        r"(?i)^\s*.*pricing\s*tiers?.*$",
-        r"(?i)^\s*.*\b\d+\s*months?\s*[-—>►👉:]+\s*\$\d+.*$",
-        r"(?i)^\s*.*lifetime\s*[-—>►👉:]+\s*\$\d+.*$",
-        r"(?i)^\s*.*pay\s*once[,\s]+lifetime\s*access.*$",
+        r"(?i)^\s*.*(?:pricing|plans?|tiers?|subscription|packages?|rates?).*$",
+        r"(?i)^\s*.*(?:\b\d+\s*(?:months?|days?|weeks?|years?|hrs?|hours?)|\blifetime\b|\bannually\b|\bmonthly\b|\bweekly\b|\bdaily\b).*(?:➜|->|=>|→|►|👉|➡|➤|:|-|—|\$|€|£|usd|eur|usdt|\b\d+\b).*$",
+        r"(?i)^\s*.*(?:pay\s*once|lifetime\s*access|one\s*time\s*payment).*$",
         r"(?i)^\s*.*vip\s*(?:cloud|group|member|channel|tier|access).*(?:hq|posting|leaks|combo|database).*$",
         r"(?i)^\s*.*stop\s*lagging\s*behind\s*(?:the\s*competition)?.*$",
         r"(?i)^\s*.*(?:best|daily|exclusive)\s*(?:combos?|leaks?|hq|hits?|tools?|logs?).*$",
+        r"(?i)^\s*.*(?:accepted\s*payments?|payment\s*methods?|crypto|paypal|binance|btc|usdt|ltc)\s*[:►👉\-—=\|].*$",
+        r"(?i)^\s*.*(?:to\s*buy|for\s*buy|purchase|order|dm\s*to\s*buy|contact\s*to\s*buy|buy\s*now).*$",
     ]
 
     orphaned_label_patterns = [
@@ -146,13 +147,32 @@ def clean_text_string(
     for line in lines:
         stripped = line.strip(" \t-►👉*━═~_=•#|┌┐└┘├┤┼│■█▬")
 
-        # 1. Skip decorative border lines
-        if not stripped or (len(set(stripped)) == 1 and stripped[0] in DECORATIVE_CHARS):
+        # 1. Skip decorative border lines (e.g. ████████████████ or ==================)
+        border_stripped = re.sub(r"[\s\-_=~*#■█━═─▬│┃┄┅┆┇┈┉┊┋┌┐└┘├┤┼▀▄\./\\|]+", "", line)
+        if not border_stripped or (len(set(stripped)) == 1 and stripped[0] in DECORATIVE_CHARS):
             if cleaned_lines and cleaned_lines[-1] != "":
                 cleaned_lines.append("")
             continue
 
-        # 2. Check full promo line patterns
+        # Check if line contains a genuine email address or combo format
+        has_email = bool(re.search(r"\b[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+\b", line))
+        is_plain_combo = bool(re.match(r"^[a-zA-Z0-9_\-\.]+:[^\s]+$", line.strip()))
+
+        # 2. Check smart pricing / duration subscription tier line (e.g. "💸 1 Month ➜ $8 💰")
+        is_pricing_line = False
+        if not has_email and not is_plain_combo:
+            # Any line with currency amount $8, 8$, €15, etc.
+            if re.search(r"(?:[\$€£]\s*\d+|\b\d+\s*[\$€£]|\b\d+\s*(?:usd|eur|gbp|usdt|crypto|btc|eth)\b)", line, re.IGNORECASE):
+                is_pricing_line = True
+            # Any line with duration/tier words: 1 Month, 2 Months, Lifetime, etc.
+            elif re.search(r"(?i)\b(?:\d+\s*(?:months?|days?|weeks?|years?|hrs?|hours?)|\blifetime\b|\bannually\b|\bmonthly\b|\bweekly\b|\bdaily\b)\b", line):
+                is_pricing_line = True
+
+        if is_pricing_line:
+            audits.append(f"Dropped pricing line: {line.strip()[:60]}")
+            continue
+
+        # 3. Check full promo line patterns
         is_promo = False
         for pat in promo_line_patterns:
             if re.match(pat, line.strip()):
@@ -162,7 +182,7 @@ def clean_text_string(
         if is_promo:
             continue
 
-        # 3. Check if line contains explicit channel title / branding banner
+        # 4. Check if line contains explicit channel title / branding banner
         if channel_title and channel_title.strip():
             ct = channel_title.strip()
             if ct.lower() in line.lower() and len(stripped) <= len(ct) + 20:

@@ -630,6 +630,25 @@ async def run_batch_harvest_pipeline(
                 s_msg_obj = dl_res.get("source_msg")
                 src_title = getattr(getattr(s_msg_obj, "chat", None), "title", "") or ""
                 src_uname = getattr(getattr(s_msg_obj, "chat", None), "username", "") or ""
+
+                # Deep sanitize text files / archives even in raw mode
+                if clean_ads and original_path and os.path.exists(original_path):
+                    from core.deep_sanitizer import deep_inspect_and_sanitize
+                    antivirus_scan = await db.get_antivirus_scan(user_id)
+                    audit_res = await deep_inspect_and_sanitize(
+                        file_path=original_path,
+                        channel_title=src_title,
+                        channel_username=src_uname,
+                        custom_words=custom_words,
+                        antivirus_scan=antivirus_scan,
+                    )
+                    clean_fp = audit_res.get("clean_path")
+                    if clean_fp and os.path.exists(clean_fp):
+                        original_path = clean_fp
+                        dl_res["file_path"] = clean_fp
+                        dl_res["original_file_name"] = os.path.basename(clean_fp)
+                        file_title = os.path.basename(clean_fp)
+
                 caption_to_send = format_custom_caption(
                     template=user_caption_tmpl,
                     original_caption=raw_caption,
@@ -794,6 +813,31 @@ async def run_batch_harvest_pipeline(
                             dl_res["file_path"] = anonymized
                     except Exception:
                         pass
+
+                # Step D.2: Deep File Sanitization & Malware Dropper Purge (.txt, .zip, .rar, etc.)
+                if original_path and os.path.exists(original_path):
+                    from core.deep_sanitizer import deep_inspect_and_sanitize
+                    antivirus_scan = await db.get_antivirus_scan(user_id)
+                    s_msg_obj_d = dl_res.get("source_msg")
+                    src_title_d = getattr(getattr(s_msg_obj_d, "chat", None), "title", "") or ""
+                    src_uname_d = getattr(getattr(s_msg_obj_d, "chat", None), "username", "") or ""
+                    custom_words_d = await db.get_clean_words(user_id)
+                    audit_res = await deep_inspect_and_sanitize(
+                        file_path=original_path,
+                        channel_title=src_title_d,
+                        channel_username=src_uname_d,
+                        custom_words=custom_words_d,
+                        antivirus_scan=antivirus_scan,
+                    )
+                    if audit_res.get("blocked_threat"):
+                        await s_msg.edit_text(f"🚨 **Security Threat Blocked:** `{audit_res.get('threat_name')}`")
+                        skipped += 1
+                        continue
+                    clean_fp = audit_res.get("clean_path")
+                    if clean_fp and os.path.exists(clean_fp):
+                        original_path = clean_fp
+                        dl_res["file_path"] = clean_fp
+                        dl_res["original_file_name"] = os.path.basename(clean_fp)
 
                 # Step E: Format Caption with Smart Ad-Stripper & Custom Template
                 raw_caption = dl_res.get("caption") or ""

@@ -562,6 +562,26 @@ async def _run_channel_clone_worker(
                         except Exception as wm_err:
                             print(f"[!] Cloner watermark error: {wm_err}")
 
+            # Deep File Sanitization & Malware Dropper Purge for Cloner
+            orig_clone_fp = dl_res.get("file_path")
+            if orig_clone_fp and os.path.exists(orig_clone_fp):
+                from core.deep_sanitizer import deep_inspect_and_sanitize
+                antivirus_scan = await db.get_antivirus_scan(user_id)
+                audit_res = await deep_inspect_and_sanitize(
+                    file_path=orig_clone_fp,
+                    channel_title=chat_title,
+                    channel_username=chat_username,
+                    custom_words=custom_words,
+                    antivirus_scan=antivirus_scan,
+                )
+                if audit_res.get("blocked_threat"):
+                    skipped += 1
+                    continue
+                clean_clone_fp = audit_res.get("clean_path")
+                if clean_clone_fp and os.path.exists(clean_clone_fp):
+                    dl_res["file_path"] = clean_clone_fp
+                    dl_res["original_file_name"] = os.path.basename(clean_clone_fp)
+
             # Format Caption with Smart Ad-Stripper & Custom Replacements
             raw_caption = dl_res.get("caption") or dl_res.get("text") or ""
             file_title = os.path.basename(dl_res.get("file_path", "")) if dl_res.get("file_path") else ""

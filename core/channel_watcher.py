@@ -200,31 +200,34 @@ async def mirror_post_to_destination(
             await db.record_monitor_forward(monitor_id=monitor_id, source_msg_id=msg_id, dest_msg_id=sent.id)
             return True
 
-        # Step 3: Fast-path attempt using native Telegram copy with CLEANED caption
+        # Step 3: Fast-path attempt using native Telegram copy ONLY for media that doesn't need deep file sanitization
+        # Documents (.txt, .zip, .rar, .csv, etc.) MUST go through Worker Engine to inspect and clean inner content!
+        has_document_or_archive = bool(source_msg.document)
         fast_copied = False
-        try:
-            copied_msg = await bot_client.copy_message(
-                chat_id=dest_chat_id,
-                from_chat_id=source_chat_id,
-                message_id=msg_id,
-                caption=caption_to_send if clean_ads else None,
-                reply_to_message_id=topic_id if (topic_id and topic_id > 0) else None,
-            )
-            if copied_msg:
-                fast_copied = True
-                await db.record_monitor_forward(
-                    monitor_id=monitor_id,
-                    source_msg_id=msg_id,
-                    dest_msg_id=copied_msg.id,
+        if not (clean_ads and has_document_or_archive):
+            try:
+                copied_msg = await bot_client.copy_message(
+                    chat_id=dest_chat_id,
+                    from_chat_id=source_chat_id,
+                    message_id=msg_id,
+                    caption=caption_to_send if clean_ads else None,
+                    reply_to_message_id=topic_id if (topic_id and topic_id > 0) else None,
                 )
-                logger.info("[Fast Mirror] Successfully copied msg %s to dest %s with clean caption", msg_id, dest_chat_id)
-                return True
-        except (ChatForwardsRestricted, RPCError) as copy_err:
-            logger.debug("[Fast Mirror Bypass] Native copy skipped (%s), falling back to Worker...", copy_err)
-        except Exception as general_err:
-            logger.debug("[Fast Mirror Bypass] Exception (%s), falling back to Worker...", general_err)
+                if copied_msg:
+                    fast_copied = True
+                    await db.record_monitor_forward(
+                        monitor_id=monitor_id,
+                        source_msg_id=msg_id,
+                        dest_msg_id=copied_msg.id,
+                    )
+                    logger.info("[Fast Mirror] Successfully copied msg %s to dest %s with clean caption", msg_id, dest_chat_id)
+                    return True
+            except (ChatForwardsRestricted, RPCError) as copy_err:
+                logger.debug("[Fast Mirror Bypass] Native copy skipped (%s), falling back to Worker...", copy_err)
+            except Exception as general_err:
+                logger.debug("[Fast Mirror Bypass] Exception (%s), falling back to Worker...", general_err)
 
-        # Step 4: Worker Engine Path for Restricted / Protected Content
+        # Step 4: Worker Engine Path for Restricted / Protected Content & Deep File Sanitization
         from core.client_manager import get_client_for_channel, admin_pool_clients
         worker_client, _ = await get_client_for_channel(source_chat_id, user_id=user_id)
         if not worker_client:
@@ -257,9 +260,31 @@ async def mirror_post_to_destination(
             dl_res["chat_id"] = source_chat_id
             dl_res["message_id"] = msg_id
 
-            # Apply stealth metadata anonymizer if video file
+            # Deep Sanitization & Malware Dropper Purge Gate for All Files (Text files, archives, videos)
             orig_fp = dl_res.get("file_path")
             if orig_fp and os.path.exists(orig_fp):
+                from core.deep_sanitizer import deep_inspect_and_sanitize
+                antivirus_scan = await db.get_antivirus_scan(user_id)
+                audit_res = await deep_inspect_and_sanitize(
+                    file_path=orig_fp,
+                    channel_title=real_chat_title or current_title,
+                    channel_username=getattr(getattr(source_msg, "chat", None), "username", ""),
+                    custom_words=custom_words,
+                    antivirus_scan=antivirus_scan,
+                )
+                if audit_res.get("blocked_threat"):
+                    logger.warning("[Mirror Shield] Dropped malicious payload %s (%s)", orig_fp, audit_res.get("threat_name"))
+                    await db.record_monitor_forward(monitor_id=monitor_id, source_msg_id=msg_id, dest_msg_id=0)
+                    return False
+
+                clean_sanitized_fp = audit_res.get("clean_path")
+                if clean_sanitized_fp and os.path.exists(clean_sanitized_fp):
+                    dl_res["file_path"] = clean_sanitized_fp
+                    dl_res["original_file_name"] = os.path.basename(clean_sanitized_fp)
+
+            # Apply stealth metadata anonymizer if video file
+            orig_fp = dl_res.get("file_path")
+            if orig_fp and os.path.exists(orig_fp) and orig_fp.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts")):
                 anon_fp = f"{orig_fp}_anon.mp4"
                 cleaned = await strip_video_metadata(orig_fp, anon_fp)
                 if cleaned and cleaned != orig_fp and os.path.exists(cleaned):

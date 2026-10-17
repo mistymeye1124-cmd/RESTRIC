@@ -105,7 +105,9 @@ def clean_text_string(
     custom_words: Optional[List[str]] = None,
 ) -> Tuple[str, List[str]]:
     """
-    Cleans a text string by purging channel links, usernames, and custom words.
+    Cleans a text string by purging channel links, usernames, promotional banners,
+    pricing tiers, VIP cloud headers, and competitor watermarks while strictly preserving
+    valid email addresses, credentials, passwords, and genuine data.
     Returns (cleaned_text, audit_log).
     """
     if not text:
@@ -115,56 +117,113 @@ def clean_text_string(
     lines = text.splitlines()
     cleaned_lines = []
 
-    # Patterns indicating entire lines dedicated to competitor promotion
+    # Patterns for promotional lines that should be dropped completely
     promo_line_patterns = [
-        r"(?i)^\s*(?:join|visit|subscribe|follow|backup|channel|main\s*channel|vip\s*channel)\s*[:►👉-]?\s*(?:https?://|t\.me|@)",
-        r"(?i)^\s*(?:uploaded\s*by|credit|credits|source|provided\s*by)\s*[:►👉-].*$",
-        r"(?i)^\s*(?:https?://)?(?:t\.me|telegram\.me)/\S+\s*$",
+        # Channels, Links, Invites, Admins, Messages
+        r"(?i)^\s*.*(?:public\s*channel|main\s*channel|backup\s*channel|vip\s*channel|official\s*channel|telegram\s*channel|our\s*channel|channel\s*link|discussion\s*group)\s*[:►👉\-—=\|].*$",
+        r"(?i)^\s*.*(?:message|contact|dm|admin|owner|support)\s+@[\w\d_]{3,}.*$",
+        r"(?i)^\s*.*(?:join|visit|subscribe|follow)\s+(?:our|my|the|this)?\s*(?:telegram|tg|vip|official|backup|main|channel|group|chat|updates|now|here)?.*$",
+        r"(?i)^\s*.*(?:https?://)?(?:t\.me|telegram\.me|telegram\.dog)/[^\s]+.*$",
         r"(?i)^\s*@[a-zA-Z0-9_]{3,}\s*$",
+        r"(?i)^\s*(?:uploaded\s*by|credit|credits|source|provided\s*by|shared\s*by|leaked\s*by)\s*[:►👉\-—=\|].*$",
+
+        # Pricing, VIP, Plans, Tiers, Commercial ads
+        r"(?i)^\s*.*pricing\s*tiers?.*$",
+        r"(?i)^\s*.*\b\d+\s*months?\s*[-—>►👉:]+\s*\$\d+.*$",
+        r"(?i)^\s*.*lifetime\s*[-—>►👉:]+\s*\$\d+.*$",
+        r"(?i)^\s*.*pay\s*once[,\s]+lifetime\s*access.*$",
+        r"(?i)^\s*.*vip\s*(?:cloud|group|member|channel|tier|access).*(?:hq|posting|leaks|combo|database).*$",
+        r"(?i)^\s*.*stop\s*lagging\s*behind\s*(?:the\s*competition)?.*$",
+        r"(?i)^\s*.*(?:best|daily|exclusive)\s*(?:combos?|leaks?|hq|hits?|tools?|logs?).*$",
     ]
 
-    for line in lines:
-        is_promo_line = False
-        for pat in promo_line_patterns:
-            if re.search(pat, line.strip()):
-                audits.append(f"Dropped promo line: {line.strip()[:60]}")
-                is_promo_line = True
-                break
+    orphaned_label_patterns = [
+        r"(?i)^\s*(?:public\s*channel|main\s*channel|backup\s*channel|vip\s*channel|channel|message|contact|dm|link|source|credit|credits)\s*[:►👉\-—=\|\s]*$",
+    ]
 
-        if is_promo_line:
+    DECORATIVE_CHARS = "-=_~*#■█━═─▬─━│┃┄┅┆┇┈┉┊┋┌┍┎┏┐┑┒┓└┕┖┗┘┙┚┛├┝┞┟┠┡┢┣┤┥┦┧┨┩┪┫┬┭┮┳┴┵┶┻┼┽┾╀╁╂╃╄╅╆╇╈╉╊╋═║╒╓╔╕╖╗╘╙╚╛╜╝╞╟╠╡╢╣╤╥╦╧╨╩╪╫╬"
+
+    for line in lines:
+        stripped = line.strip(" \t-►👉*━═~_=•#|┌┐└┘├┤┼│■█▬")
+
+        # 1. Skip decorative border lines
+        if not stripped or (len(set(stripped)) == 1 and stripped[0] in DECORATIVE_CHARS):
+            if cleaned_lines and cleaned_lines[-1] != "":
+                cleaned_lines.append("")
             continue
+
+        # 2. Check full promo line patterns
+        is_promo = False
+        for pat in promo_line_patterns:
+            if re.match(pat, line.strip()):
+                audits.append(f"Dropped promo line: {line.strip()[:60]}")
+                is_promo = True
+                break
+        if is_promo:
+            continue
+
+        # 3. Check if line contains explicit channel title / branding banner
+        if channel_title and channel_title.strip():
+            ct = channel_title.strip()
+            if ct.lower() in line.lower() and len(stripped) <= len(ct) + 20:
+                audits.append(f"Dropped channel title banner: {line.strip()[:60]}")
+                continue
 
         l_clean = line
 
-        # Strip explicit channel title
-        if channel_title and channel_title.lower() in l_clean.lower():
-            l_clean = re.sub(re.escape(channel_title), "", l_clean, flags=re.IGNORECASE)
-            audits.append(f"Purged channel title '{channel_title}'")
+        # 4. Strip explicit channel title words inside lines
+        if channel_title:
+            ct = channel_title.strip()
+            l_clean = re.sub(re.escape(ct), "", l_clean, flags=re.IGNORECASE)
+            for part in ct.split():
+                part_clean = part.strip()
+                if len(part_clean) >= 4 and part_clean.lower() not in ("free", "chat", "group", "link", "post", "cloud"):
+                    l_clean = re.sub(rf"(?i)\b{re.escape(part_clean)}\b", "", l_clean)
 
-        # Strip explicit channel username
+        # 5. Strip explicit channel username
         if channel_username:
             u_raw = channel_username.lstrip("@").strip()
-            if u_raw and u_raw.lower() in l_clean.lower():
-                l_clean = re.sub(rf"(?i)@?{re.escape(u_raw)}", "", l_clean)
-                audits.append(f"Purged username '@{u_raw}'")
+            if u_raw:
+                l_clean = re.sub(rf"(?i)@?{re.escape(u_raw)}\b", "", l_clean)
 
-        # Strip custom blacklist words
+        # 6. Strip custom blacklist words
         if custom_words:
-            for w in custom_words:
-                w_str = str(w).strip()
-                if w_str and w_str.lower() in l_clean.lower():
+            for cw in custom_words:
+                w_str = str(cw).strip()
+                if w_str:
                     l_clean = re.sub(re.escape(w_str), "", l_clean, flags=re.IGNORECASE)
-                    audits.append(f"Purged custom word '{w_str}'")
 
-        # Strip any remaining Telegram handles or links
-        l_clean = re.sub(r"(?i)https?://(?:t\.me|telegram\.me)/\S+", "", l_clean)
-        l_clean = re.sub(r"(?i)t\.me/\S+", "", l_clean)
-        l_clean = re.sub(r"(?:^|\s)@[a-zA-Z0-9_]{3,}", " ", l_clean)
+        # 7. Strip Telegram links & handles (STRICTLY PRESERVING valid email addresses name@domain.tld)
+        l_clean = re.sub(r"(?i)https?://(?:t\.me|telegram\.me|telegram\.dog)/[^\s]+", "", l_clean)
+        l_clean = re.sub(r"(?i)t\.me/[^\s]+", "", l_clean)
+        l_clean = re.sub(r"(?i)tg://[^\s]+", "", l_clean)
+        # Match @handle only when NOT preceded by word/dot and NOT followed by a domain extension (.com, .net, etc.)
+        l_clean = re.sub(r"(?<![\w\d._%+-])@([a-zA-Z0-9_]{3,})\b(?!\.[a-zA-Z]{2,})", "", l_clean)
+
+        # 8. Check if line became an orphaned label
+        clean_stripped = l_clean.strip(" \t-►👉*━═~_=•#|┌┐└┘├┤┼│■█▬")
+        is_orphaned = False
+        for orph_pat in orphaned_label_patterns:
+            if re.match(orph_pat, clean_stripped):
+                is_orphaned = True
+                break
+        if is_orphaned:
+            continue
+
+        if not clean_stripped:
+            if cleaned_lines and cleaned_lines[-1] != "":
+                cleaned_lines.append("")
+            continue
 
         cleaned_lines.append(l_clean)
 
+    # Strip leading and trailing empty lines
+    while cleaned_lines and cleaned_lines[0] == "":
+        cleaned_lines.pop(0)
+    while cleaned_lines and cleaned_lines[-1] == "":
+        cleaned_lines.pop()
+
     result = "\n".join(cleaned_lines)
-    result = re.sub(r"\n{3,}", "\n\n", result).strip()
     return result, audits
 
 

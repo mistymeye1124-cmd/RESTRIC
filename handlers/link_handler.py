@@ -626,12 +626,19 @@ async def run_batch_harvest_pipeline(
                 clean_ads = bool(user_settings.get("clean_caption", 1))
                 user_caption_tmpl = user_settings.get("custom_caption")
                 caption_replacements = await db.get_caption_replacements(user_id)
+                custom_words = await db.get_clean_words(user_id)
+                s_msg_obj = dl_res.get("source_msg")
+                src_title = getattr(getattr(s_msg_obj, "chat", None), "title", "") or ""
+                src_uname = getattr(getattr(s_msg_obj, "chat", None), "username", "") or ""
                 caption_to_send = format_custom_caption(
                     template=user_caption_tmpl,
                     original_caption=raw_caption,
                     file_name=file_title,
                     clean_ads=clean_ads,
                     replacements=caption_replacements,
+                    channel_title=src_title,
+                    channel_username=src_uname,
+                    custom_words=custom_words,
                 )
             else:
                 # Step B: Audio Extractor (Convert video to pristine 192k MP3 podcast)
@@ -794,6 +801,10 @@ async def run_batch_harvest_pipeline(
                 clean_ads = bool(user_settings.get("clean_caption", 1))
                 user_caption_tmpl = user_settings.get("custom_caption")
                 caption_replacements = await db.get_caption_replacements(user_id)
+                custom_words = await db.get_clean_words(user_id)
+                s_msg_obj = dl_res.get("source_msg")
+                src_title = getattr(getattr(s_msg_obj, "chat", None), "title", "") or ""
+                src_uname = getattr(getattr(s_msg_obj, "chat", None), "username", "") or ""
 
                 caption_to_send = format_custom_caption(
                     template=user_caption_tmpl,
@@ -801,6 +812,9 @@ async def run_batch_harvest_pipeline(
                     file_name=file_title,
                     clean_ads=clean_ads,
                     replacements=caption_replacements,
+                    channel_title=src_title,
+                    channel_username=src_uname,
+                    custom_words=custom_words,
                 )
 
                 global_wm = await db.get_global_watermark_config()

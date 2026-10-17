@@ -159,13 +159,55 @@ async def mirror_post_to_destination(
                 monitor["topic_title"] = source_title
                 await db.update_channel_monitor_topic(monitor_id, auto_tid, source_title)
 
-        # Step 3: Fast-path attempt using native Telegram copy (0 disk usage, instant delivery)
+        # Step 2.6: Format caption & strip all competitor branding/links
+        clean_ads = bool(monitor.get("clean_ads", 1))
+        custom_caption_tmpl = monitor.get("custom_caption", "")
+        caption_replacements = await db.get_caption_replacements(user_id)
+        custom_words = await db.get_clean_words(user_id)
+
+        raw_caption = getattr(source_msg, "caption", "") or getattr(source_msg, "text", "") or ""
+        file_title = ""
+        if getattr(source_msg, "document", None):
+            file_title = getattr(source_msg.document, "file_name", "") or ""
+        elif getattr(source_msg, "video", None):
+            file_title = getattr(source_msg.video, "file_name", "") or ""
+
+        caption_to_send = format_custom_caption(
+            template=custom_caption_tmpl if custom_caption_tmpl else None,
+            original_caption=raw_caption,
+            file_name=file_title,
+            clean_ads=clean_ads,
+            replacements=caption_replacements,
+            channel_title=real_chat_title or current_title,
+            channel_username=getattr(getattr(source_msg, "chat", None), "username", ""),
+            custom_words=custom_words,
+        )
+
+        # Pure text message handler: deliver clean text directly
+        if source_msg.text and not source_msg.media:
+            # If after cleaning the text is empty (meaning the entire message was just promotional ads/links), skip sending!
+            if clean_ads and not caption_to_send.strip():
+                logger.info("[Mirror Daemon] Message %s was pure promo/credit ad, skipped delivery.", msg_id)
+                await db.record_monitor_forward(monitor_id=monitor_id, source_msg_id=msg_id, dest_msg_id=0)
+                return True
+
+            sent = await bot_client.send_message(
+                chat_id=dest_chat_id,
+                text=caption_to_send,
+                reply_to_message_id=topic_id if (topic_id and topic_id > 0) else None,
+                disable_web_page_preview=True,
+            )
+            await db.record_monitor_forward(monitor_id=monitor_id, source_msg_id=msg_id, dest_msg_id=sent.id)
+            return True
+
+        # Step 3: Fast-path attempt using native Telegram copy with CLEANED caption
         fast_copied = False
         try:
             copied_msg = await bot_client.copy_message(
                 chat_id=dest_chat_id,
                 from_chat_id=source_chat_id,
                 message_id=msg_id,
+                caption=caption_to_send if clean_ads else None,
                 reply_to_message_id=topic_id if (topic_id and topic_id > 0) else None,
             )
             if copied_msg:
@@ -175,10 +217,9 @@ async def mirror_post_to_destination(
                     source_msg_id=msg_id,
                     dest_msg_id=copied_msg.id,
                 )
-                logger.info("[Fast Mirror] Successfully copied msg %s to dest %s", msg_id, dest_chat_id)
+                logger.info("[Fast Mirror] Successfully copied msg %s to dest %s with clean caption", msg_id, dest_chat_id)
                 return True
         except (ChatForwardsRestricted, RPCError) as copy_err:
-            # Protected / restricted content or bot not member — fallback to Worker Engine
             logger.debug("[Fast Mirror Bypass] Native copy skipped (%s), falling back to Worker...", copy_err)
         except Exception as general_err:
             logger.debug("[Fast Mirror Bypass] Exception (%s), falling back to Worker...", general_err)
@@ -272,6 +313,7 @@ async def mirror_post_to_destination(
             raw_caption = dl_res.get("caption") or dl_res.get("text") or ""
             file_title = os.path.basename(dl_res.get("file_path", "")) if dl_res.get("file_path") else ""
             caption_replacements = await db.get_caption_replacements(user_id)
+            custom_words = await db.get_clean_words(user_id)
 
             caption_to_send = format_custom_caption(
                 template=custom_caption_tmpl if custom_caption_tmpl else None,
@@ -279,6 +321,9 @@ async def mirror_post_to_destination(
                 file_name=file_title,
                 clean_ads=clean_ads,
                 replacements=caption_replacements,
+                channel_title=real_chat_title or current_title,
+                channel_username=getattr(getattr(source_msg, "chat", None), "username", ""),
+                custom_words=custom_words,
             )
 
             # Deliver unlocked content to destination channel (directly into mapped Forum Topic if active)

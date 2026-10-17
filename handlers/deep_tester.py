@@ -239,12 +239,27 @@ async def cmd_inspect_post(client: Client, message: Message):
         if not dl_res or not dl_res.get("file_path"):
             # Check if it was pure text
             if src_msg.text:
-                clean_text = strip_competitor_ads(src_msg.text)
-                for cw in custom_words:
-                    clean_text = re.sub(re.escape(cw), "", clean_text, flags=re.IGNORECASE)
-                clean_text = re.sub(re.escape(chat_title), "", clean_text, flags=re.IGNORECASE) if chat_title else clean_text
+                clean_text = strip_competitor_ads(
+                    src_msg.text,
+                    channel_title=chat_title,
+                    channel_username=chat_username,
+                    custom_words=custom_words,
+                )
 
-                await client.send_message(dest_chat_id, clean_text)
+                # If text was purely promotional and now empty, notify cleanly
+                if not clean_text.strip():
+                    await status_msg.edit_text(
+                        f"🛡️ **পোস্টটি সম্পূর্ণ প্রমোশনাল/ক্রেডিট লিঙ্ক ছিল!**\n\n"
+                        f"সোর্স চ্যানেল থেকে ক্রেডিট ও টেলিগ্রাম লিঙ্ক ডিলিট করার পর কোনো মূল টেক্সট অবশিষ্ট না থাকায় এটি ডেস্টিনেশনে পাঠানো হয়নি।"
+                    )
+                    return
+
+                await client.send_message(
+                    chat_id=dest_chat_id,
+                    text=clean_text,
+                    disable_web_page_preview=True,
+                    reply_to_message_id=target_topic_id if target_topic_id else None,
+                )
                 await status_msg.edit_text(
                     f"✅ **টেক্সট পোস্ট সফলভাবে ক্লিন ও ডেলিভার হয়েছে!**\n"
                     f"📤 পাঠানো হয়েছে: `{dest_chat_id}`"
@@ -295,15 +310,12 @@ async def cmd_inspect_post(client: Client, message: Message):
 
         # 4. Clean Caption
         orig_caption = dl_res.get("caption", "") or getattr(src_msg, "caption", "") or ""
-        clean_caption = strip_competitor_ads(orig_caption)
-        if chat_title:
-            clean_caption = re.sub(re.escape(chat_title), "", clean_caption, flags=re.IGNORECASE)
-        if chat_username:
-            clean_caption = re.sub(rf"(?i)@?{re.escape(chat_username)}", "", clean_caption)
-        for cw in custom_words:
-            clean_caption = re.sub(re.escape(cw), "", clean_caption, flags=re.IGNORECASE)
-
-        clean_caption = re.sub(r"\s+", " ", clean_caption).strip()
+        clean_caption = strip_competitor_ads(
+            orig_caption,
+            channel_title=chat_title,
+            channel_username=chat_username,
+            custom_words=custom_words,
+        )
         dl_res["caption"] = clean_caption
 
         await status_msg.edit_text(

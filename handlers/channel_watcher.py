@@ -75,7 +75,18 @@ async def _resolve_channel(client: Client, raw_id: Any, user_id: Optional[int] =
 
     # 2. Try Userbot / Worker pool for private channels
     try:
-        from core.client_manager import get_user_client, account_pool
+        from core.client_manager import get_client_for_channel, get_user_client, account_pool, admin_pool_clients
+        c_work, _ = await get_client_for_channel(raw_id, user_id=user_id)
+        if c_work and c_work.is_connected:
+            try:
+                w_chat = await c_work.get_chat(raw_id)
+                if w_chat:
+                    chat_id = w_chat.id
+                    if w_chat.title or w_chat.first_name:
+                        return chat_id, (w_chat.title or w_chat.first_name).strip()
+            except Exception:
+                pass
+
         if user_id:
             u_client = await get_user_client(user_id)
             if u_client and u_client.is_connected:
@@ -88,8 +99,9 @@ async def _resolve_channel(client: Client, raw_id: Any, user_id: Optional[int] =
                 except Exception:
                     pass
 
-        for w in account_pool.values():
-            if w and w.is_connected:
+        candidates = list(account_pool.values()) + [c for c in admin_pool_clients if c not in account_pool.values()]
+        for w in candidates:
+            if w and getattr(w, "is_connected", False):
                 try:
                     w_chat = await w.get_chat(raw_id)
                     if w_chat:
@@ -169,10 +181,10 @@ async def channel_watcher_dashboard_command(client: Client, message: Message):
     await message.reply_text(text, reply_markup=markup, disable_web_page_preview=True)
 
 
-@Client.on_message(filters.command(["addwatcher", "addmirror", "addchannel"]) & filters.private)
+@Client.on_message(filters.command(["addwatcher", "addmirror", "addchannel"]))
 async def add_watcher_command(client: Client, message: Message):
-    """Quick setup command: /addwatcher <source_channel> <destination_channel>"""
-    user_id = message.from_user.id
+    """Quick setup command: /addwatcher <source_channel> [destination_channel]"""
+    user_id = message.from_user.id if message.from_user else 0
     user_is_admin = is_admin(user_id)
     is_vip = await db.is_user_premium(user_id)
 
@@ -181,7 +193,9 @@ async def add_watcher_command(client: Client, message: Message):
         return
 
     cmd = message.command
-    if len(cmd) < 3:
+    is_priv = getattr(message.chat, "type", None) and getattr(message.chat.type, "value", str(message.chat.type)) == "private"
+
+    if len(cmd) < 2 or (is_priv and len(cmd) < 3):
         help_text = (
             "📡 **ADD LIVE CHANNEL AUTO-FORWARDER**\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -190,16 +204,17 @@ async def add_watcher_command(client: Client, message: Message):
             "📌 **Command Syntax:**\n"
             "`/addwatcher [source_channel] [destination_channel]`\n\n"
             "💡 **Examples:**\n"
+            "• `/addwatcher -1001883004189 -1003501797635`\n"
             "• `/addwatcher @source_channel -1002459862936`\n"
-            "• `/addwatcher https://t.me/c/1234567890/1 -1009876543210`\n"
+            "• `/addwatcher -1001883004189` (inside destination group/topic to bind automatically!)\n"
             "• `/addwatcher -1001112223334 me` (to send directly to your inbox)\n\n"
-            "⚠️ _Note: Ensure the bot is an **Admin** in the destination channel with **Post Messages** permission._"
+            "⚠️ _Note: Ensure the bot is an **Admin** in the destination channel/group with **Post Messages** permission._"
         )
         await message.reply_text(help_text)
         return
 
     raw_src = cmd[1]
-    raw_dst = cmd[2]
+    raw_dst = cmd[2] if len(cmd) >= 3 else str(message.chat.id)
 
     src_parsed = _parse_chat_identifier(raw_src)
     dst_parsed = user_id if raw_dst.lower() in ("me", "dm", "here") else _parse_chat_identifier(raw_dst)
@@ -214,7 +229,7 @@ async def add_watcher_command(client: Client, message: Message):
         return
 
     # Resolve source channel
-    src_id, src_title = await _resolve_channel(client, src_parsed)
+    src_id, src_title = await _resolve_channel(client, src_parsed, user_id=user_id)
     if not src_id:
         if isinstance(src_parsed, int):
             src_id = src_parsed
@@ -225,9 +240,13 @@ async def add_watcher_command(client: Client, message: Message):
     # Resolve destination channel
     if dst_parsed == user_id:
         dst_id = user_id
-        dst_title = f"{message.from_user.first_name} (Private DM)"
+        first_name = getattr(message.from_user, "first_name", "User") if message.from_user else "User"
+        dst_title = f"{first_name} (Private DM)"
+    elif dst_parsed == message.chat.id and not is_priv:
+        dst_id = message.chat.id
+        dst_title = getattr(message.chat, "title", "Destination Group") or "Destination Group"
     else:
-        dst_id, dst_title = await _resolve_channel(client, dst_parsed)
+        dst_id, dst_title = await _resolve_channel(client, dst_parsed, user_id=user_id)
         if not dst_id:
             if isinstance(dst_parsed, int):
                 dst_id = dst_parsed
@@ -236,16 +255,19 @@ async def add_watcher_command(client: Client, message: Message):
                 return
 
     # Check for Forum Supergroup and auto-provision Topic if topics enabled
-    topic_id = None
+    topic_id = getattr(message, "message_thread_id", None) or None
     topic_title = ""
-    try:
-        from config import BOT_TOKEN
-        from core.channel_watcher import ensure_forum_topic_for_monitor
-        topic_id = await ensure_forum_topic_for_monitor(BOT_TOKEN, dst_id, src_title)
-        if topic_id:
-            topic_title = src_title
-    except Exception:
-        pass
+    if topic_id:
+        topic_title = src_title
+    else:
+        try:
+            from config import BOT_TOKEN
+            from core.channel_watcher import ensure_forum_topic_for_monitor
+            topic_id = await ensure_forum_topic_for_monitor(BOT_TOKEN, dst_id, src_title)
+            if topic_id:
+                topic_title = src_title
+        except Exception:
+            pass
 
     # Save to database
     monitor_id = await db.add_channel_monitor(

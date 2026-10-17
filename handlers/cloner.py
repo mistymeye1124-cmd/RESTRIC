@@ -429,6 +429,9 @@ async def _run_channel_clone_worker(
         clean_ads = bool(user_settings.get("clean_caption", 1))
         user_caption_tmpl = user_settings.get("custom_caption")
         caption_replacements = await db.get_caption_replacements(user_id)
+        custom_words = await db.get_clean_words(user_id)
+        chat_title = getattr(m_chk.chat, "title", "") or ""
+        chat_username = getattr(m_chk.chat, "username", "") or ""
 
         if not has_file_media and m_chk.text:
             raw_text = m_chk.text
@@ -437,13 +440,23 @@ async def _run_channel_clone_worker(
                 original_caption=raw_text,
                 clean_ads=clean_ads,
                 replacements=caption_replacements,
-            ) or raw_text
+                channel_title=chat_title,
+                channel_username=chat_username,
+                custom_words=custom_words,
+            )
+
+            # If message was pure ad / telegram link and clean_ads is enabled, skip it cleanly
+            if clean_ads and not formatted_text.strip():
+                skipped += 1
+                await _update_status(s_msg, total, current_msg_id, delivered, skipped)
+                await asyncio.sleep(flood_delay)
+                continue
 
             try:
                 sent_txt = await bot_client.send_message(
                     chat_id=dest,
                     text=formatted_text,
-                    disable_web_page_preview=False,
+                    disable_web_page_preview=True,
                     reply_to_message_id=topic_id if topic_id else None,
                 )
                 if sent_txt:
@@ -559,6 +572,9 @@ async def _run_channel_clone_worker(
                 file_name=file_title,
                 clean_ads=clean_ads,
                 replacements=caption_replacements,
+                channel_title=chat_title,
+                channel_username=chat_username,
+                custom_words=custom_words,
             )
 
             # Deliver to target destination (routes to Topic if active)

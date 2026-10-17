@@ -10,10 +10,15 @@ import re
 from typing import Optional, List, Dict, Any, Union
 
 
-def strip_competitor_ads(raw_caption: str) -> str:
+def strip_competitor_ads(
+    raw_caption: str,
+    channel_title: Optional[str] = None,
+    channel_username: Optional[str] = None,
+    custom_words: Optional[List[str]] = None,
+) -> str:
     """
     Intelligently strips competitor Telegram channel handles (@...), Telegram links (t.me/...),
-    invite links, credit attributions, and spam dividers while strictly PRESERVING genuine
+    invite links, credit attributions, channel brand names, and promo banners while strictly PRESERVING genuine
     course/lecture resources (Medium, Quora, Drive, Docs, YouTube, GitHub, websites, etc.)
     and markdown hyperlinks [Text](https://...).
     """
@@ -23,11 +28,9 @@ def strip_competitor_ads(raw_caption: str) -> str:
     text = raw_caption
 
     # 1. Strip Markdown links that point specifically to Telegram channels, bots, or invites
-    # e.g. [Join Channel](https://t.me/xyz) or [VIP](tg://join?invite=...)
     text = re.sub(r"\[([^\]]*)\]\((?:https?://(?:t\.me|telegram\.me|telegram\.dog)/|t\.me/|tg://)[^\)]+\)", "", text)
 
     # 2. Tokenize & protect legitimate non-Telegram markdown links and URLs
-    # so they are never damaged by handle stripping or ad cleansers
     protected_urls = []
 
     def _save_token(match):
@@ -35,63 +38,127 @@ def strip_competitor_ads(raw_caption: str) -> str:
         protected_urls.append(match.group(0))
         return token
 
-    # Protect [Text](https://example.com)
     text = re.sub(r"\[([^\]]+)\]\((https?://[^\)]+)\)", _save_token, text)
 
-    # Protect raw http/https URLs that are NOT Telegram
     def _protect_raw_url(match):
         url = match.group(0)
-        if re.search(r"(?:t\.me|telegram\.me|telegram\.dog)/", url, re.IGNORECASE):
+        if re.search(r"(?:t\.me|telegram\.me|telegram\.dog)/|tg://", url, re.IGNORECASE):
             return ""  # Remove Telegram URL directly
         return _save_token(match)
 
     text = re.sub(r"https?://\S+", _protect_raw_url, text)
 
-    # 3. Remove any remaining raw Telegram URLs & protocol links (e.g. t.me/xyz, tg://...)
-    text = re.sub(r"(?:^|\s)(?:t\.me|telegram\.me|telegram\.dog)/\S+", " ", text, flags=re.IGNORECASE)
-    text = re.sub(r"tg://\S+", " ", text, flags=re.IGNORECASE)
+    # 3. Aggressively remove ANY remaining Telegram URLs (even if adjacent to emojis, colons, brackets)
+    text = re.sub(r"(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me|telegram\.dog)/[^\s\)\],]+", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"tg://[^\s\)\],]+", " ", text, flags=re.IGNORECASE)
 
-    # 4. Remove standalone Telegram channel handles (@channel_name), preserving email addresses
-    text = re.sub(r"(?:^|\s)@[\w\d_]{3,}", " ", text)
+    # 4. Remove competitor channel branding and specific custom words
+    if channel_title and channel_title.strip():
+        ct = channel_title.strip()
+        text = re.sub(re.escape(ct), " ", text, flags=re.IGNORECASE)
+        # Also strip significant words of channel title (min 3 chars, except essential keywords)
+        for part in ct.split():
+            part_clean = part.strip()
+            if len(part_clean) >= 3 and part_clean.lower() not in ("the", "and", "for", "with", "from"):
+                text = re.sub(rf"(?i)\b{re.escape(part_clean)}\b", " ", text)
 
-    # 5. Remove common promo buzzwords, credit lines & call-to-actions (multilingual: EN + BN)
-    credit_line_patterns = [
-        # Full credit attributions
-        r"(?im)^\s*(?:credit|credits|source|from|by|uploaded\s*by|provided\s*by|owner|channel|main\s*channel|backup\s*channel|vip\s*channel)\s*[:►👉-].*$",
-        r"(?im)^\s*(?:ক্রেডিট|উৎস|সোর্স|আপলোডার|আপলোড|চ্যানেল|আপলোড\s*বাই|মূল\s*চ্যানেল|ব্যাকআপ\s*চ্যানেল)\s*[:►👉-].*$",
-        # Join / subscribe spam lines
-        r"(?im)^\s*(?:join|subscribe|follow)\s*(?:our|now|here|channel|group|fast|us)?\s*[:►👉-]?.*$",
-        r"(?im)^\s*(?:আমাদের\s*চ্যানেলে\s*যুক্ত\s*হন|সাবস্ক্রাইব\s*করুন).*$",
-        # Generic promo phrases
-        r"(?i)exclusive\s*(?:content|course|leak|batch|lecture)?[\s:►👉-]*",
-        r"(?i)copyright\s*reserved.*",
-        r"(?i)all\s*rights\s*reserved.*",
-        r"(?i)dm\s*for\s*(?:paid|course|admission).*",
-        r"(?i)contact\s*admin\s*[:►👉-].*",
-        # Trailing inline credit tags
-        r"(?i)\(?(?:credit|credits)\s*[:\-]?\s*[\w\d_ ]+\)?",
-    ]
-    for pattern in credit_line_patterns:
-        text = re.sub(pattern, "", text)
+    if channel_username and channel_username.strip():
+        cu = channel_username.lstrip("@").strip()
+        if cu:
+            text = re.sub(rf"(?i)@?{re.escape(cu)}\b", " ", text)
 
-    # 6. Clean up decorative divider symbols and empty lines
+    if custom_words:
+        for cw in custom_words:
+            if cw and cw.strip():
+                text = re.sub(re.escape(cw.strip()), " ", text, flags=re.IGNORECASE)
+
+    # 5. Remove standalone Telegram channel handles (@channel_name), preserving email addresses
+    text = re.sub(r"(?<![\w\d._%+-])@[\w\d_]{3,}\b", " ", text)
+
+    # 6. Multi-pattern Credit, Promo Banners & Call-to-Action stripper
     lines = text.split("\n")
     cleaned_lines = []
     prev_blank = False
 
+    # Regex for lines that are full promotional banners, headers, or call-to-actions
+    full_promo_line_patterns = [
+        r"(?i)^\s*.*(?:join|subscribe|follow)\s+(?:our|my|the|this)?\s*(?:telegram|tg|vip|official|backup|main)?\s*(?:channel|channels|group|groups|chat|community|updates|now|here)?.*$",
+        r"(?i)^\s*.*(?:telegram|tg)\s+(?:channel|channels|group|groups|link|links|community).*$",
+        r"(?i)^\s*.*(?:আমাদের\s*চ্যানেলে\s*যুক্ত\s*হন|যুক্ত\s*হন|সাবস্ক্রাইব\s*করুন|টেলিগ্রাম\s*চ্যানেল).*$",
+        r"(?i)^\s*(?:exclusive\s*content|copyright\s*reserved|all\s*rights\s*reserved|dm\s*for|contact\s*admin).*",
+    ]
+
+    promo_line_prefixes = (
+        r"(?i)^\s*(?:"
+        r"credit|credits|source|from|by|uploaded\s*by|uploaded\s*in|uploaded\s*at|uploaded\s*on|"
+        r"provided\s*by|owner|channel|main\s*channel|backup\s*channel|vip\s*channel|official\s*channel|"
+        r"shared\s*by|shared\s*in|leaked\s*by|courtesy|join|join\s*us|join\s*channel|subscribe|follow|"
+        r"follow\s*us|link|channel\s*link|telegram|telegram\s*channel|tg|backup|discussion|discussion\s*group|"
+        r"group|chat|course\s*by|file\s*by|file\s*uploaded\s*in|downloaded\s*from|joined\s*at|"
+        r"contact|contact\s*admin|admin|dm\s*for|exclusive\s*content|"
+        r"ক্রেডিট|উৎস|সোর্স|আপলোডার|আপলোড|আপলোড\s*বাই|চ্যানেল|মূল\s*চ্যানেল|ব্যাকআপ\s*চ্যানেল|"
+        r"আমাদের\s*চ্যানেলে\s*যুক্ত\s*হন|যুক্ত\s*হন|সাবস্ক্রাইব\s*করুন"
+        r")\s*[:►👉\-—=\|]+"
+    )
+
+    orphaned_label_regex = re.compile(
+        r"^(?:"
+        r"(?:main|backup|vip|official|discussion|chat|support|community)?\s*"
+        r"(?:channel|group|discussion|chat|link|bot|credits?|source|uploaded|uploaded\s*by|uploaded\s*in|by|from|telegram|tg|contact|admin|download|download\s*link|join|join\s*us|subscribe|follow)|"
+        r"(?:ক্রেডিট|উৎস|সোর্স|আপলোডার|আপলোড|চ্যানেল)"
+        r")\s*[:►👉\-—=\|]*$",
+        re.IGNORECASE
+    )
+
     for line in lines:
-        # Strip common ornamental border characters
         stripped = line.strip(" \t-►👉*━═~_=•#|┌┐└┘├┤┼│")
-        # Check if line was purely decorative (e.g. ━━━━━━━━━━━━━ or ----------)
         if not stripped or (len(set(stripped)) == 1 and stripped[0] in "-=_~*#"):
             if not prev_blank and cleaned_lines:
                 cleaned_lines.append("")
                 prev_blank = True
             continue
 
-        # Check if line was left as an orphaned label (e.g. "Source:", "Credit:", "সোর্স:", "আপলোডার:")
-        orphaned = re.match(r"^(?:credit|credits|source|from|by|uploaded\s*by|owner|channel|সোর্স|উৎস|আপলোডার|ক্রেডিট)\s*[:►👉\-—=]*$", stripped, re.IGNORECASE)
-        if orphaned:
+        # Check full promo banner lines (e.g. "🔥 JOIN OUR TELEGRAM CHANNELS 🔥")
+        is_banner = False
+        for banner_pat in full_promo_line_patterns:
+            if re.match(banner_pat, stripped):
+                is_banner = True
+                break
+        if is_banner:
+            continue
+
+        # If a line matches promo prefix and has no other substantial text
+        if re.search(promo_line_prefixes, line):
+            after_prefix = re.sub(promo_line_prefixes, "", line).strip(" \t-►👉*━═~_=•#|")
+            if not after_prefix or not re.search(r"[\w\d\u0980-\u09FF]", after_prefix):
+                continue
+            if re.match(r"^[\w\d_\s\.\-]{1,30}$", after_prefix) and any(w in line.lower() for w in ("credit", "uploaded", "channel", "join", "by", "telegram", "link", "backup", "source", "discussion", "group")):
+                continue
+
+        # If line is an orphaned label (e.g. "Link:", "Channel:", "Credit:", "Join us:", "Discussion Group:")
+        if orphaned_label_regex.match(stripped):
+            continue
+
+        # If line has no alphanumeric characters (e.g. only orphaned emoji like 🔥 or symbols)
+        if not re.search(r"[\w\d\u0980-\u09FF]", stripped):
+            continue
+
+        # Strip promo sentence fragments left by deleted links, e.g. "Join for daily updates!"
+        stripped = re.sub(r"(?i)^\s*(?:join|subscribe|follow)\s+(?:for|to)?\s*(?:daily|more)?\s*(?:updates|content|leaks|courses)?[\s!.]*$", "", stripped).strip()
+        if not stripped:
+            continue
+
+        # Strip orphaned label suffixes at the end of a line
+        stripped = re.sub(
+            r"(?i)\b(?:"
+            r"course\s+by|file\s+uploaded\s+in|downloaded\s+from|joined\s+at|join|subscribe|from|by|"
+            r"credit|credits|channel\s*link|telegram|backup|link|discussion\s*group|discussion|group"
+            r")\s*[:►👉\-—=\|]*$",
+            "",
+            stripped
+        ).strip(" \t-►👉*━═~_=•#|")
+
+        if not stripped or not re.search(r"[\w\d\u0980-\u09FF]", stripped):
             continue
 
         cleaned_lines.append(stripped)
@@ -129,7 +196,6 @@ def apply_caption_replacements(
             continue
 
         if find_w:
-            # Perform case-insensitive replacement while preserving other text
             pattern = re.compile(re.escape(find_w), re.IGNORECASE)
             res = pattern.sub(repl_w, res)
 
@@ -144,6 +210,9 @@ def format_custom_caption(
     replacements: Optional[Union[List[Dict[str, str]], List[tuple]]] = None,
     file_size_str: Optional[str] = None,
     file_size: Optional[Union[int, str]] = None,
+    channel_title: Optional[str] = None,
+    channel_username: Optional[str] = None,
+    custom_words: Optional[List[str]] = None,
 ) -> str:
     """
     Formats the final delivered caption with custom user template variables.
@@ -176,7 +245,12 @@ def format_custom_caption(
         return ""
 
     # 2. Strip competitor ads and original credits if enabled
-    base = strip_competitor_ads(original_caption) if clean_ads else (original_caption or "")
+    base = strip_competitor_ads(
+        original_caption,
+        channel_title=channel_title,
+        channel_username=channel_username,
+        custom_words=custom_words,
+    ) if clean_ads else (original_caption or "")
 
     # 3. Apply custom find & replace rules
     if replacements:

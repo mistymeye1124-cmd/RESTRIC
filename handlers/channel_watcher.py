@@ -191,6 +191,18 @@ async def add_watcher_command(client: Client, message: Message):
                 await message.reply_text(f"⚠️ Could not resolve destination channel `{raw_dst}`. Please provide its `-100...` numeric ID.")
                 return
 
+    # Check for Forum Supergroup and auto-provision Topic if topics enabled
+    topic_id = None
+    topic_title = ""
+    try:
+        from config import BOT_TOKEN
+        from core.channel_watcher import ensure_forum_topic_for_monitor
+        topic_id = await ensure_forum_topic_for_monitor(BOT_TOKEN, dst_id, src_title)
+        if topic_id:
+            topic_title = src_title
+    except Exception:
+        pass
+
     # Save to database
     monitor_id = await db.add_channel_monitor(
         user_id=user_id,
@@ -200,6 +212,8 @@ async def add_watcher_command(client: Client, message: Message):
         dest_title=dst_title,
         clean_ads=1,
         custom_caption="",
+        topic_id=topic_id or 0,
+        topic_title=topic_title,
     )
 
     markup = InlineKeyboardMarkup([
@@ -207,12 +221,15 @@ async def add_watcher_command(client: Client, message: Message):
         [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")],
     ])
 
+    topic_line = f"🏷️ **Forum Topic:** `{topic_title}` (ID: `#{topic_id}`)\n" if topic_id else ""
+
     await message.reply_text(
         f"✅ **LIVE CHANNEL AUTO-FORWARDER CONFIGURED!**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🆔 **Monitor ID:** `#{monitor_id}`\n"
         f"📥 **Source Channel:** `{src_title}` (`{src_id}`)\n"
         f"📤 **Destination:** `{dst_title}` (`{dst_id}`)\n"
+        f"{topic_line}"
         f"🛡️ **Status:** 🟢 **ACTIVE & LISTENING (24/7)**\n"
         f"🧹 **Ad Cleaner:** Enabled (Removes promo links)\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -265,10 +282,12 @@ async def _render_watcher_dashboard(user_id: int, user_is_admin: bool) -> tuple[
     if not monitors:
         text += (
             "ℹ️ _No channel monitors configured yet._\n\n"
-            "👉 Tap **➕ Add Channel Monitor** below for step-by-step setup, or send:\n"
-            "`/addwatcher [source_channel] [destination_channel]`"
+            "👉 Tap **➕ Add Channel Monitor** below for step-by-step setup,\n"
+            "👉 Tap **🌐 Forum Topic Matrix** to forward multiple channels into 1 group with Topics,\n"
+            "or send: `/addwatcher [source_channel] [destination_channel]`"
         )
         buttons = [
+            [InlineKeyboardButton("🌐 Forum Topic Matrix (/matrix)", callback_data="watcher_matrix_wizard")],
             [InlineKeyboardButton("➕ Add Channel Monitor", callback_data="watcher_interactive_add")],
             [InlineKeyboardButton("📖 Manual Guide (/addwatcher)", callback_data="watcher_add_help")],
             [InlineKeyboardButton("🔄 Refresh Status", callback_data="watcher_menu")],
@@ -294,7 +313,11 @@ async def _render_watcher_dashboard(user_id: int, user_is_admin: bool) -> tuple[
         s_short = (s_clean[:12] + "..") if len(s_clean) > 12 else s_clean
         d_short = (d_clean[:12] + "..") if len(d_clean) > 12 else d_clean
 
-        text += f"• `{m_id}.` {status_icon} **{s_short}** ➔ **{d_short}** (`{fwd_cnt}` posts)\n"
+        t_id = mon.get("topic_id", 0)
+        t_title = mon.get("topic_title") or (f"Topic #{t_id}" if t_id else "")
+        topic_suffix = f" 🏷️`[{t_title[:10]}]`" if t_id > 0 else ""
+
+        text += f"• `{m_id}.` {status_icon} **{s_short}** ➔ **{d_short}**{topic_suffix} (`{fwd_cnt}` posts)\n"
 
         toggle_label = "⏸️ Pause" if mon.get("is_active", 1) == 1 else "▶️ Resume"
         buttons.append([
@@ -303,6 +326,9 @@ async def _render_watcher_dashboard(user_id: int, user_is_admin: bool) -> tuple[
             InlineKeyboardButton("🗑️", callback_data=f"watcher_del:{m_id}"),
         ])
 
+    buttons.append([
+        InlineKeyboardButton("🌐 Forum Topic Matrix (/matrix)", callback_data="watcher_matrix_wizard"),
+    ])
     buttons.append([
         InlineKeyboardButton("➕ Add Channel Monitor", callback_data="watcher_interactive_add"),
         InlineKeyboardButton("📖 Manual Guide", callback_data="watcher_add_help"),
@@ -473,7 +499,7 @@ async def watcher_state_message_handler(client: Client, message: Message):
         return
 
     st = state_info.get("state")
-    if st not in ("waiting_watcher_src", "waiting_watcher_dst"):
+    if st not in ("waiting_watcher_src", "waiting_watcher_dst", "matrix_awaiting_dest", "matrix_awaiting_sources"):
         return
 
     raw_text = message.text.strip()
@@ -486,7 +512,7 @@ async def watcher_state_message_handler(client: Client, message: Message):
         message.stop_propagation()
         return
 
-    # STEP 1: Process Source Channel
+    # STEP 1: Process Source Channel (Single)
     if st == "waiting_watcher_src":
         parsed = _parse_chat_identifier(raw_text)
         if not parsed:
@@ -539,13 +565,13 @@ async def watcher_state_message_handler(client: Client, message: Message):
             f"📌 **Options:**\n"
             f"1. Send your **Destination Channel ID** (e.g. `-1009876543210`) or username (`@MyChannel`)\n"
             f"2. Or tap **[📥 Deliver to My Private Chat (DM)]** below!\n\n"
-            f"⚠️ _Note: If using a channel, make sure this bot is added as an **Admin** with **Post Messages** permission._",
+            f"⚠️ _Note: If using a channel/group, make sure this bot is added as an **Admin** with **Post Messages** permission._",
             reply_markup=markup,
         )
         message.stop_propagation()
         return
 
-    # STEP 2: Process Destination Channel
+    # STEP 2: Process Destination Channel (Single)
     if st == "waiting_watcher_dst":
         src_id = state_info.get("extra", {}).get("src_id")
         src_title = state_info.get("extra", {}).get("src_title", "Source Channel")
@@ -583,6 +609,18 @@ async def watcher_state_message_handler(client: Client, message: Message):
                 message.stop_propagation()
                 return
 
+        # Check for Forum Supergroup and auto-provision Topic if topics enabled
+        topic_id = None
+        topic_title = ""
+        try:
+            from config import BOT_TOKEN
+            from core.channel_watcher import ensure_forum_topic_for_monitor
+            topic_id = await ensure_forum_topic_for_monitor(BOT_TOKEN, dst_id, src_title)
+            if topic_id:
+                topic_title = src_title
+        except Exception:
+            pass
+
         # Save to database
         clear_user_state(user_id)
         mon_id = await db.add_channel_monitor(
@@ -593,6 +631,8 @@ async def watcher_state_message_handler(client: Client, message: Message):
             dest_title=dst_title,
             clean_ads=1,
             custom_caption="",
+            topic_id=topic_id or 0,
+            topic_title=topic_title,
         )
 
         markup = InlineKeyboardMarkup([
@@ -600,18 +640,172 @@ async def watcher_state_message_handler(client: Client, message: Message):
             [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")],
         ])
 
+        topic_line = f"🏷️ **Forum Topic:** `{topic_title}` (ID: `#{topic_id}`)\n" if topic_id else ""
+
         await message.reply_text(
             f"✅ **LIVE CHANNEL AUTO-FORWARDER CONFIGURED!**\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🆔 **Monitor ID:** `#{mon_id}`\n"
             f"📥 **Source Channel:** `{src_title}` (`{src_id}`)\n"
             f"📤 **Destination:** `{dst_title}` (`{dst_id}`)\n"
+            f"{topic_line}"
             f"🛡️ **Status:** 🟢 **ACTIVE & LISTENING (24/7)**\n"
             f"🧹 **Ad Cleaner:** Enabled (Removes promo links)\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"⚡ Every new post in the source channel will now automatically mirror to your destination in real time!",
             reply_markup=markup,
         )
+        message.stop_propagation()
+        return
+
+    # STEP 3: Process Destination for Multi-Channel Matrix
+    if st == "matrix_awaiting_dest":
+        parsed = _parse_chat_identifier(raw_text)
+        if not parsed:
+            await message.reply_text(
+                "❌ **Invalid Destination Supergroup format!**\n\n"
+                "Please provide a supergroup numeric ID (e.g. `-100...`) or group invite link.\n"
+                "Or send `/cancel` to abort."
+            )
+            message.stop_propagation()
+            return
+
+        res_id, res_title = await _resolve_channel(client, parsed)
+        dst_id = res_id or (parsed if isinstance(parsed, int) else None)
+        dst_title = res_title or str(parsed)
+        if not dst_id:
+            await message.reply_text(
+                f"⚠️ **Could not resolve destination `{parsed}`!**\n\n"
+                "Please make sure the bot is added to your Supergroup as an Administrator with 'Manage Topics' and 'Post Messages' permissions."
+            )
+            message.stop_propagation()
+            return
+
+        set_user_state(user_id, "matrix_awaiting_sources", extra={
+            "dest_id": dst_id,
+            "dest_title": dst_title,
+        })
+
+        await message.reply_text(
+            f"✅ **Destination Forum Supergroup Selected:**\n"
+            f"• Title: **{dst_title}**\n"
+            f"• ID: `{dst_id}`\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📥 **STEP 2 OF 2: SEND LIST OF SOURCE CHANNELS**\n"
+            f"Send the links, @usernames, or numeric IDs of all channels you want to monitor.\n"
+            f"Put **one channel per line**:\n\n"
+            f"📌 **Example:**\n"
+            f"`https://t.me/channel_alpha`\n"
+            f"`https://t.me/channel_beta`\n"
+            f"`@my_test_channel`\n"
+            f"`-1001984091943`\n\n"
+            f"Send `/cancel` to abort.",
+            disable_web_page_preview=True,
+        )
+        message.stop_propagation()
+        return
+
+    # STEP 4: Process List of Source Channels for Multi-Channel Matrix
+    if st == "matrix_awaiting_sources":
+        dest_id = state_info.get("extra", {}).get("dest_id")
+        dest_title = state_info.get("extra", {}).get("dest_title", "Destination Group")
+
+        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        if not lines:
+            await message.reply_text("❌ No channels provided. Please send at least one channel link or username.")
+            message.stop_propagation()
+            return
+
+        status_msg = await message.reply_text(
+            f"⏳ **Configuring Multi-Channel Matrix...**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Found `{len(lines)}` source channel(s).\n"
+            f"Creating dedicated Forum Topics in **{dest_title}**..."
+        )
+
+        from config import BOT_TOKEN
+        from core.channel_watcher import ensure_forum_topic_for_monitor
+
+        created_monitors = []
+        failed_channels = []
+
+        for idx, line in enumerate(lines, 1):
+            parsed_src = _parse_chat_identifier(line)
+            if not parsed_src:
+                failed_channels.append((line, "Invalid format"))
+                continue
+
+            src_id, src_title = await _resolve_channel(client, parsed_src)
+            src_id = src_id or (parsed_src if isinstance(parsed_src, int) else None)
+            src_title = src_title or str(parsed_src)
+
+            if not src_id:
+                failed_channels.append((line, "Could not resolve chat ID"))
+                continue
+
+            # Auto-create Topic in destination supergroup named after source channel
+            topic_id = await ensure_forum_topic_for_monitor(BOT_TOKEN, dest_id, src_title)
+            topic_title = src_title if topic_id else ""
+
+            # Register in database
+            m_id = await db.add_channel_monitor(
+                user_id=user_id,
+                source_chat_id=src_id,
+                source_title=src_title,
+                dest_chat_id=dest_id,
+                dest_title=dest_title,
+                clean_ads=1,
+                custom_caption="",
+                topic_id=topic_id or 0,
+                topic_title=topic_title,
+            )
+            created_monitors.append({
+                "id": m_id,
+                "src_title": src_title,
+                "src_id": src_id,
+                "topic_id": topic_id,
+                "topic_title": topic_title,
+            })
+            await asyncio.sleep(0.5)
+
+        clear_user_state(user_id)
+
+        summary_lines = []
+        for cm in created_monitors:
+            t_info = f"➔ 🏷️ Topic: **{cm['topic_title']}** (`#{cm['topic_id']}`)" if cm.get("topic_id") else "➔ Standard Group Post"
+            summary_lines.append(f"• **{cm['src_title'][:16]}** {t_info} 🟢")
+
+        summary_text = "\n".join(summary_lines[:20])
+        if len(summary_lines) > 20:
+            summary_text += f"\n_...and {len(summary_lines) - 20} more channels_"
+
+        fail_info = ""
+        if failed_channels:
+            fail_info = f"\n⚠️ **Skipped `{len(failed_channels)}` invalid/unreachable channels.**\n"
+
+        matrix_card = (
+            f"🌐 **MULTI-CHANNEL TOPIC MATRIX ACTIVATED!**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 **Destination Supergroup:** `{dest_title}` (`{dest_id}`)\n"
+            f"📡 **Active Channels Mapped:** `✅ {len(created_monitors)}`\n"
+            f"{fail_info}\n"
+            f"📋 **Channel ➔ Topic Mappings:**\n"
+            f"{summary_text}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"⚡ **24/7 Live Monitoring is LIVE!**\n"
+            f"Whenever any of these channels posts a new update, it will automatically mirror directly into its assigned Topic!"
+        )
+
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📡 View All Monitors", callback_data="watcher_menu")],
+            [InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")],
+        ])
+
+        try:
+            await status_msg.edit_text(matrix_card, reply_markup=markup, disable_web_page_preview=True)
+        except Exception:
+            await message.reply_text(matrix_card, reply_markup=markup, disable_web_page_preview=True)
+
         message.stop_propagation()
         return
 
@@ -781,3 +975,134 @@ async def watcher_add_help_callback(client: Client, query: CallbackQuery):
             await query.message.reply_text(help_text, reply_markup=markup, disable_web_page_preview=True)
         except Exception:
             pass
+
+
+@Client.on_callback_query(filters.regex(r"^watcher_interactive_add$"))
+async def watcher_interactive_add_callback(client: Client, query: CallbackQuery):
+    """Launches the 2-step single channel monitor interactive wizard."""
+    await query.answer()
+    user_id = query.from_user.id
+    set_user_state(user_id, "waiting_watcher_src")
+    text = (
+        "➕ **ADD CHANNEL AUTO-FORWARDER (STEP 1 OF 2)**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Please send the **Source Channel** link, @username, or numeric ID.\n\n"
+        "📌 **Examples:**\n"
+        "• `@my_source_channel`\n"
+        "• `https://t.me/c/1234567890/1`\n"
+        "• `-1001984091943`\n\n"
+        "Send `/cancel` at any time to abort."
+    )
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 Cancel", callback_data="watcher_menu")]
+    ])
+    try:
+        await query.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+    except Exception:
+        await query.message.reply_text(text, reply_markup=markup, disable_web_page_preview=True)
+
+
+@Client.on_callback_query(filters.regex(r"^watcher_matrix_wizard$"))
+async def watcher_matrix_wizard_callback(client: Client, query: CallbackQuery):
+    """Launches the Multi-Channel to Single Forum Supergroup Topic Matrix wizard."""
+    await query.answer()
+    user_id = query.from_user.id
+    from config import ADMIN_IDS
+    is_adm = user_id in ADMIN_IDS
+    is_vip = await db.is_user_premium(user_id)
+
+    if not is_adm and not is_vip:
+        await query.answer("👑 VIP / Admin Feature. Upgrade to unlock!", show_alert=True)
+        return
+
+    set_user_state(user_id, "matrix_awaiting_dest")
+    text = (
+        "🌐 **MULTI-CHANNEL FORUM TOPIC MATRIX (STEP 1 OF 2)**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Forward from multiple channels into **ONE Supergroup** with dedicated **Topics** per channel!\n\n"
+        "📌 **Step 1:** Send your **Destination Forum Supergroup ID** (e.g. `-100...`) or group invite link.\n\n"
+        "💡 **Requirements:**\n"
+        "1. Topics (Forum) must be turned ON in your group settings.\n"
+        "2. Add this bot as an **Administrator** with **Manage Topics** and **Post Messages** rights.\n\n"
+        "Send `/cancel` at any time to abort."
+    )
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 Cancel", callback_data="watcher_menu")]
+    ])
+    try:
+        await query.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+    except Exception:
+        await query.message.reply_text(text, reply_markup=markup, disable_web_page_preview=True)
+
+
+@Client.on_message(filters.command(["matrix", "bulk_watcher", "topics"]) & filters.private)
+async def forum_matrix_command(client: Client, message: Message):
+    """
+    Multi-Channel to Single Forum Topic Matrix Setup Wizard.
+    Usage:
+      /matrix
+      OR
+      /matrix <destination_group_id>
+    """
+    user_id = message.from_user.id
+    from config import ADMIN_IDS
+    is_adm = user_id in ADMIN_IDS
+    is_vip = await db.is_user_premium(user_id)
+
+    if not is_adm and not is_vip:
+        await message.reply_text(
+            "👑 **Multi-Channel Topic Matrix (VIP / Admin Feature)**\n\n"
+            "Automatically forwards from multiple channels into a single Forum Supergroup,\n"
+            "with dedicated Topics created and maintained for each channel!\n\n"
+            "💎 Upgrade to VIP via `/premium` or contact Admin to unlock!"
+        )
+        return
+
+    cmd = message.command
+    # If user provided destination ID inline: /matrix -100xxxxxxxxxx
+    if len(cmd) >= 2:
+        raw_dst = cmd[1].strip()
+        parsed_dst = _parse_chat_identifier(raw_dst)
+        if not parsed_dst:
+            await message.reply_text("❌ Invalid destination ID. Example: `/matrix -1002459862936`")
+            return
+        dst_id, dst_title = await _resolve_channel(client, parsed_dst)
+        dst_id = dst_id or (parsed_dst if isinstance(parsed_dst, int) else None)
+        dst_title = dst_title or str(parsed_dst)
+        if not dst_id:
+            await message.reply_text(f"⚠️ Could not resolve destination `{raw_dst}`. Make sure bot is an Admin there.")
+            return
+
+        set_user_state(user_id, "matrix_awaiting_sources", extra={"dest_id": dst_id, "dest_title": dst_title})
+        await message.reply_text(
+            f"✅ **Destination Group Selected:**\n"
+            f"• Title: **{dst_title}**\n"
+            f"• ID: `{dst_id}`\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📥 **STEP 2: SEND LIST OF SOURCE CHANNELS**\n"
+            f"Send the links or @usernames of all channels you want to monitor (put one per line):\n\n"
+            f"📌 **Example:**\n"
+            f"`https://t.me/channel_one`\n"
+            f"`https://t.me/c/1234567890/1`\n"
+            f"`@my_public_channel`\n\n"
+            f"Send `/cancel` to abort.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    # If user just sent /matrix without args -> Launch Step 1
+    set_user_state(user_id, "matrix_awaiting_dest")
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 Cancel", callback_data="watcher_menu")]
+    ])
+    await message.reply_text(
+        "🌐 **MULTI-CHANNEL FORUM TOPIC MATRIX WIZARD**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Forward from multiple channels simultaneously into **ONE Supergroup** with dedicated **Topics** per channel!\n\n"
+        "📌 **Step 1:** Send your **Destination Forum Supergroup ID** (e.g. `-100...`) or group invite link.\n\n"
+        "💡 **Requirements:**\n"
+        "1. Topics (Forum) must be turned ON in your group settings.\n"
+        "2. Add this bot as an **Administrator** with **Manage Topics** and **Post Messages** rights.\n\n"
+        "Send `/cancel` to abort.",
+        reply_markup=markup,
+    )

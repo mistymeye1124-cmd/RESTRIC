@@ -657,6 +657,7 @@ async def run_batch_harvest_pipeline(
                 # Step B.1: Rescale / Compression (Bypassed for Original to guarantee instant delivery)
                 # When res_pref is 'original' (default direct mode), media passes through with 0 CPU transcode delay!
                 if res_pref != "original" and delivery_fmt != "audio" and res_pref.isdigit() and int(res_pref) < 1080 and original_path and original_path.lower().endswith((".mp4", ".mkv", ".mov", ".webm")):
+                    effective_res = res_pref
                     f_size_mb_pre = (os.path.getsize(original_path) / (1024 * 1024)) if os.path.exists(original_path) else 0
                     if f_size_mb_pre <= 150:
                         scaled_path = f"{original_path}_scaled.mp4"

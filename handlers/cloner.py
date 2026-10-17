@@ -256,6 +256,26 @@ async def _run_channel_clone_worker(
     skipped = 0
     start_time = time.time()
 
+    # Automatic Telegram Forum Topic Detection & Routing:
+    # If destination is a forum supergroup, automatically creates or finds a topic
+    # named after the source channel so all cloned content lands in its dedicated topic.
+    topic_id = None
+    try:
+        from config import BOT_TOKEN
+        from core.channel_watcher import ensure_forum_topic_for_monitor
+        s_title = str(source)
+        try:
+            s_chat = await worker_client.get_chat(source)
+            if s_chat and (s_chat.title or s_chat.first_name):
+                s_title = s_chat.title or s_chat.first_name
+        except Exception:
+            pass
+        topic_id = await ensure_forum_topic_for_monitor(BOT_TOKEN, dest, s_title)
+        if topic_id:
+            print(f"[Cloner] Auto-routing clone stream to Forum Topic '{s_title}' (ID: {topic_id})")
+    except Exception as t_err:
+        print(f"[Cloner Topic Check] Notice: {t_err}")
+
     user_settings = await db.get_settings(user_id)
     processed_album_ids = set()
 
@@ -378,7 +398,11 @@ async def _run_channel_clone_worker(
 
                 if alb_items:
                     try:
-                        sent_alb = await bot_client.send_media_group(dest, media=alb_items)
+                        sent_alb = await bot_client.send_media_group(
+                            dest, 
+                            media=alb_items, 
+                            reply_to_message_id=topic_id if topic_id else None
+                        )
                         if sent_alb:
                             delivered += len(alb_items)
                     except Exception as a_err:
@@ -420,12 +444,17 @@ async def _run_channel_clone_worker(
                     chat_id=dest,
                     text=formatted_text,
                     disable_web_page_preview=False,
+                    reply_to_message_id=topic_id if topic_id else None,
                 )
                 if sent_txt:
                     delivered += 1
             except FloodWait as fw:
                 await asyncio.sleep(fw.value + 1)
-                await bot_client.send_message(chat_id=dest, text=formatted_text)
+                await bot_client.send_message(
+                    chat_id=dest, 
+                    text=formatted_text, 
+                    reply_to_message_id=topic_id if topic_id else None
+                )
                 delivered += 1
             except Exception as txt_err:
                 print(f"[!] Cloner text send error on ID {msg_id}: {txt_err}")
@@ -519,7 +548,7 @@ async def _run_channel_clone_worker(
                 replacements=caption_replacements,
             )
 
-            # Deliver to target destination
+            # Deliver to target destination (routes to Topic if active)
             uploaded = await upload_unlocked_media(
                 bot_client=bot_client,
                 target_chat_id=dest,
@@ -529,6 +558,7 @@ async def _run_channel_clone_worker(
                 custom_caption=caption_to_send,
                 upload_as_doc=user_settings.get("upload_as_doc", False),
                 user_id=user_id,
+                reply_to_message_id=topic_id if topic_id else None,
             )
 
             if uploaded:

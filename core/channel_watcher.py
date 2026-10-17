@@ -35,6 +35,44 @@ def _get_mirror_lock(key: str) -> asyncio.Lock:
     return _mirror_locks[key]
 
 
+async def ensure_forum_topic_for_monitor(
+    bot_token: str,
+    dest_chat_id: int,
+    source_title: str,
+    existing_topic_id: Optional[int] = None,
+) -> Optional[int]:
+    """
+    Checks if existing_topic_id is set (> 0).
+    If not, attempts to auto-create a Telegram Forum Topic in dest_chat_id named after source_title.
+    Returns the message_thread_id (int) or None if dest_chat_id is not a forum or error occurs.
+    """
+    if existing_topic_id and existing_topic_id > 0:
+        return existing_topic_id
+
+    import httpx
+    clean_name = (source_title or f"Channel {dest_chat_id}").strip()
+    clean_name = clean_name[:120] if clean_name else "Source Channel"
+
+    try:
+        url = f"https://api.telegram.org/bot{bot_token}/createForumTopic"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(url, json={"chat_id": dest_chat_id, "name": clean_name})
+            data = res.json()
+            if data.get("ok"):
+                tid = int(data["result"]["message_thread_id"])
+                logger.info(f"[Topic Auto-Provision] Created topic '{clean_name}' (ID: {tid}) in {dest_chat_id}")
+                return tid
+            else:
+                desc = data.get("description", "")
+                if "chat is not a forum" in desc:
+                    logger.debug(f"[Topic Notice] Destination {dest_chat_id} is a standard channel/group (not a forum).")
+                else:
+                    logger.warning(f"[Topic Warning] createForumTopic in {dest_chat_id}: {desc}")
+    except Exception as e:
+        logger.warning(f"[Topic Error] Failed to create topic for '{clean_name}' in {dest_chat_id}: {e}")
+    return None
+
+
 async def mirror_post_to_destination(
     bot_client: Client,
     monitor: Dict[str, Any],
@@ -44,6 +82,7 @@ async def mirror_post_to_destination(
     """
     Executes the mirroring of a single post from source channel to destination channel.
     Handles both direct Pyrogram Message objects and message IDs discovered during background sync.
+    Automatically routes to Telegram Forum Topics if destination supergroup has topics enabled.
     """
     monitor_id = monitor["id"]
     user_id = monitor["user_id"]
@@ -65,11 +104,22 @@ async def mirror_post_to_destination(
             return True
 
         # Step 2: Anti-Leech VIP channel protection check
-        from config import ADMIN_IDS
+        from config import ADMIN_IDS, BOT_TOKEN
         is_admin = user_id in ADMIN_IDS
         if not is_admin and await db.is_channel_protected(source_chat_id):
             logger.warning("[Mirror Guard] Access denied: source %s is VIP protected.", source_chat_id)
             return False
+
+        # Step 2.5: Ensure Telegram Forum Topic exists if destination is a forum supergroup
+        topic_id = monitor.get("topic_id")
+        if not topic_id or topic_id <= 0:
+            source_title = monitor.get("source_title") or f"Channel {source_chat_id}"
+            auto_tid = await ensure_forum_topic_for_monitor(BOT_TOKEN, dest_chat_id, source_title)
+            if auto_tid and auto_tid > 0:
+                topic_id = auto_tid
+                monitor["topic_id"] = auto_tid
+                monitor["topic_title"] = source_title
+                await db.update_channel_monitor_topic(monitor_id, auto_tid, source_title)
 
         # Step 3: Fast-path attempt using native Telegram copy (0 disk usage, instant delivery)
         fast_copied = False
@@ -78,6 +128,7 @@ async def mirror_post_to_destination(
                 chat_id=dest_chat_id,
                 from_chat_id=source_chat_id,
                 message_id=msg_id,
+                reply_to_message_id=topic_id if (topic_id and topic_id > 0) else None,
             )
             if copied_msg:
                 fast_copied = True
@@ -190,7 +241,7 @@ async def mirror_post_to_destination(
                 replacements=caption_replacements,
             )
 
-            # Deliver unlocked content to destination channel
+            # Deliver unlocked content to destination channel (directly into mapped Forum Topic if active)
             uploaded = await upload_unlocked_media(
                 bot_client=bot_client,
                 target_chat_id=dest_chat_id,
@@ -200,6 +251,7 @@ async def mirror_post_to_destination(
                 custom_caption=caption_to_send,
                 upload_as_doc=False,
                 user_id=user_id,
+                reply_to_message_id=topic_id if (topic_id and topic_id > 0) else None,
             )
 
             if uploaded:

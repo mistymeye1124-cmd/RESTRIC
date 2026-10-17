@@ -627,6 +627,16 @@ class Database:
             await db.execute("CREATE INDEX IF NOT EXISTS idx_channel_monitors_source ON channel_monitors(source_chat_id, is_active);")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_channel_monitors_user ON channel_monitors(user_id);")
 
+            # Safe schema upgrade for Telegram Forum Topics support
+            try:
+                await db.execute("ALTER TABLE channel_monitors ADD COLUMN topic_id INTEGER DEFAULT 0;")
+            except Exception:
+                pass
+            try:
+                await db.execute("ALTER TABLE channel_monitors ADD COLUMN topic_title TEXT DEFAULT '';")
+            except Exception:
+                pass
+
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS channel_monitor_history (
@@ -3143,16 +3153,18 @@ class Database:
         dest_title: str,
         clean_ads: int = 1,
         custom_caption: str = "",
+        topic_id: int = 0,
+        topic_title: str = "",
     ) -> int:
         """Registers a new channel auto-forward / mirror monitor."""
         async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
             cursor = await db.execute(
                 """
                 INSERT INTO channel_monitors (
-                    user_id, source_chat_id, source_title, dest_chat_id, dest_title, clean_ads, custom_caption
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    user_id, source_chat_id, source_title, dest_chat_id, dest_title, clean_ads, custom_caption, topic_id, topic_title
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, source_chat_id, source_title, dest_chat_id, dest_title, clean_ads, custom_caption),
+                (user_id, source_chat_id, source_title, dest_chat_id, dest_title, clean_ads, custom_caption, topic_id, topic_title),
             )
             monitor_id = cursor.lastrowid
             await db.commit()
@@ -3275,6 +3287,26 @@ class Database:
                 (last_msg_id, monitor_id),
             )
             await db.commit()
+
+    async def update_channel_monitor_topic(self, monitor_id: int, topic_id: int, topic_title: str = ""):
+        """Updates the mapped Telegram forum topic ID and title for a monitor."""
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
+            await db.execute(
+                "UPDATE channel_monitors SET topic_id = ?, topic_title = ? WHERE id = ?",
+                (topic_id, topic_title, monitor_id),
+            )
+            await db.commit()
+
+    async def get_monitors_for_destination(self, dest_chat_id: int) -> List[Dict[str, Any]]:
+        """Returns all monitors configured for a specific destination supergroup."""
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM channel_monitors WHERE dest_chat_id = ? ORDER BY id ASC",
+                (dest_chat_id,),
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
 
     async def create_backup_file(self, backup_dir: Any = "backups") -> Path:
         """

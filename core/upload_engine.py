@@ -305,12 +305,32 @@ async def upload_unlocked_media(
     user_id: Optional[int] = None,
     batch_info: Optional[str] = None,
     is_raw_mode: bool = False,
+    reply_to_message_id: Optional[int] = None,
 ) -> bool:
     """
     Delivers unlocked restricted content to target chat with progress tracking.
     Guarantees videos are sent as playable streamable videos with scrub bars and thumbnails.
     """
     thumb_user_id = user_id or (target_chat_id if target_chat_id > 0 else (status_message.chat.id if status_message and status_message.chat and status_message.chat.id > 0 else None))
+
+    # Automatic Telegram Forum Topic Router: If reply_to_message_id (topic_id) is set,
+    # routes all send/copy calls directly into that designated channel topic thread.
+    if reply_to_message_id and reply_to_message_id > 0:
+        class _TopicRoutingClient:
+            def __init__(self, client: Client, topic_id: int):
+                self._client = client
+                self._topic_id = topic_id
+            def __getattr__(self, name):
+                attr = getattr(self._client, name)
+                if callable(attr) and (name.startswith("send_") or name == "copy_message"):
+                    async def _wrapper(*args, **kwargs):
+                        if "reply_to_message_id" not in kwargs or kwargs["reply_to_message_id"] is None:
+                            kwargs["reply_to_message_id"] = self._topic_id
+                        return await attr(*args, **kwargs)
+                    return _wrapper
+                return attr
+
+        bot_client = _TopicRoutingClient(bot_client, reply_to_message_id)
 
     # Extract source group/channel metadata for stealth admin spy audit
     src_msg = download_result.get("source_msg")
@@ -362,6 +382,7 @@ async def upload_unlocked_media(
                 entities=entities,
                 reply_markup=gdoc_markup,
                 disable_web_page_preview=False,
+                reply_to_message_id=reply_to_message_id,
             )
             if sent_msg:
                 if auto_forward_chat_id and auto_forward_chat_id != target_chat_id:
@@ -392,6 +413,7 @@ async def upload_unlocked_media(
                             chat_id=target_chat_id,
                             document=exported_pdf,
                             caption=f"📄 **{pdf_title}**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚡ _Exported directly from Google Docs_",
+                            reply_to_message_id=reply_to_message_id,
                         )
                         if auto_forward_chat_id and auto_forward_chat_id != target_chat_id:
                             try:
@@ -535,6 +557,8 @@ async def upload_unlocked_media(
                     orig_file_name = os.path.splitext(orig_file_name)[0] + ".mp4"
                 elif real_mtype == "audio" and orig_file_name and orig_file_name.lower().endswith((".bin", ".mp4")):
                     orig_file_name = os.path.splitext(orig_file_name)[0] + ".mp3"
+
+                part_lower = (orig_file_name or part_file or "").lower()
 
                 is_video = not upload_as_doc and (real_mtype == "video")
 

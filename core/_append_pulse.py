@@ -84,7 +84,8 @@ async def live_pulse(
             pass
 '''
 
-target = os.path.join(os.path.dirname(__file__), 'progress.py')
-with open(target, 'a', encoding='utf-8') as f:
-    f.write(PULSE_CODE)
-print('Done - appended live_pulse to', target)
+if __name__ == '__main__':
+    target = os.path.join(os.path.dirname(__file__), 'progress.py')
+    with open(target, 'a', encoding='utf-8') as f:
+        f.write(PULSE_CODE)
+    print('Done - appended live_pulse to', target)

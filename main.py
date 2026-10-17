@@ -277,10 +277,10 @@ async def main():
     # Start the priority multi-worker queue
     await job_queue.start()
 
-    # Initialize shared admin pool if provided
+    # Initialize shared admin pool concurrently in background
     if USERBOT_SESSIONS:
-        print("[*] Initializing Admin Session Pool...")
-        await initialize_admin_pool(USERBOT_SESSIONS)
+        print("[*] Launching background initialization for Admin Session Pool...")
+        asyncio.create_task(initialize_admin_pool(USERBOT_SESSIONS))
 
     # Pre-warm all active user sessions in background so bot starts instantly without waiting
     print("[*] Launching background warmup for active userbot sessions...")

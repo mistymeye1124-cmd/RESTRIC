@@ -813,9 +813,9 @@ async def initialize_admin_pool(sessions: List[str]):
 
             client = Client(**client_kwargs)
             install_turbo_uploader(client)
-            await client.start()
+            await asyncio.wait_for(client.start(), timeout=6.0)
             admin_pool_clients.append(client)
-            me = await client.get_me()
+            me = await asyncio.wait_for(client.get_me(), timeout=4.0)
             print(f"[+] Legacy pool account {idx+1} loaded: @{me.username or me.id} [{fingerprint['device_model']}]")
             rate_registry.get_sync(f"admin_pool_{idx}")
 

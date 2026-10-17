@@ -73,6 +73,33 @@ async def ensure_forum_topic_for_monitor(
     return None
 
 
+async def edit_forum_topic_name(bot_token: str, dest_chat_id: int, topic_id: int, new_title: str) -> bool:
+    """Renames an existing Telegram Forum Topic via Bot API."""
+    if not topic_id or topic_id <= 0:
+        return False
+    import httpx
+    clean_name = (new_title or "").strip()[:120]
+    if not clean_name:
+        return False
+    try:
+        url = f"https://api.telegram.org/bot{bot_token}/editForumTopic"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(url, json={
+                "chat_id": dest_chat_id,
+                "message_thread_id": topic_id,
+                "name": clean_name,
+            })
+            data = res.json()
+            if data.get("ok"):
+                logger.info(f"[Topic Renamed] Topic {topic_id} in {dest_chat_id} renamed to '{clean_name}'")
+                return True
+            else:
+                logger.warning(f"[Topic Rename Error] {data.get('description')}")
+    except Exception as e:
+        logger.warning(f"[Topic Rename Exception] {e}")
+    return False
+
+
 async def mirror_post_to_destination(
     bot_client: Client,
     monitor: Dict[str, Any],
@@ -112,8 +139,19 @@ async def mirror_post_to_destination(
 
         # Step 2.5: Ensure Telegram Forum Topic exists if destination is a forum supergroup
         topic_id = monitor.get("topic_id")
+        current_title = monitor.get("source_title") or ""
+
+        # Auto-heal numeric topic name if real channel title is discovered from incoming message
+        real_chat_title = getattr(getattr(source_msg, "chat", None), "title", "")
+        if real_chat_title and (not current_title or current_title.startswith("-100") or current_title.lstrip("-").isdigit()):
+            monitor["source_title"] = real_chat_title
+            monitor["topic_title"] = real_chat_title
+            await db.update_channel_monitor_title(monitor_id, real_chat_title)
+            if topic_id and topic_id > 0:
+                await edit_forum_topic_name(BOT_TOKEN, dest_chat_id, topic_id, real_chat_title)
+
         if not topic_id or topic_id <= 0:
-            source_title = monitor.get("source_title") or f"Channel {source_chat_id}"
+            source_title = monitor.get("source_title") or real_chat_title or f"Channel {source_chat_id}"
             auto_tid = await ensure_forum_topic_for_monitor(BOT_TOKEN, dest_chat_id, source_title)
             if auto_tid and auto_tid > 0:
                 topic_id = auto_tid

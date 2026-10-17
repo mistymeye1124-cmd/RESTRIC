@@ -3351,6 +3351,15 @@ class Database:
             )
             await db.commit()
 
+    async def update_channel_monitor_title(self, monitor_id: int, title: str):
+        """Updates the source and topic titles for a monitor."""
+        async with aiosqlite.connect(self.db_file, timeout=60.0) as db:
+            await db.execute(
+                "UPDATE channel_monitors SET source_title = ?, topic_title = ? WHERE id = ?",
+                (title, title, monitor_id),
+            )
+            await db.commit()
+
     async def get_monitors_for_destination(self, dest_chat_id: int) -> List[Dict[str, Any]]:
         """Returns all monitors configured for a specific destination supergroup."""
         async with aiosqlite.connect(self.db_file, timeout=60.0) as db:

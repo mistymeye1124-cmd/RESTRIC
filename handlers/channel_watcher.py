@@ -36,36 +36,80 @@ def _parse_chat_identifier(raw: str) -> Optional[Any]:
     return None
 
 
-async def _resolve_channel(client: Client, raw_id: Any) -> Tuple[Optional[int], str]:
+def _parse_chat_identifier_and_title(raw: str) -> Tuple[Optional[Any], Optional[str]]:
+    """Extracts chat identifier and optional custom title separated by '|' or ':::'."""
+    cleaned = raw.strip()
+    custom_title = None
+    for sep in ("|", ":::", " - "):
+        if sep in cleaned:
+            parts = cleaned.split(sep, 1)
+            p0 = parts[0].strip()
+            p1 = parts[1].strip()
+            if p0.startswith("-100") or p0.startswith("@") or "t.me" in p0 or p0.lstrip("-").isdigit():
+                cleaned = p0
+                custom_title = p1
+                break
+
+    ident = _parse_chat_identifier(cleaned)
+    return ident, custom_title
+
+
+async def _resolve_channel(client: Client, raw_id: Any, user_id: Optional[int] = None) -> Tuple[Optional[int], str]:
     """
     Resolves raw identifier (numeric ID or @username/link) to:
     (numeric_chat_id, display_title).
-    Guarantees numeric_chat_id is valid for event filtering.
+    Uses Bot client first, and falls back to Userbot pool for private channels.
     """
     chat_id: Optional[int] = None
     title: str = str(raw_id)
 
+    # 1. Try bot client first
+    try:
+        c = await client.get_chat(raw_id)
+        if c:
+            chat_id = c.id
+            if c.title or c.first_name:
+                return chat_id, (c.title or c.first_name).strip()
+    except Exception:
+        pass
+
+    # 2. Try Userbot / Worker pool for private channels
+    try:
+        from core.client_manager import get_user_client, account_pool
+        if user_id:
+            u_client = await get_user_client(user_id)
+            if u_client and u_client.is_connected:
+                try:
+                    u_chat = await u_client.get_chat(raw_id)
+                    if u_chat:
+                        chat_id = u_chat.id
+                        if u_chat.title or u_chat.first_name:
+                            return chat_id, (u_chat.title or u_chat.first_name).strip()
+                except Exception:
+                    pass
+
+        for w in account_pool.values():
+            if w and w.is_connected:
+                try:
+                    w_chat = await w.get_chat(raw_id)
+                    if w_chat:
+                        chat_id = w_chat.id
+                        if w_chat.title or w_chat.first_name:
+                            return chat_id, (w_chat.title or w_chat.first_name).strip()
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
     if isinstance(raw_id, int):
         chat_id = raw_id
-        try:
-            c = await client.get_chat(raw_id)
-            if c:
-                title = c.title or c.first_name or str(raw_id)
-        except Exception:
-            pass
-        return chat_id, title
+    elif isinstance(raw_id, str):
+        if raw_id.startswith("-100") and raw_id[4:].isdigit():
+            chat_id = int(raw_id)
+        elif raw_id.lstrip("-").isdigit():
+            chat_id = int(raw_id)
 
-    if isinstance(raw_id, str):
-        try:
-            c = await client.get_chat(raw_id)
-            if c:
-                chat_id = c.id
-                title = c.title or c.first_name or raw_id
-                return chat_id, title
-        except Exception:
-            pass
-
-    return None, title
+    return chat_id, title
 
 
 # -------------------------------------------------------------
@@ -255,6 +299,68 @@ async def delete_watcher_command(client: Client, message: Message):
         await message.reply_text(f"✅ Channel monitor `#{mon_id}` removed successfully.")
     else:
         await message.reply_text(f"❌ Monitor `#{mon_id}` not found or you don't have permission to remove it.")
+
+
+@Client.on_message(filters.command(["renametopic", "settopicname"]))
+async def rename_topic_command(client: Client, message: Message):
+    """
+    Renames a forum topic directly via Telegram Bot API:
+    Usage:
+      /renametopic <new_title> (when sent directly inside the topic)
+      OR
+      /renametopic <topic_id> <new_title>
+    """
+    user_id = message.from_user.id
+    from handlers.admin import is_admin
+    user_is_admin = is_admin(user_id)
+    is_vip = await db.is_user_premium(user_id)
+    if not user_is_admin and not is_vip:
+        await message.reply_text("💎 This command requires Admin or VIP privileges.")
+        return
+
+    cmd = message.command
+    if len(cmd) < 2:
+        await message.reply_text(
+            "🏷️ **Usage:**\n"
+            "• `/renametopic <topic_id> <new_name>`\n"
+            "• Or just `/renametopic <new_name>` (when used directly inside the topic thread)\n\n"
+            "উদাহরণ:\n"
+            "• `/renametopic 5 Physics Course`\n"
+            "• `/renametopic Web Development`"
+        )
+        return
+
+    dest_chat_id = message.chat.id
+    target_topic_id = message.message_thread_id or 0
+
+    if cmd[1].isdigit() and len(cmd) >= 3:
+        target_topic_id = int(cmd[1])
+        new_name = message.text.split(None, 2)[2].strip()
+    else:
+        new_name = message.text.split(None, 1)[1].strip()
+
+    if not target_topic_id:
+        monitors = await db.get_channel_monitors(user_id=None if user_is_admin else user_id)
+        active_with_topic = [m for m in monitors if m.get("topic_id", 0) > 0]
+        if len(active_with_topic) == 1:
+            target_topic_id = active_with_topic[0]["topic_id"]
+            dest_chat_id = active_with_topic[0]["dest_chat_id"]
+        else:
+            await message.reply_text("⚠️ টপিক আইডি পাওয়া যায়নি। অনুগ্রহ করে এভাবে দাও: `/renametopic <topic_id> <new_name>`")
+            return
+
+    from config import BOT_TOKEN
+    from core.channel_watcher import edit_forum_topic_name
+
+    ok = await edit_forum_topic_name(BOT_TOKEN, dest_chat_id, target_topic_id, new_name)
+    if ok:
+        monitors = await db.get_monitors_for_destination(dest_chat_id)
+        for m in monitors:
+            if m.get("topic_id") == target_topic_id:
+                await db.update_channel_monitor_title(m["id"], new_name)
+        await message.reply_text(f"✅ টপিক সফলভাবে পরিবর্তন করে **'{new_name}'** রাখা হয়েছে!")
+    else:
+        await message.reply_text("❌ টপিক রিনেম করতে ব্যর্থ। নিশ্চিত করো বট ওই গ্রুপের অ্যাডমিন এবং 'Manage Topics' পারমিশন অন আছে।")
 
 
 # -------------------------------------------------------------
@@ -514,7 +620,7 @@ async def watcher_state_message_handler(client: Client, message: Message):
 
     # STEP 1: Process Source Channel (Single)
     if st == "waiting_watcher_src":
-        parsed = _parse_chat_identifier(raw_text)
+        parsed, custom_title = _parse_chat_identifier_and_title(raw_text)
         if not parsed:
             await message.reply_text(
                 "❌ **Invalid Source Channel format!**\n\n"
@@ -532,7 +638,9 @@ async def watcher_state_message_handler(client: Client, message: Message):
             return
 
         # Resolve channel title & numeric ID
-        resolved_id, resolved_title = await _resolve_channel(client, parsed)
+        resolved_id, resolved_title = await _resolve_channel(client, parsed, user_id=user_id)
+        if custom_title:
+            resolved_title = custom_title
         if not resolved_id:
             if isinstance(parsed, int):
                 resolved_id = parsed
@@ -730,14 +838,14 @@ async def watcher_state_message_handler(client: Client, message: Message):
         failed_channels = []
 
         for idx, line in enumerate(lines, 1):
-            parsed_src = _parse_chat_identifier(line)
+            parsed_src, custom_name = _parse_chat_identifier_and_title(line)
             if not parsed_src:
                 failed_channels.append((line, "Invalid format"))
                 continue
 
-            src_id, src_title = await _resolve_channel(client, parsed_src)
+            src_id, src_title = await _resolve_channel(client, parsed_src, user_id=user_id)
             src_id = src_id or (parsed_src if isinstance(parsed_src, int) else None)
-            src_title = src_title or str(parsed_src)
+            src_title = custom_name or src_title or str(parsed_src)
 
             if not src_id:
                 failed_channels.append((line, "Could not resolve chat ID"))
@@ -975,31 +1083,6 @@ async def watcher_add_help_callback(client: Client, query: CallbackQuery):
             await query.message.reply_text(help_text, reply_markup=markup, disable_web_page_preview=True)
         except Exception:
             pass
-
-
-@Client.on_callback_query(filters.regex(r"^watcher_interactive_add$"))
-async def watcher_interactive_add_callback(client: Client, query: CallbackQuery):
-    """Launches the 2-step single channel monitor interactive wizard."""
-    await query.answer()
-    user_id = query.from_user.id
-    set_user_state(user_id, "waiting_watcher_src")
-    text = (
-        "➕ **ADD CHANNEL AUTO-FORWARDER (STEP 1 OF 2)**\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Please send the **Source Channel** link, @username, or numeric ID.\n\n"
-        "📌 **Examples:**\n"
-        "• `@my_source_channel`\n"
-        "• `https://t.me/c/1234567890/1`\n"
-        "• `-1001984091943`\n\n"
-        "Send `/cancel` at any time to abort."
-    )
-    markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 Cancel", callback_data="watcher_menu")]
-    ])
-    try:
-        await query.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
-    except Exception:
-        await query.message.reply_text(text, reply_markup=markup, disable_web_page_preview=True)
 
 
 @Client.on_callback_query(filters.regex(r"^watcher_matrix_wizard$"))

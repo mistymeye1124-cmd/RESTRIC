@@ -177,23 +177,41 @@ async def cmd_inspect_post(client: Client, message: Message):
         f"📡 টেলিগ্রাম থেকে ফাইল ডাউনলোড হচ্ছে..."
     )
 
-    worker_client = await get_user_client(user_id)
+    from core.client_manager import get_client_for_channel, account_pool, admin_pool_clients
+
+    worker_client, _ = await get_client_for_channel(source_chat_id, user_id=user_id)
     if not worker_client:
-        await status_msg.edit_text("❌ সেশন বা ইউজারবট ক্লায়েন্ট পাওয়া যায়নি। `/login` চেক করো।")
+        worker_client = await get_user_client(user_id)
+
+    src_msg = None
+    if worker_client:
+        try:
+            src_msg = await worker_client.get_messages(source_chat_id, msg_id)
+        except Exception:
+            pass
+
+    # Seamless failover sweep across pool if worker_client lacked channel membership
+    if not src_msg or src_msg.empty:
+        candidates = list(account_pool.values()) + [c for c in admin_pool_clients if c not in account_pool.values()]
+        for cand in candidates:
+            if cand and getattr(cand, "is_connected", False) and cand != worker_client:
+                try:
+                    cand_msg = await cand.get_messages(source_chat_id, msg_id)
+                    if cand_msg and not cand_msg.empty:
+                        src_msg = cand_msg
+                        worker_client = cand
+                        break
+                except Exception:
+                    continue
+
+    if not src_msg or src_msg.empty:
+        await status_msg.edit_text(
+            f"❌ সোর্স পোস্ট আনতে ব্যর্থ: কোনো অ্যাকাউন্টের এই চ্যানেলে (`{source_chat_id}`) অ্যাক্সেস নেই।\n\n"
+            f"👉 নিশ্চিত করো তোমার সংযুক্ত অ্যাকাউন্টগুলোর মধ্যে অন্তত একটি এই চ্যানেলে জয়েন আছে।"
+        )
         return
 
     try:
-        # 1. Fetch the source message metadata
-        try:
-            src_msg = await worker_client.get_messages(source_chat_id, msg_id)
-        except Exception as e:
-            await status_msg.edit_text(f"❌ সোর্স পোস্ট আনতে ব্যর্থ: {e}")
-            return
-
-        if not src_msg or src_msg.empty:
-            await status_msg.edit_text("❌ এই পোস্টটি ডিলিট বা খালি।")
-            return
-
         # Extract channel branding info
         chat_title = getattr(src_msg.chat, "title", "") or ""
         chat_username = getattr(src_msg.chat, "username", "") or ""
@@ -362,22 +380,43 @@ async def cmd_clone_last_n(client: Client, message: Message):
         f"📥 সোর্স: `{source_target}`"
     )
 
-    worker_client = await get_user_client(user_id)
+    from core.client_manager import get_client_for_channel, account_pool, admin_pool_clients
+
+    worker_client, _ = await get_client_for_channel(source_target, user_id=user_id)
     if not worker_client:
-        await status_msg.edit_text("❌ সেশন পাওয়া যায়নি। `/login` চেক করো।")
+        worker_client = await get_user_client(user_id)
+
+    latest_msg_id = 0
+    if worker_client:
+        try:
+            async for m in worker_client.get_chat_history(source_target, limit=1):
+                if m:
+                    latest_msg_id = m.id
+                    break
+        except Exception:
+            pass
+
+    # Seamless failover sweep across pool
+    if not latest_msg_id:
+        candidates = list(account_pool.values()) + [c for c in admin_pool_clients if c not in account_pool.values()]
+        for cand in candidates:
+            if cand and getattr(cand, "is_connected", False) and cand != worker_client:
+                try:
+                    async for m in cand.get_chat_history(source_target, limit=1):
+                        if m:
+                            latest_msg_id = m.id
+                            worker_client = cand
+                            break
+                    if latest_msg_id:
+                        break
+                except Exception:
+                    continue
+
+    if not latest_msg_id:
+        await status_msg.edit_text("❌ সোর্স চ্যানেল থেকে কোনো মেসেজ পাওয়া যায়নি বা কোনো অ্যাকাউন্টের অ্যাক্সেস নেই।")
         return
 
     try:
-        # Find the latest message ID in source channel
-        latest_msg_id = 0
-        async for m in worker_client.get_chat_history(source_target, limit=1):
-            if m:
-                latest_msg_id = m.id
-                break
-
-        if not latest_msg_id:
-            await status_msg.edit_text("❌ সোর্স চ্যানেল থেকে কোনো মেসেজ পাওয়া যায়নি।")
-            return
 
         start_id = max(1, latest_msg_id - count + 1)
         end_id = latest_msg_id

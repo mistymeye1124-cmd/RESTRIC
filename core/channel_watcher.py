@@ -184,9 +184,11 @@ async def mirror_post_to_destination(
             logger.debug("[Fast Mirror Bypass] Exception (%s), falling back to Worker...", general_err)
 
         # Step 4: Worker Engine Path for Restricted / Protected Content
-        worker_client = await get_user_client(user_id)
+        from core.client_manager import get_client_for_channel, admin_pool_clients
+        worker_client, _ = await get_client_for_channel(source_chat_id, user_id=user_id)
+        if not worker_client:
+            worker_client = await get_user_client(user_id)
         if not worker_client and account_pool:
-            # Borrow healthy worker from shared pool
             worker_client = next(iter(account_pool.values()), None)
 
         if not worker_client:
@@ -341,8 +343,11 @@ async def start_channel_mirror_daemon(bot_client: Client):
                     user_id = mon["user_id"]
                     last_seen_id = mon.get("last_msg_id", 0)
 
-                    # Obtain reading client (either user's personal client or pool worker or bot)
-                    reader_client = await get_user_client(user_id)
+                    # Obtain reading client with verified access to source channel
+                    from core.client_manager import get_client_for_channel, admin_pool_clients
+                    reader_client, _ = await get_client_for_channel(source_id, user_id=user_id)
+                    if not reader_client:
+                        reader_client = await get_user_client(user_id)
                     if not reader_client and account_pool:
                         reader_client = next(iter(account_pool.values()), None)
                     if not reader_client:
@@ -354,8 +359,21 @@ async def start_channel_mirror_daemon(bot_client: Client):
                         async for m in reader_client.get_chat_history(source_id, limit=5):
                             recent_msgs.append(m)
                     except Exception as ch_err:
-                        logger.debug("[Mirror Daemon] Cannot fetch history for %s: %s", source_id, ch_err)
-                        continue
+                        logger.debug("[Mirror Daemon] Cannot fetch history for %s with reader (%s), trying failover...", source_id, ch_err)
+                        candidates = list(account_pool.values()) + [c for c in admin_pool_clients if c not in account_pool.values()]
+                        for cand in candidates:
+                            if cand and getattr(cand, "is_connected", False) and cand != reader_client:
+                                try:
+                                    recent_msgs = []
+                                    async for m in cand.get_chat_history(source_id, limit=5):
+                                        recent_msgs.append(m)
+                                    if recent_msgs:
+                                        reader_client = cand
+                                        break
+                                except Exception:
+                                    continue
+                        if not recent_msgs:
+                            continue
 
                     if not recent_msgs:
                         continue
